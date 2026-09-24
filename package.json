@@ -1,0 +1,38 @@
+{
+  "name": "irgun-shiurai-torah-app",
+  "private": true,
+  "version": "1.2.53-ios",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && npx cap sync",
+    "android": "npm run cap:sync && npx cap open android",
+    "ios": "npm run cap:sync && npx cap open ios",
+    "ios:prepare": "npm run build && (test -d ios || npx cap add ios) && npx cap sync ios",
+    "ios:open": "npx cap open ios",
+    "ios:cloud:prepare": "npm run build && (test -d ios || npx cap add ios) && npx cap sync ios && python3 scripts/prepare_ios_cloud.py",
+    "ios:cloud:sync": "npm run build && npx cap sync ios && python3 scripts/prepare_ios_cloud.py"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.4.2",
+    "@capacitor/core": "8.4.2",
+    "@capacitor/ios": "8.4.2",
+    "@capacitor/filesystem": "8.1.2",
+    "@capacitor/file-transfer": "2.0.4",
+    "@capacitor/share": "8.0.1",
+    "@capawesome/capacitor-apple-sign-in": "0.1.4",
+    "@capawesome/capacitor-google-sign-in": "0.1.4",
+    "@capacitor-firebase/messaging": "8.5.1",
+    "@capgo/native-purchases": "8.7.0",
+    "firebase": "12.18.0",
+    "@capacitor/browser": "8.0.4",
+    "@capacitor/local-notifications": "8.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.4.2",
+    "vite": "8.1.5",
+    "@capacitor/assets": "3.0.5"
+  }
+}

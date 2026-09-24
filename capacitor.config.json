@@ -1,0 +1,26 @@
+{
+  "appId": "org.irgunshiuraitorah.app",
+  "appName": "Irgun Shiurai Torah",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "ios": {
+    "contentInset": "never",
+    "preferredContentMode": "mobile",
+    "backgroundColor": "#f4f7fb",
+    "zoomEnabled": false
+  },
+  "experimental": {
+    "ios": {
+      "spm": {
+        "packageOptions": {
+          "@capacitor-firebase/messaging": {
+            "symlink": true
+          }
+        }
+      }
+    }
+  },
+  "zoomEnabled": false
+}
