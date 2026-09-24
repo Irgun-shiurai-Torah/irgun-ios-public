@@ -2,6 +2,11 @@ name: Irgun iOS - Public TestFlight Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/public-test-trigger"
 
 permissions:
   contents: read
