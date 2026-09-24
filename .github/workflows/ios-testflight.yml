@@ -1,0 +1,194 @@
+name: Irgun iOS - Public TestFlight Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: irgun-ios-public-testflight
+  cancel-in-progress: true
+
+env:
+  BUNDLE_ID: org.irgunshiuraitorah.app
+  IOS_MARKETING_VERSION: "1.0.0"
+  IOS_BUILD_OFFSET: "102"
+  IOS_PRODUCT_NAME: IrgunShiuraiTorah
+
+jobs:
+  testflight:
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode 26.6
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "~26.6.0"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Set unique iOS build number
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESOLVED_BUILD=$((GITHUB_RUN_NUMBER + IOS_BUILD_OFFSET))
+          echo "BUILD_NUMBER=$RESOLVED_BUILD" >> "$GITHUB_ENV"
+          echo "Resolved build number: $RESOLVED_BUILD"
+
+      - name: Install JavaScript dependencies
+        run: npm install
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Create and sync Capacitor iOS project
+        run: |
+          if [ ! -d ios ]; then
+            npx cap add ios
+          fi
+          npx cap sync ios
+
+      - name: Generate iPhone and iPad icon and splash resources
+        run: npx @capacitor/assets generate --ios
+
+      - name: Configure Firebase, Google Sign-In, Apple Sign-In and push
+        run: python3 scripts/prepare_ios_cloud.py
+
+      - name: Patch Xcode project
+        run: |
+          ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
+          ruby scripts/patch_xcode_project.rb
+
+      - name: Verify no direct SwiftUICore link request
+        run: bash scripts/assert_no_direct_swiftuicore.sh
+
+      - name: Install CocoaPods dependencies if used
+        run: |
+          if [ -f ios/App/Podfile ]; then
+            cd ios/App
+            pod install --repo-update
+          fi
+
+      - name: Import Apple Distribution certificate
+        uses: Apple-Actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Download App Store provisioning profile
+        id: appstore_profiles
+        uses: Apple-Actions/download-provisioning-profiles@v6
+        with:
+          bundle-id: ${{ env.BUNDLE_ID }}
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+
+      - name: Resolve App Store signing profile
+        env:
+          PROFILES_JSON: ${{ steps.appstore_profiles.outputs.profiles }}
+        run: |
+          set -euo pipefail
+          PROFILE_UUID="$(python3 - <<'PY'
+          import json, os
+          data = json.loads(os.environ["PROFILES_JSON"])
+          if not data:
+              raise SystemExit("No App Store provisioning profile was downloaded.")
+          print(data[0]["udid"])
+          PY
+          )"
+          echo "PROFILE_UUID=$PROFILE_UUID" >> "$GITHUB_ENV"
+
+          PROFILE_PATH="$(find "$HOME/Library" -name "$PROFILE_UUID.mobileprovision" -print -quit 2>/dev/null || true)"
+          if [ -z "$PROFILE_PATH" ] || [ ! -f "$PROFILE_PATH" ]; then
+            echo "Could not locate downloaded provisioning profile $PROFILE_UUID" >&2
+            exit 2
+          fi
+
+          security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$RUNNER_TEMP/profile.plist")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
+
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
+
+      - name: Apply App Store signing to app target
+        run: ruby scripts/apply_ios_signing.rb
+
+      - name: Create App Store export options
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions-AppStore.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>$APPLE_TEAM_ID</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROFILE_NAME</string>
+            </dict>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive and export App Store IPA
+        run: |
+          set -euo pipefail
+          cd ios/App
+
+          if [ -d App.xcworkspace ]; then
+            CONTAINER=(-workspace App.xcworkspace)
+          else
+            CONTAINER=(-project App.xcodeproj)
+          fi
+
+          xcodebuild "${CONTAINER[@]}"             -scheme App             -configuration Release             -sdk iphoneos             -destination "generic/platform=iOS"             -archivePath "$RUNNER_TEMP/IrgunAppStore.xcarchive"             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"             archive
+
+          rm -rf "$RUNNER_TEMP/IrgunAppStoreExport"
+          xcodebuild             -exportArchive             -archivePath "$RUNNER_TEMP/IrgunAppStore.xcarchive"             -exportPath "$RUNNER_TEMP/IrgunAppStoreExport"             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-AppStore.plist"
+
+      - name: Locate App Store IPA
+        id: appstore_ipa
+        run: |
+          set -euo pipefail
+          IPA="$(find "$RUNNER_TEMP/IrgunAppStoreExport" -maxdepth 2 -name '*.ipa' -print -quit)"
+          if [ -z "$IPA" ] || [ ! -f "$IPA" ]; then
+            echo "App Store IPA was not produced." >&2
+            exit 2
+          fi
+          echo "path=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to TestFlight
+        uses: Apple-Actions/upload-testflight-build@v5
+        with:
+          app-path: ${{ steps.appstore_ipa.outputs.path }}
+          app-type: ios
+          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          wait-for-processing: "true"
