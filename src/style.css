@@ -2494,3 +2494,64 @@ html, body, #app {
   .direct-media-volume{display:none}
   .direct-media-select{max-width:68px;height:30px;padding:0 4px;font-size:10px}
 }
+
+/* iOS V1.2.54: strict player-layer ownership and system PiP presentation. */
+/* Mini chrome exists in watchHtml only for reuse by intentional mini-video mode. */
+.watch-host-mini-chrome { display:none !important; }
+#persistentVideoMount.watch-mini-host .watch-host-mini-chrome { display:grid !important; }
+
+/* Audio never retains a parked video in V1.2.54. */
+#persistentVideoMount.watch-audio-parked { display:none !important; }
+
+/* Keep the HTMLVideoElement alive for system PiP while hiding the full watch UI. */
+#persistentVideoMount.watch-system-pip-host {
+  position:fixed !important;
+  left:-12000px !important;
+  top:-12000px !important;
+  width:320px !important;
+  height:180px !important;
+  overflow:hidden !important;
+  pointer-events:none !important;
+  opacity:0.001 !important;
+  z-index:-1 !important;
+  transform:translate3d(0,0,0) !important;
+  contain:strict !important;
+}
+#persistentVideoMount.watch-system-pip-host .watch-overlay {
+  position:absolute !important;
+  inset:0 !important;
+  width:320px !important;
+  height:180px !important;
+  max-width:320px !important;
+  max-height:180px !important;
+  padding:0 !important;
+  overflow:hidden !important;
+  background:#000 !important;
+}
+#persistentVideoMount.watch-system-pip-host .watch-top,
+#persistentVideoMount.watch-system-pip-host .watch-host-mini-chrome,
+#persistentVideoMount.watch-system-pip-host .watch-details,
+#persistentVideoMount.watch-system-pip-host .watch-section,
+#persistentVideoMount.watch-system-pip-host .media-switch,
+#persistentVideoMount.watch-system-pip-host .direct-media-controls,
+#persistentVideoMount.watch-system-pip-host .direct-media-loading,
+#persistentVideoMount.watch-system-pip-host .direct-media-error {
+  display:none !important;
+}
+#persistentVideoMount.watch-system-pip-host .watch-scroll,
+#persistentVideoMount.watch-system-pip-host .watch-player-card,
+#persistentVideoMount.watch-system-pip-host .watch-video-stage,
+#persistentVideoMount.watch-system-pip-host .direct-media-player,
+#persistentVideoMount.watch-system-pip-host .direct-media-video,
+#persistentVideoMount.watch-system-pip-host .watch-frame {
+  position:absolute !important;
+  inset:0 !important;
+  width:320px !important;
+  height:180px !important;
+  max-width:320px !important;
+  max-height:180px !important;
+  min-height:0 !important;
+  padding:0 !important;
+  margin:0 !important;
+  overflow:hidden !important;
+}

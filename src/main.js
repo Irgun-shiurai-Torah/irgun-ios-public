@@ -14,7 +14,7 @@ import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 
 const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
-usageAnalytics.configure('1.2.53');
+usageAnalytics.configure('1.2.54');
 const TOKEN_KEY = 'istAppSessionToken';
 const SCHEDULE_FILES_CACHE_KEY = 'istScheduleFilesCacheV2';
 const SCHEDULE_FILES_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -3348,6 +3348,12 @@ function bottomNavHtml() {
 }
 
 function shell(content) {
+  const watchAudioOwnsUi = Boolean(
+    state.watchVideo &&
+    state.watchMode === 'audio' &&
+    state.current?.kind === 'video-audio' &&
+    String(state.current.id || '') === String(videoId(state.watchVideo) || '')
+  );
   return `<div class="app-shell ${state.sponsorRibbon?.enabled ? 'has-sponsor-ribbon' : ''}">
     ${sponsorRibbonHtml()}
     <header class="topbar">
@@ -3364,7 +3370,7 @@ function shell(content) {
     </header>
     ${offlineBannerHtml()}
     <main class="content">${content}</main>
-    ${state.current && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
+    ${state.current && !watchAudioOwnsUi && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
     ${bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
@@ -3384,6 +3390,7 @@ function clearPersistentVideoMount() {
   state.watchHostedExternally = false;
   state.watchMinimized = false;
   document.body.classList.remove('irgun-watch-mini-hosted');
+  document.body.classList.remove('irgun-system-pip-active');
 }
 
 function refreshPersistentMiniVideoChrome() {
@@ -3405,6 +3412,25 @@ async function togglePersistentMiniVideoPlayback(event) {
   } catch (_) {}
 }
 
+function parkWatchUiForSystemPip() {
+  if (!persistentVideoMount || !state.watchVideo || state.watchMode !== 'video') return;
+  if (!state.watchHostedExternally) hostCurrentWatchOverlay('full');
+  persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-system-pip-host';
+  document.body.classList.remove('irgun-watch-mini-hosted');
+  document.body.classList.add('irgun-system-pip-active');
+  state.watchHostedExternally = true;
+  state.watchMinimized = false;
+}
+
+function restoreWatchUiAfterSystemPip() {
+  if (!persistentVideoMount || !state.watchVideo || state.watchMode !== 'video') return;
+  persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-full-host';
+  document.body.classList.remove('irgun-system-pip-active');
+  state.watchHostedExternally = true;
+  state.watchMinimized = false;
+  bindPersistentVideoChrome();
+}
+
 function enterIosPictureInPicture(event) {
   if (event) {
     event.preventDefault?.();
@@ -3418,10 +3444,14 @@ function enterIosPictureInPicture(event) {
     return;
   }
 
-  // IMPORTANT: iOS requires the PiP request to remain inside the original user
-  // gesture. Do not await ready(), getPaused(), play(), timers, or any other
-  // promise before requestPictureInPicture(). A visibly playing Vimeo player
-  // already has everything needed to request system PiP from this tap.
+  try {
+    if (typeof player.preparePictureInPicture === 'function') player.preparePictureInPicture();
+    else {
+      const playPromise = player.play?.();
+      if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+    }
+  } catch (_) {}
+
   let request;
   try {
     request = player.requestPictureInPicture();
@@ -3433,8 +3463,16 @@ function enterIosPictureInPicture(event) {
 
   Promise.resolve(request).then(() => {
     state.watchPictureInPicture = true;
+    state.watchVideoPlaying = true;
+    parkWatchUiForSystemPip();
+    try {
+      const playPromise = player.play?.();
+      if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+    } catch (_) {}
   }).catch(error => {
     console.warn('iOS Picture in Picture failed', error);
+    state.watchPictureInPicture = false;
+    restoreWatchUiAfterSystemPip();
     setToast(currentLanguage()==='he' ? 'לא ניתן לפתוח תמונה בתוך תמונה כרגע.' : 'Could not start Picture in Picture right now.');
   });
 }
@@ -4741,19 +4779,44 @@ class IosDirectVideoAdapter {
     this.video.volume = volume;
     this.video.muted = volume <= 0;
   }
+  preparePictureInPicture() {
+    const video = this.video;
+    if (!video) return;
+    // Keep play() synchronous with the PiP button tap so iOS keeps user activation.
+    try {
+      if (video.paused) {
+        const playPromise = video.play();
+        if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+      }
+    } catch (_) {}
+  }
   requestPictureInPicture() {
     const video = this.video;
     if (!video) return Promise.reject(new Error('Video element unavailable'));
-    if (typeof video.requestPictureInPicture === 'function') return video.requestPictureInPicture();
+    this.preparePictureInPicture();
+    // WKWebView's native presentation-mode API is the most reliable iOS path.
     if (typeof video.webkitSetPresentationMode === 'function') {
       try {
         video.webkitSetPresentationMode('picture-in-picture');
         return Promise.resolve();
-      } catch (error) {
-        return Promise.reject(error);
-      }
+      } catch (_) {}
     }
+    if (typeof video.requestPictureInPicture === 'function') return video.requestPictureInPicture();
     return Promise.reject(new Error('Picture in Picture unavailable'));
+  }
+  exitPictureInPicture() {
+    const video = this.video;
+    if (!video) return Promise.resolve();
+    if (typeof video.webkitSetPresentationMode === 'function') {
+      try {
+        video.webkitSetPresentationMode('inline');
+        return Promise.resolve();
+      } catch (_) {}
+    }
+    if (document.pictureInPictureElement && typeof document.exitPictureInPicture === 'function') {
+      return document.exitPictureInPicture();
+    }
+    return Promise.resolve();
   }
   async destroy() {
     if (this.destroyed) return;
@@ -4888,23 +4951,15 @@ function waitForMediaEvent(target, eventName, timeoutMs = 1200) {
 }
 
 function parkIosVideoCardForAudio() {
-  if (!persistentVideoMount || !state.watchVimeo || !persistentVideoMount.querySelector('#watchVimeoFrame')) return false;
-  persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-audio-parked';
-  document.body.classList.remove('irgun-watch-mini-hosted');
-  state.watchHostedExternally = false;
-  state.watchMinimized = false;
-  return true;
+  // Audio mode never retains a parked video player in V1.2.54.
+  // Returning false makes any older fallback path tear the video player down.
+  clearPersistentVideoMount();
+  return false;
 }
 
 function restoreIosParkedVideoCard() {
-  if (!persistentVideoMount || !state.watchVimeo || !persistentVideoMount.querySelector('#watchVimeoFrame')) return false;
-  persistentVideoMount.className = 'persistent-video-mount watch-video-host watch-full-host';
-  document.body.classList.remove('irgun-watch-mini-hosted');
-  state.watchHostedExternally = true;
-  state.watchMinimized = false;
-  render();
-  bindPersistentVideoChrome();
-  return true;
+  // There is intentionally no parked video to restore in single-owner mode.
+  return false;
 }
 
 async function switchVideoToAudioSeamlessly(video, id) {
@@ -6917,7 +6972,39 @@ async function playVideoAudio(id, requestedTime = null, keepWatch = false) {
   return playback;
 }
 
+function prepareIosAudioPlaybackSurface(item) {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+
+  const keepAudioWatch = Boolean(
+    state.watchVideo &&
+    state.watchMode === 'audio' &&
+    item?.kind === 'video-audio' &&
+    String(item.id || '') === String(videoId(state.watchVideo) || '')
+  );
+
+  clearPersistentVideoMount();
+  state.watchPictureInPicture = false;
+  state.watchHostedExternally = false;
+  state.watchMinimized = false;
+
+  if (keepAudioWatch) return;
+
+  const oldPlayer = state.watchVimeo;
+  state.watchVimeo = null;
+  state.watchVimeoReady = false;
+  state.watchVideoPlaying = false;
+  state.watchVimeoGeneration += 1;
+
+  if (oldPlayer) {
+    try { oldPlayer.pause?.(); } catch (_) {}
+    Promise.resolve(oldPlayer.destroy?.()).catch(() => {});
+  }
+
+  state.watchVideo = null;
+}
+
 async function startAudio(item, resumeAt = 0) {
+  prepareIosAudioPlaybackSurface(item);
   if (item?.id) { usageAnalytics.event('shiur_opened', { shiurId:String(item.id), mediaType:'audio', dedupeKey:`shiur-open:${item.id}`, cooldownMs:60000 }); usageAnalytics.setMedia({isPlaying:false,mediaType:'audio',playerState:'paused',shiurId:String(item.id)}); }
   if (!state.queueStarting) { state.playQueue = []; state.playQueueIndex = -1; }
   const offlineRecord = offlineRecordForAudioItem(item);
@@ -7450,8 +7537,19 @@ async function initWatchVimeo(userInitiated = false) {
       player.on('fullscreenchange', data => {
         if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
       });
-      player.on('enterpictureinpicture', () => { state.watchPictureInPicture = true; });
-      player.on('leavepictureinpicture', () => { state.watchPictureInPicture = false; });
+      player.on('enterpictureinpicture', () => {
+        state.watchPictureInPicture = true;
+        state.watchVideoPlaying = true;
+        parkWatchUiForSystemPip();
+        try {
+          const playPromise = player.play?.();
+          if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
+        } catch (_) {}
+      });
+      player.on('leavepictureinpicture', () => {
+        state.watchPictureInPicture = false;
+        restoreWatchUiAfterSystemPip();
+      });
     }
     player.on('ended', data => {
       if (generation!==state.watchVimeoGeneration) return;

@@ -169,6 +169,9 @@ def patch_app_delegate():
                   let webView = bridgeVC.webView else { return }
             webView.configuration.allowsPictureInPictureMediaPlayback = true
             webView.configuration.allowsInlineMediaPlayback = true
+            // Allow the already user-initiated async Audio -> Video handoff
+            // to resume after HLS source discovery without requiring a second tap.
+            webView.configuration.mediaTypesRequiringUserActionForPlayback = []
             webView.scrollView.pinchGestureRecognizer?.isEnabled = false
             webView.scrollView.minimumZoomScale = 1.0
             webView.scrollView.maximumZoomScale = 1.0
