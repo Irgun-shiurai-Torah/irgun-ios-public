@@ -14,7 +14,7 @@ import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 
 const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
-usageAnalytics.configure('1.2.54');
+usageAnalytics.configure('1.2.55');
 const TOKEN_KEY = 'istAppSessionToken';
 const SCHEDULE_FILES_CACHE_KEY = 'istScheduleFilesCacheV2';
 const SCHEDULE_FILES_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -7005,6 +7005,9 @@ function prepareIosAudioPlaybackSurface(item) {
 
 async function startAudio(item, resumeAt = 0) {
   prepareIosAudioPlaybackSurface(item);
+  // Audio now owns playback; restore the element after any prior hard Video stop.
+  try { audio.muted = false; } catch (_) {}
+  try { audio.volume = 1; } catch (_) {}
   if (item?.id) { usageAnalytics.event('shiur_opened', { shiurId:String(item.id), mediaType:'audio', dedupeKey:`shiur-open:${item.id}`, cooldownMs:60000 }); usageAnalytics.setMedia({isPlaying:false,mediaType:'audio',playerState:'paused',shiurId:String(item.id)}); }
   if (!state.queueStarting) { state.playQueue = []; state.playQueueIndex = -1; }
   const offlineRecord = offlineRecordForAudioItem(item);
@@ -7069,6 +7072,27 @@ function setSleepTimer(value) {
     render();
   }, minutes * 60000);
   render();
+}
+
+function syncNativeMediaSession(item, isPlaying, position = 0, duration = 0, mediaType = 'video') {
+  // Public iOS uses the browser/WKWebView Media Session API; there is no separate
+  // native playback bridge in this repository. Keep this helper safe and side-effect
+  // free with respect to the HTML audio element.
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  } catch (_) {}
+  const d = Math.max(0, Number(duration) || 0);
+  const p = Math.max(0, Number(position) || 0);
+  if (d > 0) {
+    try {
+      navigator.mediaSession.setPositionState({
+        duration:d,
+        playbackRate:1,
+        position:Math.min(p,d)
+      });
+    } catch (_) {}
+  }
 }
 
 function setupMediaSession(item) {
@@ -7157,7 +7181,19 @@ audio.addEventListener('timeupdate', () => {
 });
 audio.addEventListener('loadedmetadata', () => { syncLoadedLibraryAudioDuration(); updatePlayerUi(); });
 audio.addEventListener('durationchange', () => { syncLoadedLibraryAudioDuration(); updatePlayerUi(); });
-audio.addEventListener('play', () => { updatePlayerUi(); if(state.current){usageAnalytics.setMedia({isPlaying:true,mediaType:'audio',playerState:'playing',shiurId:String(state.current.id||'')});usageAnalytics.event('audio_start',{shiurId:String(state.current.id||''),mediaType:'audio',dedupeKey:`audio-start:${state.current.id}`,cooldownMs:10000});} });
+audio.addEventListener('play', () => {
+  // A pending play() promise or stale iOS Media Session command can arrive after
+  // Audio -> Video. Reject it immediately while Video owns playback.
+  if (state.watchVideo && state.watchMode === 'video') {
+    hardStopHtmlAudioForVideo();
+    return;
+  }
+  updatePlayerUi();
+  if(state.current){
+    usageAnalytics.setMedia({isPlaying:true,mediaType:'audio',playerState:'playing',shiurId:String(state.current.id||'')});
+    usageAnalytics.event('audio_start',{shiurId:String(state.current.id||''),mediaType:'audio',dedupeKey:`audio-start:${state.current.id}`,cooldownMs:10000});
+  }
+});
 audio.addEventListener('pause', () => {
   updatePlayerUi();
   if(state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'audio',playerState:'paused',shiurId:String(state.current.id||'')});
@@ -7196,11 +7232,11 @@ async function openWatch(id, requestedTime = null, options = {}) {
   }
   const fromAudio = Boolean(options && options.fromAudio && state.current && state.current.id === String(id));
   const fromAudioWasPlaying = fromAudio && options.wasPlaying !== false && !audio.paused;
-  if (fromAudioWasPlaying) { try { audio.pause(); } catch (_) {} }
-  if (fromAudio && state.current?.kind === 'video-audio' && String(state.current.id || '') === String(id)) {
-    // requestedTime already captured the audio clock. Release the audio engine
-    // before creating the video player so opening Watch also has one owner only.
-    releaseWatchAudioOwner(id);
+  if (fromAudio) {
+    // requestedTime was captured by the caller. Video takes exclusive ownership.
+    hardStopHtmlAudioForVideo();
+  } else if (!audio.paused) {
+    hardStopHtmlAudioForVideo();
   }
   if (state.watchVideo && videoId(state.watchVideo) !== String(id)) {
     await preserveWatchTime();
@@ -7286,27 +7322,34 @@ async function closeWatch(save = true) {
   render();
 }
 
+function clearAudioMediaSessionHandlers() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    for (const action of ['play','pause','seekbackward','seekforward','seekto','stop']) {
+      try { navigator.mediaSession.setActionHandler(action, null); } catch (_) {}
+    }
+    try { navigator.mediaSession.playbackState = 'none'; } catch (_) {}
+  } catch (_) {}
+}
+
+function hardStopHtmlAudioForVideo() {
+  // V1.2.55: Video ownership means the HTML audio engine is completely dead.
+  // Do not depend on state.current matching the expected lecture: iOS may keep
+  // a media element/session alive even when JS state has already changed.
+  try { audio.pause(); } catch (_) {}
+  try { audio.muted = true; } catch (_) {}
+  try { audio.volume = 0; } catch (_) {}
+  try { audio.currentTime = 0; } catch (_) {}
+  try { audio.removeAttribute('src'); } catch (_) {}
+  try { audio.src = ''; } catch (_) {}
+  try { audio.load(); } catch (_) {}
+  clearAudioMediaSessionHandlers();
+  state.current = null;
+  state.playerOpen = false;
+}
+
 function releaseWatchAudioOwner(id) {
-  const key = String(id || '');
-  const ownsWatchAudio = Boolean(
-    state.current &&
-    state.current.kind === 'video-audio' &&
-    String(state.current.id || '') === key
-  );
-
-  try { if (!audio.paused) audio.pause(); } catch (_) {}
-
-  if (ownsWatchAudio) {
-    // Video mode must not keep the HTML audio engine alive in the background.
-    // The website keeps one audible owner; on iOS we additionally release the
-    // audio resource so there is never a hidden second playback engine.
-    try {
-      audio.removeAttribute('src');
-      audio.load();
-    } catch (_) {}
-    state.current = null;
-    state.playerOpen = false;
-  }
+  hardStopHtmlAudioForVideo();
 }
 
 async function destroyWatchVideoOwner() {
@@ -7379,7 +7422,9 @@ async function switchWatchMode(mode) {
 
       state.watchResumeSeconds = seconds;
       saveCurrentAudioHistory(true, false).catch(() => {});
-      releaseWatchAudioOwner(id);
+      // Stop audio before changing/rendering Video mode. This is deliberately
+      // unconditional so no stale Media Session or mismatched state can survive.
+      hardStopHtmlAudioForVideo();
 
       state.watchMode = 'video';
       state.watchVideoPlaying = false;
@@ -7409,6 +7454,9 @@ async function switchWatchMode(mode) {
 
 async function initWatchVimeo(userInitiated = false) {
   if (state.watchVimeo) return;
+  // Final ownership fence: no delayed HTML-audio play is allowed to survive
+  // the asynchronous HLS discovery/player creation path.
+  hardStopHtmlAudioForVideo();
   const video = state.watchVideo;
   const frame = document.getElementById('watchVimeoFrame');
   if (!video || !frame || state.watchMode !== 'video') return;
@@ -7514,11 +7562,9 @@ async function initWatchVimeo(userInitiated = false) {
       if (generation !== state.watchVimeoGeneration) return;
       usageAnalytics.setMedia({isPlaying:true,mediaType:'video',playerState:'playing',shiurId:String(videoKey)});
       usageAnalytics.event('video_start',{shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
-      // V1.2.49: absolute single-owner rule. Do this before any Vimeo SDK await
-      // so HTML audio cannot continue beneath an already-playing video.
-      if (!audio.paused) {
-        try { audio.pause(); } catch (_) {}
-      }
+      // Absolute single-owner rule: even if a stale/pending audio command escaped
+      // earlier fences, kill the HTML audio element before Video becomes audible.
+      hardStopHtmlAudioForVideo();
       state.playerOpen = false;
       state.watchVideoPlaying = true;
       refreshPersistentMiniVideoChrome();
