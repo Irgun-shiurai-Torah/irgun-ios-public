@@ -1,12 +1,16 @@
-name: Irgun iOS - Public TestFlight Build
+name: Irgun iOS - Automatic TestFlight
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - ".github/public-test-trigger"
+    paths-ignore:
+      - ".github/**"
+      - "README*"
+      - "**/*.md"
+      - "**/*.txt"
+      - "codemagic*.yaml"
+  workflow_dispatch:
 
 permissions:
   contents: read
