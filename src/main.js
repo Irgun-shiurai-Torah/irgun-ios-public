@@ -14,7 +14,7 @@ import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 
 const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
-usageAnalytics.configure('1.2.56');
+usageAnalytics.configure('1.2.57');
 const TOKEN_KEY = 'istAppSessionToken';
 const SCHEDULE_FILES_CACHE_KEY = 'istScheduleFilesCacheV2';
 const SCHEDULE_FILES_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -6447,18 +6447,19 @@ function bind() {
     const time = audio.currentTime || 0;
     const wasPlaying = !audio.paused;
 
-    // V1.2.56: the Watch tap itself transfers ownership to Video.
-    // Do this before any render, navigation, fetch, or async player setup so iOS
-    // cannot resume the Main Audio Player during the transition gap.
+    // Keep the already-working Watch Audio Player path completely separate.
+    if (state.watchVideo && videoId(state.watchVideo) === id && state.watchMode === 'audio') {
+      state.playerOpen = false;
+      await switchWatchMode('video');
+      return;
+    }
+
+    // Main Audio Player -> Video: transfer ownership synchronously on the tap,
+    // before render/navigation/fetch so iOS cannot revive Main Audio in the gap.
     saveCurrentAudioHistory(true, false).catch(() => {});
     state.videoOwnsPlayback = true;
     hardStopHtmlAudioForVideo();
     state.playerOpen = false;
-
-    if (state.watchVideo && videoId(state.watchVideo) === id && state.watchMode === 'audio') {
-      await switchWatchMode('video');
-      return;
-    }
     await openWatch(id, time, { fromAudio:true, wasPlaying });
   }));
 
@@ -7235,19 +7236,22 @@ async function openWatch(id, requestedTime = null, options = {}) {
   const video = state.videoById.get(String(id));
   if (!video) return;
 
-  // Claim Video ownership before navigation or asynchronous source discovery.
-  state.videoOwnsPlayback = true;
-  if (state.current) saveCurrentAudioHistory(true, false).catch(() => {});
-  hardStopHtmlAudioForVideo();
-
-  usageAnalytics.event('shiur_opened',{shiurId:String(id),mediaType:'video',dedupeKey:`shiur-open:${id}`,cooldownMs:60000});
-  usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(id)});
+  // Preserve the already-working Watch Audio -> Video path.
   const sameAudioWatch = Boolean(state.watchVideo && videoId(state.watchVideo) === String(id) && state.watchMode === 'audio');
   if (sameAudioWatch) {
     state.playerOpen = false;
     await switchWatchMode('video');
     return;
   }
+
+  // Main/standalone Audio -> Video: claim ownership before navigation or any
+  // asynchronous source discovery, then physically release the audio resource.
+  state.videoOwnsPlayback = true;
+  if (state.current) saveCurrentAudioHistory(true, false).catch(() => {});
+  hardStopHtmlAudioForVideo();
+
+  usageAnalytics.event('shiur_opened',{shiurId:String(id),mediaType:'video',dedupeKey:`shiur-open:${id}`,cooldownMs:60000});
+  usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(id)});
   const fromAudio = Boolean(options && options.fromAudio);
   const fromAudioWasPlaying = Boolean(fromAudio && options.wasPlaying !== false);
   if (state.watchVideo && videoId(state.watchVideo) !== String(id)) {
