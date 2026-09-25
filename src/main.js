@@ -4715,9 +4715,10 @@ async function loadIosDirectVideoSources(video) {
 }
 
 class IosDirectVideoAdapter {
-  constructor({ container, iframe, sources, startSeconds = 0 }) {
+  constructor({ container, iframe, sources, startSeconds = 0, autoplay = false }) {
     this.sources = sources || {};
     this.startSeconds = Math.max(0, Number(startSeconds) || 0);
+    this.autoplay = Boolean(autoplay);
     this.events = new Map();
     this.readyPromise = null;
     this.destroyed = false;
@@ -4759,7 +4760,7 @@ class IosDirectVideoAdapter {
   }
   ready() {
     if (!this.readyPromise) {
-      this.readyPromise = this.player.activate(this.sources, this.startSeconds, false, false).then(() => this);
+      this.readyPromise = this.player.activate(this.sources, this.startSeconds, this.autoplay, false).then(() => this);
     }
     return this.readyPromise;
   }
@@ -4836,7 +4837,7 @@ class IosDirectVideoAdapter {
   }
 }
 
-async function createIosWatchPlayer(video, frame, startSeconds) {
+async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false) {
   const videoKey = videoId(video);
   if (
     IS_IOS &&
@@ -4847,19 +4848,35 @@ async function createIosWatchPlayer(video, frame, startSeconds) {
     const sources = await loadIosDirectVideoSources(video);
     if (sources) {
       const stage = document.getElementById('watchVideoStage') || frame.parentElement;
-      const directPlayer = new IosDirectVideoAdapter({
+      let directPlayer = new IosDirectVideoAdapter({
         container: stage,
         iframe: frame,
         sources,
-        startSeconds
+        startSeconds,
+        autoplay
       });
       try {
         await directPlayer.ready();
         return { player:directPlayer, backend:'direct' };
       } catch (error) {
-        console.warn('iOS HLS/MP4 player failed; using Vimeo fallback', error);
+        console.warn('iOS direct HLS/MP4 start failed; retrying once before Vimeo', error);
         try { await directPlayer.destroy(); } catch (_) {}
-        state.watchDirectFallbackId = String(videoKey);
+        await new Promise(resolve => setTimeout(resolve, 350));
+        directPlayer = new IosDirectVideoAdapter({
+          container: stage,
+          iframe: frame,
+          sources,
+          startSeconds,
+          autoplay
+        });
+        try {
+          await directPlayer.ready();
+          return { player:directPlayer, backend:'direct' };
+        } catch (retryError) {
+          console.warn('iOS direct player failed after retry; using Vimeo fallback', retryError);
+          try { await directPlayer.destroy(); } catch (_) {}
+          state.watchDirectFallbackId = String(videoKey);
+        }
       }
     }
   }
@@ -7593,7 +7610,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
     state.watchAudioToVideoHandoffId = '';
     state.watchAudioToVideoTargetSeconds = 0;
 
-    const created = await createIosWatchPlayer(video, frame, requestedResume);
+    const created = await createIosWatchPlayer(video, frame, requestedResume, userInitiated);
     const player = created.player;
     state.watchVimeo = player;
     state.watchVimeoReady = false;
@@ -7651,12 +7668,34 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         await finishAudioToVideoHandoff(videoKey, player);
       }
     } else if (userInitiated) {
-      const startVisibleVideo = typeof player.ensureVisualPlayback === 'function'
-        ? player.ensureVisualPlayback(Boolean(forceVisualRelatch))
-        : player.play();
-      await Promise.resolve(startVisibleVideo)
-        .then(() => { state.watchVideoPlaying = true; })
-        .catch(error => { console.warn('Automatic visible video start failed', error); });
+      let started = false;
+      try {
+        if (typeof player.ensureVisualPlayback === 'function') {
+          started = Boolean(await player.ensureVisualPlayback(Boolean(forceVisualRelatch)));
+        } else {
+          await player.play();
+          started = true;
+        }
+      } catch (error) {
+        console.warn('Automatic visible video start attempt failed', error);
+      }
+      if (!started) {
+        try {
+          await player.play();
+          started = !(await player.getPaused().catch(() => false));
+        } catch (error) {
+          console.warn('Automatic visible video retry failed', error);
+        }
+      } else {
+        started = !(await player.getPaused().catch(() => false));
+      }
+      state.watchVideoPlaying = Boolean(started);
+      if (started) {
+        const live = await player.getCurrentTime().catch(() => state.watchResumeSeconds || requestedResume);
+        if (Number.isFinite(Number(live))) state.watchResumeSeconds = Math.max(0, Number(live));
+      } else {
+        console.warn('Video reached the requested timestamp but remained paused');
+      }
     }
     const videoMediaItem = { ...video, title: displayShiurTitle(video.title, 'Shiur'), subtitle: video._speakerLabel || video.speaker || 'Irgun Shiurai Torah', backgroundAudioUrl: video.hasAudio ? audioUrl(mediaApiId(video, videoId(video))) : '' };
     syncNativeMediaSession(videoMediaItem, true, state.watchResumeSeconds || 0, Number(video.duration) || 0, 'video');
