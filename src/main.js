@@ -14,7 +14,7 @@ import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 
 const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
-usageAnalytics.configure('1.2.57');
+usageAnalytics.configure('1.2.58');
 const TOKEN_KEY = 'istAppSessionToken';
 const SCHEDULE_FILES_CACHE_KEY = 'istScheduleFilesCacheV2';
 const SCHEDULE_FILES_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -227,6 +227,7 @@ const state = {
   watchVimeoHistoryTimer: null,
   mediaSwitchBusy: false,
   videoOwnsPlayback: false,
+  backgroundVideoAudioHandoffBusy: false,
   audioHistoryTimer: null,
   audioLastHistoryAt: 0,
   publicCounted: new Set(),
@@ -4763,6 +4764,13 @@ class IosDirectVideoAdapter {
     return this.readyPromise;
   }
   async play() { await this.ready(); return this.player.play(); }
+  async ensureVisualPlayback() {
+    await this.ready();
+    if (typeof this.player.ensureVisualPlayback === 'function') {
+      return this.player.ensureVisualPlayback();
+    }
+    return this.player.play();
+  }
   async pause() { this.player.pause(false); }
   async getPaused() { return Boolean(this.video?.paused); }
   async getCurrentTime() { return this.player.current(); }
@@ -7301,6 +7309,66 @@ async function openWatch(id, requestedTime = null, options = {}) {
   }
 }
 
+function currentVideoClockForBackground() {
+  const player = state.watchVimeo;
+  const directVideo = player?.video || player?.player?.v || null;
+  const directTime = Number(directVideo?.currentTime);
+  if (Number.isFinite(directTime) && directTime >= 0) return directTime;
+  return Math.max(0, Number(state.watchResumeSeconds) || 0);
+}
+
+async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return false;
+  if (state.backgroundVideoAudioHandoffBusy) return false;
+  if (!state.watchVideo || state.watchMode !== 'video') return false;
+  if (state.watchPictureInPicture) return false;
+  if (!state.watchVideo.hasAudio) return false;
+  if (!state.watchVideoPlaying) return false;
+
+  state.backgroundVideoAudioHandoffBusy = true;
+  const video = state.watchVideo;
+  const id = videoId(video);
+  const seconds = currentVideoClockForBackground();
+  const oldPlayer = state.watchVimeo;
+
+  try {
+    state.watchResumeSeconds = seconds;
+    if (state.user) {
+      saveHistory(id, 'video', seconds, Number(video.duration) || 0, false).catch(() => {});
+    }
+
+    // iOS is about to suspend the WebView. Stop the visual video immediately,
+    // then start the dedicated audio stream at the same clock.
+    try { oldPlayer?.setMuted?.(true); } catch (_) {}
+    try { oldPlayer?.pause?.(); } catch (_) {}
+
+    state.watchVimeo = null;
+    state.watchVimeoReady = false;
+    state.watchVideoPlaying = false;
+    state.watchPictureInPicture = false;
+    state.watchVimeoGeneration += 1;
+    state.videoOwnsPlayback = false;
+    state.watchMode = 'audio';
+    state.playerOpen = false;
+    state.watchHostedExternally = false;
+    state.watchMinimized = false;
+    clearPersistentVideoMount();
+
+    const playback = playVideoAudio(id, seconds, true);
+    Promise.resolve(playback).catch(error => {
+      console.warn('Background video-to-audio handoff failed', source, error);
+    });
+
+    // The audio play request above is issued before this cleanup promise is awaited.
+    Promise.resolve(oldPlayer?.destroy?.()).catch(() => {});
+    return true;
+  } finally {
+    // Keep the guard through the current task so visibility + native lifecycle
+    // events cannot perform the handoff twice.
+    setTimeout(() => { state.backgroundVideoAudioHandoffBusy = false; }, 500);
+  }
+}
+
 async function preserveWatchTime() {
   if (!state.watchVideo) return;
   if (state.watchMode === 'video') {
@@ -7548,7 +7616,12 @@ async function initWatchVimeo(userInitiated = false) {
         await finishAudioToVideoHandoff(videoKey, player);
       }
     } else if (userInitiated) {
-      await player.play().then(() => { state.watchVideoPlaying = true; }).catch(() => {});
+      const startVisibleVideo = typeof player.ensureVisualPlayback === 'function'
+        ? player.ensureVisualPlayback()
+        : player.play();
+      await Promise.resolve(startVisibleVideo)
+        .then(() => { state.watchVideoPlaying = true; })
+        .catch(error => { console.warn('Automatic visible video start failed', error); });
     }
     const videoMediaItem = { ...video, title: displayShiurTitle(video.title, 'Shiur'), subtitle: video._speakerLabel || video.speaker || 'Irgun Shiurai Torah', backgroundAudioUrl: video.hasAudio ? audioUrl(mediaApiId(video, videoId(video))) : '' };
     syncNativeMediaSession(videoMediaItem, true, state.watchResumeSeconds || 0, Number(video.duration) || 0, 'video');
@@ -7809,10 +7882,21 @@ window.addEventListener('offline', () => {
   updateReconnectTimer();
 });
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    repairIosViewportAfterResume();
-    if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
+  if (document.hidden) {
+    void handoffPlayingVideoToBackgroundAudio('visibilitychange');
+    return;
   }
+  repairIosViewportAfterResume();
+  if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
+});
+window.addEventListener('irgunNativeBackground', () => {
+  void handoffPlayingVideoToBackgroundAudio('native-background');
+});
+window.addEventListener('irgunNativeForeground', () => {
+  repairIosViewportAfterResume();
+});
+window.addEventListener('pagehide', () => {
+  void handoffPlayingVideoToBackgroundAudio('pagehide');
 });
 window.addEventListener('focus', () => {
   repairIosViewportAfterResume();

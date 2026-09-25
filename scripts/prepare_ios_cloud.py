@@ -186,6 +186,13 @@ def patch_app_delegate():
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: applyPolicy)
         }
     }
+
+    private func irgunDispatchWebLifecycleEvent(_ name: String) {
+        guard let bridgeVC = window?.rootViewController as? CAPBridgeViewController,
+              let webView = bridgeVC.webView else { return }
+        let safeName = name.replacingOccurrences(of: "'", with: "")
+        webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('\(safeName)'))", completionHandler: nil)
+    }
 ''')
 
     if additions:
@@ -193,6 +200,29 @@ def patch_app_delegate():
         if idx < 0:
             die('Could not find the end of AppDelegate.swift')
         text = text[:idx] + ''.join(additions) + text[idx:]
+
+    # Dispatch native lifecycle transitions into the WebView before iOS suspends it.
+    for method_name, event_name in [
+        ('applicationDidEnterBackground', 'irgunNativeBackground'),
+        ('applicationWillEnterForeground', 'irgunNativeForeground'),
+    ]:
+        lifecycle_match = re.search(rf'func {method_name}\(_ application: UIApplication\) \{{(?P<body>[\s\S]*?)\n    \}}', text)
+        if lifecycle_match:
+            lifecycle_replacement = lifecycle_match.group(0)
+            lifecycle_call = f'irgunDispatchWebLifecycleEvent("{event_name}")'
+            if lifecycle_call not in lifecycle_match.group('body'):
+                lifecycle_replacement = lifecycle_replacement.replace('{', '{\n        ' + lifecycle_call, 1)
+            text = text[:lifecycle_match.start()] + lifecycle_replacement + text[lifecycle_match.end():]
+        else:
+            additions_lifecycle = f'''
+    func {method_name}(_ application: UIApplication) {{
+        irgunDispatchWebLifecycleEvent("{event_name}")
+    }}
+'''
+            idx = text.rfind('\n}')
+            if idx < 0:
+                die('Could not find the end of AppDelegate.swift for lifecycle patch')
+            text = text[:idx] + additions_lifecycle + text[idx:]
 
     # Capacitor's generated AppDelegate already has applicationDidBecomeActive.
     # Add our policy call to that existing lifecycle hook instead of declaring a
