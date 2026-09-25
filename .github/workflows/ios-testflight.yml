@@ -36,6 +36,29 @@ env:
   IOS_PRODUCT_NAME: IrgunShiuraiTorah
 
 jobs:
+  source-package:
+    name: Full V1.2.60 Source ZIP
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Package exact repository source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f Irgun-iOS-1.2.60-FULL.zip
+          zip -qr Irgun-iOS-1.2.60-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.60-FULL.zip"
+
+      - name: Upload full source package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-iOS-1.2.60-FULL
+          path: Irgun-iOS-1.2.60-FULL.zip
+          if-no-files-found: error
+          retention-days: 30
+
   ipad15-adhoc:
     name: iPadOS 15 Ad Hoc IPA
     if: ${{ github.event_name == 'push' || inputs.target == 'both' || inputs.target == 'ipad15' }}
