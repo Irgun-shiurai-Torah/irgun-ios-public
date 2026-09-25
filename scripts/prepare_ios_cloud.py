@@ -203,6 +203,7 @@ def patch_app_delegate():
 
     # Dispatch native lifecycle transitions into the WebView before iOS suspends it.
     for method_name, event_name in [
+        ('applicationWillResignActive', 'irgunNativeWillResignActive'),
         ('applicationDidEnterBackground', 'irgunNativeBackground'),
         ('applicationWillEnterForeground', 'irgunNativeForeground'),
     ]:

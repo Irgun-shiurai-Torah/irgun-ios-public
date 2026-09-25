@@ -4764,10 +4764,10 @@ class IosDirectVideoAdapter {
     return this.readyPromise;
   }
   async play() { await this.ready(); return this.player.play(); }
-  async ensureVisualPlayback() {
+  async ensureVisualPlayback(forceRelatch = false) {
     await this.ready();
     if (typeof this.player.ensureVisualPlayback === 'function') {
-      return this.player.ensureVisualPlayback();
+      return this.player.ensureVisualPlayback(Boolean(forceRelatch));
     }
     return this.player.play();
   }
@@ -6997,12 +6997,19 @@ function prepareIosAudioPlaybackSurface(item) {
     String(item.id || '') === String(videoId(state.watchVideo) || '')
   );
 
+  // During the iOS background Video -> Audio handoff, keep the currently
+  // hosted video DOM alive just long enough for startAudio() to issue audio.play().
+  // The caller tears the video down immediately after that request is registered.
+  if (keepAudioWatch) {
+    state.watchPictureInPicture = false;
+    state.watchMinimized = false;
+    return;
+  }
+
   clearPersistentVideoMount();
   state.watchPictureInPicture = false;
   state.watchHostedExternally = false;
   state.watchMinimized = false;
-
-  if (keepAudioWatch) return;
 
   const oldPlayer = state.watchVimeo;
   state.watchVimeo = null;
@@ -7294,7 +7301,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
   // Put the watch overlay in its permanent host before Vimeo starts. Full and
   // mini layouts resize this exact iframe instead of rebuilding/reloading it.
   hostCurrentWatchOverlay('full');
-  initWatchVimeo(true);
+  initWatchVimeo(true, fromAudio);
   loadComments();
   if (shouldLoadResume && state.watchResumeSeconds <= 0 && state.user) {
     // Rare fallback for an account whose history was not present in the initial
@@ -7317,55 +7324,83 @@ function currentVideoClockForBackground() {
   return Math.max(0, Number(state.watchResumeSeconds) || 0);
 }
 
+async function watchVideoIsActuallyPlayingForBackground(player = state.watchVimeo) {
+  const directVideo = player?.video || player?.player?.v || null;
+  if (directVideo) return Boolean(!directVideo.paused && !directVideo.ended);
+  if (state.watchVideoPlaying) return true;
+  if (player && typeof player.getPaused === 'function') {
+    try {
+      const paused = await Promise.race([
+        Promise.resolve(player.getPaused()).catch(() => true),
+        new Promise(resolve => setTimeout(() => resolve(true), 80))
+      ]);
+      return !Boolean(paused);
+    } catch (_) {}
+  }
+  return false;
+}
+
 async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return false;
   if (state.backgroundVideoAudioHandoffBusy) return false;
   if (!state.watchVideo || state.watchMode !== 'video') return false;
   if (state.watchPictureInPicture) return false;
   if (!state.watchVideo.hasAudio) return false;
-  if (!state.watchVideoPlaying) return false;
 
   state.backgroundVideoAudioHandoffBusy = true;
   const video = state.watchVideo;
   const id = videoId(video);
-  const seconds = currentVideoClockForBackground();
   const oldPlayer = state.watchVimeo;
 
   try {
+    // Do not trust only the JS bookkeeping flag here. On the exact frozen-frame
+    // iOS failure, the HTMLVideoElement can be audibly playing while that flag is
+    // stale. Check the real media element/player before deciding not to hand off.
+    if (!(await watchVideoIsActuallyPlayingForBackground(oldPlayer))) return false;
+
+    const seconds = currentVideoClockForBackground();
     state.watchResumeSeconds = seconds;
     if (state.user) {
       saveHistory(id, 'video', seconds, Number(video.duration) || 0, false).catch(() => {});
     }
 
-    // iOS is about to suspend the WebView. Stop the visual video immediately,
-    // then start the dedicated audio stream at the same clock.
+    // Mute the visual owner first so there can never be two audible players.
+    // Do NOT destroy/pause it yet: first change logical ownership to Audio and
+    // call playVideoAudio(). startAudio() issues audio.play() before its first
+    // await, which gives iOS the best chance to register background audio before
+    // WKWebView suspension.
     try { oldPlayer?.setMuted?.(true); } catch (_) {}
-    try { oldPlayer?.pause?.(); } catch (_) {}
 
-    state.watchVimeo = null;
-    state.watchVimeoReady = false;
-    state.watchVideoPlaying = false;
-    state.watchPictureInPicture = false;
-    state.watchVimeoGeneration += 1;
     state.videoOwnsPlayback = false;
     state.watchMode = 'audio';
     state.playerOpen = false;
-    state.watchHostedExternally = false;
+    state.watchPictureInPicture = false;
     state.watchMinimized = false;
-    clearPersistentVideoMount();
 
     const playback = playVideoAudio(id, seconds, true);
-    Promise.resolve(playback).catch(error => {
+
+    // The audio play request has now been issued. Tear down Video immediately
+    // and present the watch page as Audio for when the user returns to the app.
+    state.watchVimeo = null;
+    state.watchVimeoReady = false;
+    state.watchVideoPlaying = false;
+    state.watchVimeoGeneration += 1;
+    state.watchHostedExternally = false;
+    clearPersistentVideoMount();
+    render();
+
+    try { oldPlayer?.pause?.(); } catch (_) {}
+    Promise.resolve(oldPlayer?.destroy?.()).catch(() => {});
+    Promise.resolve(playback).then(() => {
+      updatePlayerUi();
+    }).catch(error => {
       console.warn('Background video-to-audio handoff failed', source, error);
     });
-
-    // The audio play request above is issued before this cleanup promise is awaited.
-    Promise.resolve(oldPlayer?.destroy?.()).catch(() => {});
     return true;
   } finally {
-    // Keep the guard through the current task so visibility + native lifecycle
-    // events cannot perform the handoff twice.
-    setTimeout(() => { state.backgroundVideoAudioHandoffBusy = false; }, 500);
+    // visibilitychange, willResignActive and didEnterBackground can all fire for
+    // the same Home action. Keep one handoff authoritative.
+    setTimeout(() => { state.backgroundVideoAudioHandoffBusy = false; }, 800);
   }
 }
 
@@ -7526,7 +7561,7 @@ async function switchWatchMode(mode) {
 
       render();
       hostCurrentWatchOverlay('full');
-      initWatchVimeo(true);
+      initWatchVimeo(true, true);
     }
 
     if (state.watchMode === mode) {
@@ -7540,7 +7575,7 @@ async function switchWatchMode(mode) {
   }
 }
 
-async function initWatchVimeo(userInitiated = false) {
+async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false) {
   if (state.watchVimeo) return;
   state.videoOwnsPlayback = true;
   // Final ownership fence: no delayed HTML-audio play is allowed to survive
@@ -7617,7 +7652,7 @@ async function initWatchVimeo(userInitiated = false) {
       }
     } else if (userInitiated) {
       const startVisibleVideo = typeof player.ensureVisualPlayback === 'function'
-        ? player.ensureVisualPlayback()
+        ? player.ensureVisualPlayback(Boolean(forceVisualRelatch))
         : player.play();
       await Promise.resolve(startVisibleVideo)
         .then(() => { state.watchVideoPlaying = true; })
@@ -7888,6 +7923,9 @@ document.addEventListener('visibilitychange', () => {
   }
   repairIosViewportAfterResume();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
+});
+window.addEventListener('irgunNativeWillResignActive', () => {
+  void handoffPlayingVideoToBackgroundAudio('native-will-resign-active');
 });
 window.addEventListener('irgunNativeBackground', () => {
   void handoffPlayingVideoToBackgroundAudio('native-background');
