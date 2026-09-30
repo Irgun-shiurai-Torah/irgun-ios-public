@@ -4760,7 +4760,7 @@ async function loadIosDirectVideoSources(video) {
 }
 
 class IosDirectVideoAdapter {
-  constructor({ container, iframe, sources, startSeconds = 0, autoplay = false }) {
+  constructor({ container, iframe, sources, poster = '', startSeconds = 0, autoplay = false }) {
     this.sources = sources || {};
     this.startSeconds = Math.max(0, Number(startSeconds) || 0);
     this.autoplay = Boolean(autoplay);
@@ -4770,6 +4770,7 @@ class IosDirectVideoAdapter {
     this.player = new window.ISTDirectMediaPlayer({
       container,
       iframe,
+      poster,
       apiBase: API,
       onTimeUpdate: state => this.emit('timeupdate', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPlay: state => this.emit('play', { seconds:state.position || 0, duration:state.duration || 0 }),
@@ -4897,6 +4898,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
         container: stage,
         iframe: frame,
         sources,
+        poster: video.thumbnail || '',
         startSeconds,
         autoplay
       });
@@ -4911,6 +4913,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
           container: stage,
           iframe: frame,
           sources,
+          poster: video.thumbnail || '',
           startSeconds,
           autoplay
         });
