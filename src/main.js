@@ -2198,7 +2198,7 @@ async function bootstrap(options = {}) {
   try {
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
-      bootstrapJson('/video-map'),
+      bootstrapJson('/video-map?driveLibrary=1'),
       bootstrapJsonOr('/audio-map', { items:[] }),
       bootstrapJsonOr('/trending?period=week&limit=2500', { items:[] }),
       bootstrapJsonOr('/trending?period=month&limit=2500', { items:[] }),
@@ -3254,6 +3254,12 @@ function filterButton(key, label) {
   return `<button class="filter-pill ${selected.length ? 'active' : ''}" data-open-filter="${key}"><span>${esc(label)}</span><strong>${esc(caption)}</strong><b>⌄</b></button>`;
 }
 
+function locationFilterName(city) {
+  if (currentLanguage() !== 'he') return city;
+  const item = state.videos.find(video => video.location === city && video.locationHe);
+  return item?.locationHe || tr(city);
+}
+
 function locationFilterOptionsHtml(values) {
   const ordered = [...values.map(String)].sort((a, b) => {
     const ap = a.split('|')[0];
@@ -3273,14 +3279,14 @@ function locationFilterOptionsHtml(values) {
     const hasChildren = childEntries.length > 0;
     if (!hasChildren) {
       const entry = entries[0];
-      return `<label class="filter-option location-parent"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(parent)}</span></label>`;
+      return `<label class="filter-option location-parent"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(locationFilterName(parent))}</span></label>`;
     }
     const childOrder = { 'Daily Shiurim': 1, 'Sunday Shiurim': 2, 'Parsha': 3, 'Other': 4 };
     childEntries.sort((a, b) => (childOrder[a.child] || 50) - (childOrder[b.child] || 50) || a.child.localeCompare(b.child));
     const ids = entries.map(entry => entry.value);
     const checked = ids.length > 0 && ids.every(id => state.filterDraft.has(id));
     const children = childEntries.map(entry => `<label class="filter-option location-child"><input type="checkbox" data-filter-option="${esc(entry.value)}" ${state.filterDraft.has(entry.value) ? 'checked' : ''}><span>${esc(entry.child)}</span></label>`).join('');
-    return `<div class="location-filter-branch"><label class="filter-option location-parent"><input type="checkbox" data-location-parent="${esc(parent)}" ${checked ? 'checked' : ''}><span>${esc(parent)}</span></label><div class="location-filter-children">${children}</div></div>`;
+    return `<div class="location-filter-branch"><label class="filter-option location-parent"><input type="checkbox" data-location-parent="${esc(parent)}" ${checked ? 'checked' : ''}><span>${esc(locationFilterName(parent))}</span></label><div class="location-filter-children">${children}</div></div>`;
   }).join('');
 }
 
@@ -4912,6 +4918,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
           await directPlayer.ready();
           return { player:directPlayer, backend:'direct' };
         } catch (retryError) {
+          if (video.sourceType === 'drive-library') throw retryError;
           console.warn('iOS direct player failed after retry; using Vimeo fallback', retryError);
           try { await directPlayer.destroy(); } catch (_) {}
           state.watchDirectFallbackId = String(videoKey);
@@ -4920,6 +4927,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     }
   }
 
+  if (video.sourceType === 'drive-library') throw new Error('Drive video is processing or temporarily unavailable');
   if (!window.Vimeo || !window.Vimeo.Player) throw new Error('Vimeo fallback unavailable');
   frame.style.display = 'block';
   frame.src = frame.dataset.vimeoSrc || watchVimeoEmbedSrc(video, startSeconds);
@@ -4927,6 +4935,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
 }
 
 async function fallbackIosDirectVideoToVimeo(videoKey, detail = {}) {
+  if (state.watchVideo?.sourceType === 'drive-library') return;
   if (!state.watchVideo || videoId(state.watchVideo) !== String(videoKey) || state.watchMode !== 'video') return;
   if (state.watchDirectFallbackId === String(videoKey)) return;
   const player = state.watchVimeo;
@@ -5200,7 +5209,7 @@ function watchHtml() {
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
-          ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
+          ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
           : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${audio.paused ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</div></div>`}
       </div>
       <section class="watch-details">
@@ -5234,7 +5243,7 @@ function miniVideoHtml(includeFrame = true) {
   const v = state.watchVideo;
   if (!v || state.watchMode !== 'video') return '';
   const speaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
-  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
+  const frameHtml = includeFrame ? `<iframe id="watchVimeoFrame" class="mini-video-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" src="${v.sourceType === 'drive-library' ? 'about:blank' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>` : '';
   return `<div class="mini-video-player">
     <div class="mini-video-frame-wrap" data-expand-watch="1" role="button" aria-label="Open video">${frameHtml}</div>
     <div class="mini-video-copy" data-expand-watch="1" role="button" tabindex="0"><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong><span>${esc(speaker)}</span></div>
