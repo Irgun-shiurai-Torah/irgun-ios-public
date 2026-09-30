@@ -2460,6 +2460,25 @@ html, body, #app {
 .direct-media-seek{flex:1;min-width:70px;accent-color:#d0ae6a;direction:ltr;touch-action:none}
 .direct-media-volume{width:75px;accent-color:#d0ae6a}
 .direct-media-select{height:33px;border:1px solid rgba(255,255,255,.25);border-radius:9px;background:rgba(15,31,53,.85);color:#fff;padding:0 7px;font-size:11px;font-weight:800}
+.direct-media-select[hidden]{display:none!important}
+.direct-media-select option{color:#122035}
+@media(max-width:760px){.direct-media-controls{gap:5px;padding:24px 7px 7px}.direct-media-icon-button{width:33px;height:33px}.direct-media-time{min-width:34px;font-size:10px}.direct-media-volume{display:none}.direct-media-select{max-width:68px;height:30px;padding:0 4px;font-size:10px}}
+@media(max-width:480px){
+  .direct-media-controls{display:grid;grid-template-columns:32px 32px minmax(46px,1fr) minmax(52px,1fr) 32px 32px;grid-template-rows:30px 34px;gap:4px;box-sizing:border-box;width:100%;max-width:100%;overflow:hidden;padding:24px 6px 6px}
+  #dmNow{grid-column:1;grid-row:1}
+  #dmSeek{grid-column:2 / 6;grid-row:1;width:100%;min-width:0;margin:0}
+  #dmDur{grid-column:6;grid-row:1}
+  #dmPlay{grid-column:1;grid-row:2}
+  #dmMute{grid-column:2;grid-row:2}
+  #dmSpeed{grid-column:3;grid-row:2}
+  #dmQuality{grid-column:4;grid-row:2}
+  #dmPip{grid-column:5;grid-row:2}
+  #dmFull{grid-column:6;grid-row:2}
+  .direct-media-icon-button{width:32px;height:32px;min-width:0;padding:0}
+  .direct-media-time{min-width:0;width:32px;font-size:9px;line-height:1;white-space:nowrap;overflow:hidden}
+  .direct-media-volume{display:none!important}
+  .direct-media-select{width:100%;max-width:none;min-width:0;height:30px;padding:0 3px;font-size:9px;border-radius:8px}
+}
 .direct-media-loading{position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.22);font-size:13px;font-weight:800;pointer-events:none}
 .direct-media-loading[hidden],.direct-media-error[hidden]{display:none!important}
 .direct-media-spinner{width:30px;height:30px;border:3px solid rgba(255,255,255,.28);border-top-color:#d0ae6a;border-radius:50%;animation:dmspin .8s linear infinite}
