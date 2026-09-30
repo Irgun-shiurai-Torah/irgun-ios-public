@@ -6,7 +6,7 @@ project_path = File.join(root, 'ios', 'App', 'App.xcodeproj')
 abort("Missing Xcode project: #{project_path}") unless File.exist?(project_path)
 
 bundle_id = (ENV['BUNDLE_ID'] || 'org.irgunshiuraitorah.app').strip
-marketing_version = (ENV['IOS_MARKETING_VERSION'] || '1.0.0').strip
+marketing_version = (ENV['IOS_MARKETING_VERSION'] || '1.0.1').strip
 build_number = (ENV['BUILD_NUMBER'] || '1').strip.gsub(/[^0-9]/, '')
 build_number = '1' if build_number.empty?
 native_product_name = (ENV['IOS_PRODUCT_NAME'] || 'IrgunShiuraiTorah').strip
