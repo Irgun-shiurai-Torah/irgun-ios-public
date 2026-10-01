@@ -217,6 +217,10 @@ const state = {
   watchMinimized: false,
   watchHostedExternally: false,
   watchPictureInPicture: false,
+  backgroundVideoReturnToVideo: false,
+  backgroundPipPending: false,
+  pipRestoreBusy: false,
+  lastVideoProgressAt: 0,
   watchVimeo: null,
   watchVimeoReady: false,
   watchVideoPlaying: false,
@@ -4740,10 +4744,14 @@ function watchVimeoEmbedSrc(video, resumeSeconds = 0) {
   return `https://player.vimeo.com/video/${id}?playsinline=1&autoplay=1&title=0&byline=0&portrait=0${hash}`;
 }
 
+const iosDirectVideoSourceCache = new Map();
+
 async function loadIosDirectVideoSources(video) {
   if (!IS_IOS || !Capacitor.isNativePlatform() || !video) return null;
   const id = String(videoId(video) || '').trim();
   if (!id) return null;
+  const cached = iosDirectVideoSourceCache.get(id);
+  if (cached && Date.now() - cached.at < 30000) return cached.sources;
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = setTimeout(() => { try { controller?.abort(); } catch (_) {} }, 9000);
   try {
@@ -4757,7 +4765,9 @@ async function loadIosDirectVideoSources(video) {
     const data = await response.json();
     const sources = data && data.video ? data.video : null;
     if (!sources || (!sources.hls && !sources.mp4)) return null;
-    return { hls:String(sources.hls || ''), mp4:String(sources.mp4 || '') };
+    const resolved = { hls:String(sources.hls || ''), mp4:String(sources.mp4 || '') };
+    iosDirectVideoSourceCache.set(id, { sources:resolved, at:Date.now() });
+    return resolved;
   } catch (error) {
     console.warn('iOS direct video discovery failed', error);
     return null;
@@ -4862,7 +4872,7 @@ class IosDirectVideoAdapter {
     if (typeof video.webkitSetPresentationMode === 'function') {
       try {
         video.webkitSetPresentationMode('picture-in-picture');
-        return Promise.resolve();
+        if (video.webkitPresentationMode === 'picture-in-picture') return Promise.resolve();
       } catch (_) {}
     }
     if (typeof video.requestPictureInPicture === 'function') return video.requestPictureInPicture();
@@ -7045,7 +7055,7 @@ async function playLibraryAudio(id, requestedTime = null) {
   }, resume || 0);
 }
 
-async function playVideoAudio(id, requestedTime = null, keepWatch = false) {
+async function playVideoAudio(id, requestedTime = null, keepWatch = false, backgroundHandoff = false) {
   const video = state.videoById.get(String(id));
   if (!video || !video.hasAudio) return alert('Audio is not available for this shiur yet.');
   const resume = requestedTime == null ? cachedSavedPosition(String(id), 'audio') : Number(requestedTime) || 0;
@@ -7058,7 +7068,7 @@ async function playVideoAudio(id, requestedTime = null, keepWatch = false) {
     subtitle: [video.showcase, video._speakerLabel, video._topicLabel].filter(Boolean).join(' - '),
     thumbnail: video.thumbnail || '',
     url: audioUrl(sourceId)
-  }, resume || 0);
+  }, resume || 0, backgroundHandoff);
   if (!keepWatch) {
     state.watchVideo = null;
     state.watchVimeo = null;
@@ -7104,7 +7114,7 @@ function prepareIosAudioPlaybackSurface(item) {
   state.watchVideo = null;
 }
 
-async function startAudio(item, resumeAt = 0) {
+async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
   if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
   state.pendingAudioSeek = null;
   state.videoOwnsPlayback = false;
@@ -7131,7 +7141,9 @@ async function startAudio(item, resumeAt = 0) {
   setupMediaSession(item);
   if (resumeAt > 1) {
     const target = Math.max(0, Number(resumeAt) || 0);
-    audio.muted = true;
+    // The source may become seekable only after iOS suspends the WebView.
+    // Keep background handoff audible while waiting for that seek.
+    audio.muted = !backgroundHandoff;
     let finished = false;
     const events = ['loadedmetadata', 'loadeddata', 'canplay', 'seeked', 'durationchange', 'timeupdate'];
     let retry, timeout;
@@ -7157,7 +7169,7 @@ async function startAudio(item, resumeAt = 0) {
         return;
       }
       try { audio.currentTime = position; } catch (_) {}
-      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking) finish(true);
+      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking && audio.readyState >= 2) finish(true);
     };
     state.pendingAudioSeek = pending;
     for (const name of events) audio.addEventListener(name, applyResume);
@@ -7475,7 +7487,8 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
     // Do not trust only the JS bookkeeping flag here. On the exact frozen-frame
     // iOS failure, the HTMLVideoElement can be audibly playing while that flag is
     // stale. Check the real media element/player before deciding not to hand off.
-    if (!(await watchVideoIsActuallyPlayingForBackground(oldPlayer))) return false;
+    if (!(await watchVideoIsActuallyPlayingForBackground(oldPlayer)) &&
+        Date.now() - state.lastVideoProgressAt > 1500) return false;
 
     const seconds = currentVideoClockForBackground();
     state.watchResumeSeconds = seconds;
@@ -7492,11 +7505,12 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 
     state.videoOwnsPlayback = false;
     state.watchMode = 'audio';
+    state.backgroundVideoReturnToVideo = true;
     state.playerOpen = false;
     state.watchPictureInPicture = false;
     state.watchMinimized = false;
 
-    const playback = playVideoAudio(id, seconds, true);
+    const playback = playVideoAudio(id, seconds, true, true);
 
     // The audio play request has now been issued. Tear down Video immediately
     // and present the watch page as Audio for when the user returns to the app.
@@ -7523,6 +7537,42 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
   }
 }
 
+function keepVideoPlayingOnBackground(source) {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  if (state.backgroundPipPending || state.watchPictureInPicture) return;
+  const player = state.watchVimeo;
+  const video = player?.video || null;
+  if (state.watchVideo && state.watchMode === 'video' && video &&
+      !video.paused && !video.ended && typeof player.requestPictureInPicture === 'function') {
+    state.watchResumeSeconds = currentVideoClockForBackground();
+    state.backgroundPipPending = true;
+    state.watchPictureInPicture = true;
+    let request;
+    try { request = player.requestPictureInPicture(); }
+    catch (error) { request = Promise.reject(error); }
+    Promise.resolve(request).then(() => {
+      state.backgroundPipPending = false;
+      if (state.watchVimeo !== player || state.watchMode !== 'video') return;
+      state.watchPictureInPicture = true;
+      parkWatchUiForSystemPip();
+    }).catch(() => {
+      state.backgroundPipPending = false;
+      if (state.watchVimeo !== player || state.watchMode !== 'video') return;
+      state.watchPictureInPicture = false;
+      void handoffPlayingVideoToBackgroundAudio(source);
+    });
+    return;
+  }
+  void handoffPlayingVideoToBackgroundAudio(source);
+}
+
+function restoreVideoAfterBackgroundAudio() {
+  if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
+  if (state.mediaSwitchBusy) return;
+  state.backgroundVideoReturnToVideo = false;
+  void switchWatchMode('video');
+}
+
 async function preserveWatchTime() {
   if (!state.watchVideo) return;
   if (state.watchMode === 'video') {
@@ -7547,6 +7597,7 @@ async function closeWatch(save = true) {
   state.watchVimeoGeneration += 1;
   clearPersistentVideoMount();
   state.watchVideo = null;
+  state.backgroundVideoReturnToVideo = false;
   state.videoOwnsPlayback = false;
   if (!state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'none',playerState:'browsing',shiurId:''});
   state.watchAudioToVideoHandoff = false;
@@ -7627,6 +7678,7 @@ async function switchWatchMode(mode) {
 
   const video = state.watchVideo;
   const id = videoId(video);
+  state.backgroundVideoReturnToVideo = false;
   state.mediaSwitchBusy = true;
 
   try {
@@ -7681,7 +7733,7 @@ async function switchWatchMode(mode) {
 
       render();
       hostCurrentWatchOverlay('full');
-      initWatchVimeo(true, true);
+      initWatchVimeo(true, false);
     }
 
     if (state.watchMode === mode) {
@@ -7827,6 +7879,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
     player.on('timeupdate', data => {
       if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
       state.watchResumeSeconds = Number(data.seconds) || 0;
+      if (state.watchVideoPlaying) state.lastVideoProgressAt = Date.now();
       syncNativeMediaSession(videoMediaItem, true, data.seconds || 0, data.duration || video.duration || 0, 'video');
       if ('mediaSession' in navigator && Number(data.duration) > 0) { try { navigator.mediaSession.setPositionState({duration:Number(data.duration), playbackRate:1, position:Math.min(Number(data.seconds)||0, Number(data.duration))}); } catch (_) {} }
       if (state.watchResumeSeconds >= 30) recordPublicView(videoId(video), 'video');
@@ -7857,27 +7910,46 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
     });
     player.on('pause', async () => { if (generation!==state.watchVimeoGeneration) return; state.watchVideoPlaying = false; usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
+    let resumeAfterPip = false;
     if (player.on) {
       player.on('pictureinpictureintent', data => {
         if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
-        if (data.active) state.watchResumeSeconds = currentVideoClockForBackground();
+        if (data.active) {
+          state.watchResumeSeconds = currentVideoClockForBackground();
+          resumeAfterPip = state.watchVideoPlaying || !player.video?.paused;
+        }
         state.watchPictureInPicture = Boolean(data.active);
       });
       player.on('fullscreenchange', data => {
         if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
       });
       player.on('enterpictureinpicture', () => {
+        if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+        resumeAfterPip = resumeAfterPip || state.watchVideoPlaying || !player.video?.paused;
         state.watchPictureInPicture = true;
         state.watchVideoPlaying = true;
         parkWatchUiForSystemPip();
         try {
-          const playPromise = player.play?.();
+          const playPromise = player.video?.paused ? player.video.play() : null;
           if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
         } catch (_) {}
       });
       player.on('leavepictureinpicture', () => {
+        if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+        const shouldResume = resumeAfterPip;
+        resumeAfterPip = false;
+        state.watchResumeSeconds = currentVideoClockForBackground();
         state.watchPictureInPicture = false;
         restoreWatchUiAfterSystemPip();
+        if (shouldResume) {
+          // iOS can pause the HTML video during the PiP -> inline transition.
+          // Request play while the PiP return action still has user activation.
+          try { (player.video?.play?.() || player.play?.())?.catch?.(() => {}); } catch (_) {}
+          setTimeout(() => {
+            if (state.watchVimeo !== player || state.watchMode !== 'video' || document.hidden) return;
+            if (player.video?.paused) Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
+          }, 180);
+        }
       });
     }
     player.on('ended', data => {
@@ -8072,26 +8144,29 @@ window.addEventListener('offline', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    void handoffPlayingVideoToBackgroundAudio('visibilitychange');
+    keepVideoPlayingOnBackground('visibilitychange');
     return;
   }
+  restoreVideoAfterBackgroundAudio();
   repairIosViewportAfterResume();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
 window.addEventListener('irgunNativeWillResignActive', () => {
-  void handoffPlayingVideoToBackgroundAudio('native-will-resign-active');
+  keepVideoPlayingOnBackground('native-will-resign-active');
 });
 window.addEventListener('irgunNativeBackground', () => {
-  void handoffPlayingVideoToBackgroundAudio('native-background');
+  keepVideoPlayingOnBackground('native-background');
 });
 window.addEventListener('irgunNativeForeground', () => {
   repairIosViewportAfterResume();
+  restoreVideoAfterBackgroundAudio();
 });
 window.addEventListener('pagehide', () => {
-  void handoffPlayingVideoToBackgroundAudio('pagehide');
+  keepVideoPlayingOnBackground('pagehide');
 });
 window.addEventListener('focus', () => {
   repairIosViewportAfterResume();
+  restoreVideoAfterBackgroundAudio();
   handlePendingPushOpen();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
 });
