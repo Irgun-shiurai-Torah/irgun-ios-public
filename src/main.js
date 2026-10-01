@@ -220,6 +220,8 @@ const state = {
   backgroundVideoReturnToVideo: false,
   backgroundPipPending: false,
   pipRestoreBusy: false,
+  pipBackgroundReturnPending: false,
+  pipWasBackgrounded: false,
   lastVideoProgressAt: 0,
   watchVimeo: null,
   watchVimeoReady: false,
@@ -4881,7 +4883,7 @@ class IosDirectVideoAdapter {
   exitPictureInPicture() {
     const video = this.video;
     if (!video) return Promise.resolve();
-    if (typeof video.webkitSetPresentationMode === 'function') {
+    if (video.webkitPresentationMode === 'picture-in-picture' && typeof video.webkitSetPresentationMode === 'function') {
       try {
         video.webkitSetPresentationMode('inline');
         return Promise.resolve();
@@ -7413,6 +7415,9 @@ async function openWatch(id, requestedTime = null, options = {}) {
   state.watchAudioToVideoHandoffId = '';
   state.watchAudioToVideoTargetSeconds = 0;
   state.watchMinimized = false;
+  state.watchPictureInPicture = false;
+  state.pipBackgroundReturnPending = false;
+  state.pipWasBackgrounded = false;
   state.watchVimeoReady = false;
   state.watchVimeoGeneration += 1;
   state.watchComments = [];
@@ -7539,13 +7544,20 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 
 function keepVideoPlayingOnBackground(source) {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
-  if (state.backgroundPipPending || state.watchPictureInPicture) return;
+  if (source !== 'native-will-resign-active') state.pipWasBackgrounded = true;
+  if (state.backgroundPipPending || state.watchPictureInPicture) {
+    if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo?.video) {
+      state.pipBackgroundReturnPending = true;
+    }
+    return;
+  }
   const player = state.watchVimeo;
   const video = player?.video || null;
   if (state.watchVideo && state.watchMode === 'video' && video &&
       !video.paused && !video.ended && typeof player.requestPictureInPicture === 'function') {
     state.watchResumeSeconds = currentVideoClockForBackground();
     state.backgroundPipPending = true;
+    state.pipBackgroundReturnPending = true;
     state.watchPictureInPicture = true;
     let request;
     try { request = player.requestPictureInPicture(); }
@@ -7555,10 +7567,13 @@ function keepVideoPlayingOnBackground(source) {
       if (state.watchVimeo !== player || state.watchMode !== 'video') return;
       state.watchPictureInPicture = true;
       parkWatchUiForSystemPip();
+      // The user can reopen from a notification before the native request settles.
+      if (!document.hidden && state.pipWasBackgrounded && state.pipBackgroundReturnPending) restoreVideoAfterSystemPip();
     }).catch(() => {
       state.backgroundPipPending = false;
       if (state.watchVimeo !== player || state.watchMode !== 'video') return;
       state.watchPictureInPicture = false;
+      state.pipBackgroundReturnPending = false;
       void handoffPlayingVideoToBackgroundAudio(source);
     });
     return;
@@ -7566,7 +7581,44 @@ function keepVideoPlayingOnBackground(source) {
   void handoffPlayingVideoToBackgroundAudio(source);
 }
 
+function restoreVideoAfterSystemPip() {
+  if (!IS_IOS || !Capacitor.isNativePlatform() || document.hidden ||
+      !state.pipBackgroundReturnPending || !state.pipWasBackgrounded || state.pipRestoreBusy) return;
+  const player = state.watchVimeo;
+  if (!player?.video || !state.watchVideo || state.watchMode !== 'video') {
+    state.pipBackgroundReturnPending = false;
+    return;
+  }
+  if (state.backgroundPipPending) return; // Its completion will reconcile this return.
+  state.pipRestoreBusy = true;
+  state.pipBackgroundReturnPending = false;
+  state.pipWasBackgrounded = false;
+  state.watchResumeSeconds = currentVideoClockForBackground();
+  const video = player.video;
+  const shouldResume = !video.paused && !video.ended;
+  Promise.resolve(player.exitPictureInPicture?.()).catch(error => {
+    console.warn('Could not exit system Picture in Picture on app return', error);
+  }).finally(() => {
+    if (state.watchVimeo !== player || state.watchMode !== 'video') {
+      state.pipRestoreBusy = false;
+      return;
+    }
+    state.watchPictureInPicture = false;
+    restoreWatchUiAfterSystemPip();
+    if (shouldResume && video.paused) Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
+    state.pipRestoreBusy = false;
+    setTimeout(() => {
+      if (state.watchVimeo !== player || document.hidden || state.watchMode !== 'video') return;
+      if (video.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === video) {
+        Promise.resolve(player.exitPictureInPicture?.()).catch(() => {});
+      }
+      restoreWatchUiAfterSystemPip();
+    }, 240);
+  });
+}
+
 function restoreVideoAfterBackgroundAudio() {
+  restoreVideoAfterSystemPip();
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
   if (state.mediaSwitchBusy) return;
   state.backgroundVideoReturnToVideo = false;
@@ -7598,6 +7650,8 @@ async function closeWatch(save = true) {
   clearPersistentVideoMount();
   state.watchVideo = null;
   state.backgroundVideoReturnToVideo = false;
+  state.pipBackgroundReturnPending = false;
+  state.pipWasBackgrounded = false;
   state.videoOwnsPlayback = false;
   if (!state.current) usageAnalytics.setMedia({isPlaying:false,mediaType:'none',playerState:'browsing',shiurId:''});
   state.watchAudioToVideoHandoff = false;
@@ -7838,13 +7892,16 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       }
       if (!started) {
         try {
-          await player.play();
-          started = !(await player.getPaused().catch(() => false));
+          if (created.backend === 'direct') started = Boolean(await player.ensureVisualPlayback(true));
+          else {
+            await player.play();
+            started = !(await player.getPaused().catch(() => false));
+          }
         } catch (error) {
           console.warn('Automatic visible video retry failed', error);
         }
       } else {
-        started = !(await player.getPaused().catch(() => false));
+        started = !(await player.getPaused().catch(() => true));
       }
       state.watchVideoPlaying = Boolean(started);
       if (started) {
@@ -7929,6 +7986,9 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         state.watchPictureInPicture = true;
         state.watchVideoPlaying = true;
         parkWatchUiForSystemPip();
+        if (state.pipBackgroundReturnPending && state.pipWasBackgrounded && !document.hidden) {
+          setTimeout(restoreVideoAfterSystemPip, 0);
+        }
         try {
           const playPromise = player.video?.paused ? player.video.play() : null;
           if (playPromise && typeof playPromise.catch === 'function') playPromise.catch(() => {});
@@ -8159,6 +8219,12 @@ window.addEventListener('irgunNativeBackground', () => {
 });
 window.addEventListener('irgunNativeForeground', () => {
   repairIosViewportAfterResume();
+  restoreVideoAfterBackgroundAudio();
+});
+window.addEventListener('irgunNativeDidBecomeActive', () => {
+  repairIosViewportAfterResume();
+  // A brief notification round trip may not deliver a hidden WebView event.
+  if (state.pipBackgroundReturnPending) state.pipWasBackgrounded = true;
   restoreVideoAfterBackgroundAudio();
 });
 window.addEventListener('pagehide', () => {

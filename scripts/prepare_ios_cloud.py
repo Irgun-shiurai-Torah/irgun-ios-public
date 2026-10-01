@@ -251,6 +251,8 @@ def patch_app_delegate():
         replacement = replacement.replace('{', '{\n        irgunConfigurePlaybackAudioSession()', 1)
     if 'irgunScheduleAnalyticsPluginRegistration()' not in replacement:
         replacement = replacement.replace('{', '{\n        irgunScheduleAnalyticsPluginRegistration()', 1)
+    if 'irgunDispatchWebLifecycleEvent("irgunNativeDidBecomeActive")' not in replacement:
+        replacement = replacement.replace('{', '{\n        irgunDispatchWebLifecycleEvent("irgunNativeDidBecomeActive")', 1)
     text = text[:active_match.start()] + replacement + text[active_match.end():]
 
     app_delegate.write_text(text)
