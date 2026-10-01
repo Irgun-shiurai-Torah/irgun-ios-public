@@ -116,6 +116,8 @@ def patch_app_delegate():
             text = text.replace('import Capacitor', 'import Capacitor\nimport WebKit', 1)
         else:
             text = text.replace('import UIKit', 'import UIKit\nimport WebKit', 1)
+    if 'import AVFoundation' not in text:
+        text = text.replace('import WebKit', 'import WebKit\nimport AVFoundation', 1)
 
     additions = []
     if 'private var irgunAnalyticsPlugin: IrgunAnalyticsPlugin?' not in text:
@@ -195,6 +197,17 @@ def patch_app_delegate():
     }
 ''')
 
+    if 'private func irgunConfigurePlaybackAudioSession()' not in text:
+        additions.append('''
+    private func irgunConfigurePlaybackAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        } catch {
+            NSLog("Irgun playback audio session configuration failed: \\(error)")
+        }
+    }
+''')
+
     if additions:
         idx = text.rfind('\n}')
         if idx < 0:
@@ -234,6 +247,8 @@ def patch_app_delegate():
     replacement = active_match.group(0)
     if 'irgunApplyWebViewMediaAndZoomPolicy()' not in active_match.group('body'):
         replacement = replacement.replace('{', '{\n        irgunApplyWebViewMediaAndZoomPolicy()', 1)
+    if 'irgunConfigurePlaybackAudioSession()' not in replacement:
+        replacement = replacement.replace('{', '{\n        irgunConfigurePlaybackAudioSession()', 1)
     if 'irgunScheduleAnalyticsPluginRegistration()' not in replacement:
         replacement = replacement.replace('{', '{\n        irgunScheduleAnalyticsPluginRegistration()', 1)
     text = text[:active_match.start()] + replacement + text[active_match.end():]
