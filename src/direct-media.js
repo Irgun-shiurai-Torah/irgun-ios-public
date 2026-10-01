@@ -84,7 +84,7 @@ class Player{
     if(done)return;
     if(token!==this.token){finish();return}
     const target=this.duration()?Math.min(n,Math.max(0,this.duration()-.25)):n;
-    if(Math.abs(this.current()-target)<=1&&!v.seeking&&v.readyState>=2){finish();return}
+    if(Math.abs(this.current()-target)<=1){if(!v.seeking&&v.readyState>=2)finish();return}
     try{v.currentTime=target}catch(_){}
     if(Math.abs(this.current()-target)<=1&&!v.seeking&&v.readyState>=2)finish();
    };
