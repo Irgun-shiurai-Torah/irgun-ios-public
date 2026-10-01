@@ -213,6 +213,7 @@ const state = {
   watchCommentsError: '',
   editingCommentId: '',
   watchResumeSeconds: 0,
+  pendingAudioSeek: null,
   watchMinimized: false,
   watchHostedExternally: false,
   watchPictureInPicture: false,
@@ -3460,6 +3461,11 @@ function enterIosPictureInPicture(event) {
     return;
   }
 
+  // A background notification may arrive before iOS resolves the PiP request.
+  // Mark the transition now so it cannot replace the video with audio at zero.
+  state.watchResumeSeconds = currentVideoClockForBackground();
+  state.watchPictureInPicture = true;
+
   try {
     if (typeof player.preparePictureInPicture === 'function') player.preparePictureInPicture();
     else {
@@ -3473,6 +3479,7 @@ function enterIosPictureInPicture(event) {
     request = player.requestPictureInPicture();
   } catch (error) {
     console.warn('iOS Picture in Picture request failed synchronously', error);
+    state.watchPictureInPicture = false;
     setToast(currentLanguage()==='he' ? 'לא ניתן לפתוח תמונה בתוך תמונה כרגע.' : 'Could not start Picture in Picture right now.');
     return;
   }
@@ -4776,6 +4783,7 @@ class IosDirectVideoAdapter {
       onPlay: state => this.emit('play', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPause: state => this.emit('pause', { seconds:state.position || 0, duration:state.duration || 0 }),
       onEnded: state => this.emit('ended', { seconds:state.position || 0, duration:state.duration || 0 }),
+      onPipIntent: active => this.emit('pictureinpictureintent', { active:Boolean(active) }),
       onFatal: detail => this.emit('fatal', detail || {})
     });
     this.video = this.player.v;
@@ -7097,6 +7105,8 @@ function prepareIosAudioPlaybackSurface(item) {
 }
 
 async function startAudio(item, resumeAt = 0) {
+  if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
+  state.pendingAudioSeek = null;
   state.videoOwnsPlayback = false;
   prepareIosAudioPlaybackSurface(item);
   // Audio now owns playback; restore the element after any prior hard Video stop.
@@ -7120,11 +7130,37 @@ async function startAudio(item, resumeAt = 0) {
   audio.playbackRate = state.playbackSpeed;
   setupMediaSession(item);
   if (resumeAt > 1) {
-    const applyResume = () => {
-      try { audio.currentTime = Math.min(resumeAt, Number.isFinite(audio.duration) ? Math.max(0, audio.duration - 1) : resumeAt); } catch (_) {}
+    const target = Math.max(0, Number(resumeAt) || 0);
+    audio.muted = true;
+    let finished = false;
+    const events = ['loadedmetadata', 'loadeddata', 'canplay', 'seeked', 'durationchange', 'timeupdate'];
+    let retry, timeout;
+    const pending = { target, id:String(item.id || ''), cancel:() => finish(false) };
+    const finish = successful => {
+      if (finished) return;
+      finished = true;
+      clearInterval(retry);
+      clearTimeout(timeout);
+      for (const name of events) audio.removeEventListener(name, applyResume);
+      if (state.pendingAudioSeek === pending) {
+        state.pendingAudioSeek = null;
+        audio.muted = false;
+        if (successful && state.watchMode === 'audio' && state.watchVideo) state.watchResumeSeconds = Math.max(0, Number(audio.currentTime) || target);
+      }
     };
-    if (audio.readyState >= 1) applyResume();
-    else audio.addEventListener('loadedmetadata', applyResume, { once: true });
+    const applyResume = () => {
+      if (finished) return;
+      if (state.pendingAudioSeek !== pending || state.current !== item) { finish(false); return; }
+      const position = Number.isFinite(audio.duration) ? Math.min(target, Math.max(0, audio.duration - 1)) : target;
+      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking) { finish(true); return; }
+      try { audio.currentTime = position; } catch (_) {}
+      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking) finish(true);
+    };
+    state.pendingAudioSeek = pending;
+    for (const name of events) audio.addEventListener(name, applyResume);
+    retry = setInterval(applyResume, 300);
+    timeout = setTimeout(() => finish(false), 8000);
+    applyResume();
   }
   // Start playback before the heavier app render so the media request begins
   // immediately and remains tied to the user's tap on mobile WebViews.
@@ -7258,6 +7294,7 @@ function updatePlayerUi() {
 
 async function saveCurrentAudioHistory(force = false, completed = false) {
   if (!state.current || !state.user) return;
+  if (state.pendingAudioSeek && state.pendingAudioSeek.id === String(state.current.id)) return;
   if (state.current.kind === 'paid-audio') {
     await savePaidAudioProgress(false, force || completed);
     return;
@@ -7272,7 +7309,9 @@ audio.addEventListener('timeupdate', () => {
   updatePlayerUi();
   if (!state.current) return;
   if (state.watchMode === 'audio' && state.watchVideo && state.current.id === videoId(state.watchVideo)) {
-    state.watchResumeSeconds = Math.max(0, Number(audio.currentTime) || 0);
+    if (!state.pendingAudioSeek || state.pendingAudioSeek.id !== String(state.current.id)) {
+      state.watchResumeSeconds = Math.max(0, Number(audio.currentTime) || 0);
+    }
   }
   if (state.current.kind !== 'paid-audio' && (audio.currentTime || 0) >= 30) recordPublicView(state.current.id, 'audio');
   saveCurrentAudioHistory(false, false);
@@ -7391,7 +7430,13 @@ function currentVideoClockForBackground() {
   const player = state.watchVimeo;
   const directVideo = player?.video || player?.player?.v || null;
   const directTime = Number(directVideo?.currentTime);
-  if (Number.isFinite(directTime) && directTime >= 0) return directTime;
+  if (Number.isFinite(directTime) && directTime >= 0) {
+    // Before the first native HLS seek completes, zero is a loading position.
+    if (directTime < 1 && Number(state.watchResumeSeconds) > 1 && directVideo.readyState < 2) {
+      return Number(state.watchResumeSeconds);
+    }
+    return directTime;
+  }
   return Math.max(0, Number(state.watchResumeSeconds) || 0);
 }
 
@@ -7480,7 +7525,7 @@ async function preserveWatchTime() {
   if (state.watchMode === 'video') {
     state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0);
   } else if (state.watchMode === 'audio' && state.current && state.current.id === videoId(state.watchVideo)) {
-    state.watchResumeSeconds = audio.currentTime || 0;
+    state.watchResumeSeconds = state.pendingAudioSeek?.target || audio.currentTime || 0;
   }
 }
 
@@ -7526,6 +7571,7 @@ function clearAudioMediaSessionHandlers() {
 function hardStopHtmlAudioForVideo() {
   // V1.2.56: Video ownership means the Main Audio Player is destroyed immediately.
   // Clear JS ownership FIRST so pause/load/error events cannot recover or restart it.
+  if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
   state.current = null;
   state.playerOpen = false;
   clearAudioMediaSessionHandlers();
@@ -7610,7 +7656,7 @@ async function switchWatchMode(mode) {
       // Website-style single-owner switch:
       // capture the audio clock, stop and RELEASE audio, then create video there.
       const seconds = state.current && String(state.current.id || '') === String(id)
-        ? Math.max(0, Number(audio.currentTime) || 0)
+        ? Math.max(0, Number(state.pendingAudioSeek?.target || audio.currentTime) || 0)
         : Math.max(0, Number(state.watchResumeSeconds) || 0);
 
       state.watchResumeSeconds = seconds;
@@ -7694,7 +7740,9 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         const target = duration > 0 ? Math.min(requestedResume, Math.max(0, duration - 1)) : requestedResume;
         actual = await player.setCurrentTime(target).catch(() => null);
       }
-      if (Number.isFinite(Number(actual))) state.watchResumeSeconds = Math.max(0, Number(actual));
+      if (Number.isFinite(Number(actual)) && (Number(actual) >= requestedResume - 2 || requestedResume <= 2)) {
+        state.watchResumeSeconds = Math.max(0, Number(actual));
+      }
     }
 
     if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
@@ -7746,7 +7794,12 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVideoPlaying = Boolean(started);
       if (started) {
         const live = await player.getCurrentTime().catch(() => state.watchResumeSeconds || requestedResume);
-        if (Number.isFinite(Number(live))) state.watchResumeSeconds = Math.max(0, Number(live));
+        if (requestedResume > 2 && Number(live) < requestedResume - 2 && created.backend === 'direct') {
+          const recovered = await player.setCurrentTime(requestedResume).catch(() => null);
+          if (Number.isFinite(Number(recovered)) && Number(recovered) >= requestedResume - 2) {
+            state.watchResumeSeconds = Math.max(0, Number(recovered));
+          }
+        } else if (Number.isFinite(Number(live))) state.watchResumeSeconds = Math.max(0, Number(live));
       } else {
         console.warn('Video reached the requested timestamp but remained paused');
       }
@@ -7802,6 +7855,11 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
     });
     player.on('pause', async () => { if (generation!==state.watchVimeoGeneration) return; state.watchVideoPlaying = false; usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
     if (player.on) {
+      player.on('pictureinpictureintent', data => {
+        if (generation !== state.watchVimeoGeneration || state.watchMode !== 'video') return;
+        if (data.active) state.watchResumeSeconds = currentVideoClockForBackground();
+        state.watchPictureInPicture = Boolean(data.active);
+      });
       player.on('fullscreenchange', data => {
         if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
       });
