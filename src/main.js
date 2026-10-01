@@ -7152,7 +7152,10 @@ async function startAudio(item, resumeAt = 0) {
       if (finished) return;
       if (state.pendingAudioSeek !== pending || state.current !== item) { finish(false); return; }
       const position = Number.isFinite(audio.duration) ? Math.min(target, Math.max(0, audio.duration - 1)) : target;
-      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking) { finish(true); return; }
+      if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1) {
+        if (!audio.seeking && audio.readyState >= 2) finish(true);
+        return;
+      }
       try { audio.currentTime = position; } catch (_) {}
       if (Math.abs((Number(audio.currentTime) || 0) - position) <= 1 && !audio.seeking) finish(true);
     };
