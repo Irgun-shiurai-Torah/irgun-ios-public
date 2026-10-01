@@ -37,7 +37,7 @@ env:
 
 jobs:
   source-package:
-    name: Full V1.2.63 Source ZIP
+    name: Full V1.2.64 Source ZIP
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,14 +48,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f Irgun-iOS-1.2.63-FULL.zip
-          zip -qr Irgun-iOS-1.2.63-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.63-FULL.zip"
+          rm -f Irgun-iOS-1.2.64-FULL.zip
+          zip -qr Irgun-iOS-1.2.64-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.64-FULL.zip"
 
       - name: Upload full source package
         uses: actions/upload-artifact@v7
         with:
-          name: Irgun-iOS-1.2.63-FULL
-          path: Irgun-iOS-1.2.63-FULL.zip
+          name: Irgun-iOS-1.2.64-FULL
+          path: Irgun-iOS-1.2.64-FULL.zip
           if-no-files-found: error
           retention-days: 30
 
