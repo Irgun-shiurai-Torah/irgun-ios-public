@@ -96,10 +96,61 @@ class Player{
   });
  }
  wakeVideoLayer(){const v=this.v;if(!v)return;try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')try{v.webkitSetPresentationMode('inline')}catch(_){}v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}requestAnimationFrame(()=>{try{v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';requestAnimationFrame(()=>{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'})}catch(_){}})}catch(_){}}
- async waitForVisualFrame(timeout=700){const v=this.v;if(!v||v.paused)return false;if(typeof v.requestVideoFrameCallback==='function')return await new Promise(resolve=>{let done=false;const finish=x=>{if(done)return;done=true;clearTimeout(timer);resolve(Boolean(x))};const timer=setTimeout(()=>finish(false),timeout);try{v.requestVideoFrameCallback(()=>finish(true))}catch(_){finish(false)}});const beforeFrames=Number(v.webkitDecodedFrameCount);const beforeTime=this.current();await new Promise(resolve=>setTimeout(resolve,Math.min(timeout,320)));const afterFrames=Number(v.webkitDecodedFrameCount);const advanced=this.current()>beforeTime+.04;const decoded=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames)?afterFrames>beforeFrames:false;return Boolean(!v.paused&&v.readyState>=2&&(decoded||advanced))}
+ async waitForVisualFrame(timeout=1100){
+  const v=this.v;if(!v||v.paused)return false;
+  if(typeof v.requestVideoFrameCallback==='function')return await new Promise(resolve=>{
+   let done=false,first=null;
+   const finish=x=>{if(done)return;done=true;clearTimeout(timer);resolve(Boolean(x))};
+   const timer=setTimeout(()=>finish(false),timeout);
+   const frame=(_now,meta)=>{
+    if(done||v.paused){finish(false);return}
+    if(first&&(meta?.presentedFrames>first.presentedFrames||meta?.mediaTime>first.mediaTime+.02)){finish(true);return}
+    first=meta||{presentedFrames:0,mediaTime:this.current()};
+    try{v.requestVideoFrameCallback(frame)}catch(_){finish(false)}
+   };
+   try{v.requestVideoFrameCallback(frame)}catch(_){finish(false)}
+  });
+  const beforeFrames=Number(v.webkitDecodedFrameCount),beforeTime=this.current();
+  await new Promise(resolve=>setTimeout(resolve,Math.min(timeout,500)));
+  const afterFrames=Number(v.webkitDecodedFrameCount);
+  const decoded=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames)&&afterFrames>beforeFrames;
+  // Older WebKit may not expose decoded-frame counts. Its advancing media clock
+  // is the best available signal, but never accept a single initial still frame.
+  const hasDecodeCounter=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames);
+  return Boolean(!v.paused&&v.readyState>=2&&(decoded||(!hasDecodeCounter&&this.current()>beforeTime+.15)));
+ }
  async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused)try{await v.play()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));try{await v.play()}catch(_){}}this.wakeVideoLayer();return !v.paused}
  async play(){this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}await this.v.play();this.wakeVideoLayer();return true}
- async ensureVisualPlayback(forceRelatch=false){this.show();this.wakeVideoLayer();try{this.v.autoplay=true;this.v.setAttribute('autoplay','')}catch(_){}if(this.v.paused)try{await this.play()}catch(_){}let frameSeen=await this.waitForVisualFrame(700);const nativeShell=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase());if(forceRelatch||(!frameSeen&&nativeShell)){const relatched=await this.relatchInlineVideoLayer();if(relatched)frameSeen=await this.waitForVisualFrame(700)}if(this.v.paused){if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}try{await this.v.play()}catch(_){}}if(this.v.paused){await new Promise(resolve=>setTimeout(resolve,120));try{await this.v.play()}catch(_){}}this.wakeVideoLayer();return !this.v.paused}
+ async ensureVisualPlayback(forceRelatch=false){
+  this.show();this.wakeVideoLayer();
+  try{this.v.autoplay=true;this.v.setAttribute('autoplay','')}catch(_){}
+  if(this.v.paused)try{await this.play()}catch(_){}
+  if(document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return !this.v.paused;
+  const nativeShell=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase());
+  let frameSeen=await this.waitForVisualFrame();
+  if(document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return !this.v.paused;
+  if(forceRelatch||(!frameSeen&&nativeShell)){
+   await this.relatchInlineVideoLayer();
+   frameSeen=await this.waitForVisualFrame();
+  }
+  if(!frameSeen&&nativeShell&&this.v.readyState>=2&&!document.hidden&&this.v.webkitPresentationMode!=='picture-in-picture'){
+   // On a fresh iOS HLS item the audio clock can run against a frozen video
+   // layer. Moving the same node, as mini/PiP does, rebuilds its WebKit layer.
+   const at=this.current();
+   try{this.v.pause()}catch(_){}
+   this.c.appendChild(this.r);
+   await new Promise(resolve=>requestAnimationFrame(resolve));
+   try{if(at>0)this.v.currentTime=at}catch(_){}
+   try{await this.play()}catch(_){}
+   frameSeen=await this.waitForVisualFrame();
+  }
+  if(this.v.paused){
+   if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}
+   try{await this.v.play()}catch(_){}
+  }
+  this.wakeVideoLayer();
+  return !this.v.paused&&(!nativeShell||frameSeen);
+ }
  pause(stop=true){this.v.pause();if(stop&&this.hls?.stopLoad)try{this.hls.stopLoad()}catch(_){}} setPlaybackRate(x){x=SPEEDS.includes(Number(x))?Number(x):1;this.v.playbackRate=x;this.speed.value=String(x)} show(){this.r.hidden=false;if(this.iframe)this.iframe.style.display='none'} showVimeo(){this.pause(true);this.r.hidden=true;if(this.iframe)this.iframe.style.display='block'}
 }
 function rpip(btn,v,onIntent){if(!btn)return;const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};const supported=standard()||webkit();btn.hidden=!supported;if(!supported)return;const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';const update=()=>{const on=active();btn.classList.toggle('active',on);btn.setAttribute('aria-label',on?'Exit Picture in Picture':'Picture in Picture');btn.title=on?'Exit Picture in Picture':'Picture in Picture';btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`};btn.onclick=async()=>{const opening=!active();onIntent?.(opening);try{if(document.pictureInPictureElement===v&&document.exitPictureInPicture){await document.exitPictureInPicture()}else if(standard()){await v.requestPictureInPicture()}else if(webkit()){v.webkitSetPresentationMode(active()?'inline':'picture-in-picture')}}catch(e){onIntent?.(false);console.warn('Picture-in-Picture failed',e)}update()};v.addEventListener('enterpictureinpicture',update);v.addEventListener('leavepictureinpicture',update);v.addEventListener('webkitpresentationmodechanged',update);update()}
