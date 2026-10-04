@@ -37,21 +37,32 @@ final class SimulatorProbe {
         reopen.accessibilityIdentifier = "ist-simulator-reopen"
         reopen.addTarget(self, action: #selector(reopenCurrent), for: .touchUpInside)
         reopen.translatesAutoresizingMaskIntoConstraints = false
+        let next = UIButton(type: .system)
+        next.setTitle("Next page", for: .normal)
+        next.accessibilityIdentifier = "ist-simulator-next-page"
+        next.addTarget(self, action: #selector(nextStorePage), for: .touchUpInside)
+        let hide = UIButton(type: .system)
+        hide.setTitle("Clean capture", for: .normal)
+        hide.accessibilityIdentifier = "ist-simulator-clean-capture"
+        hide.addTarget(self, action: #selector(cleanCapture), for: .touchUpInside)
+        let buttons = UIStackView(arrangedSubviews: [button, reopen, next, hide])
+        buttons.axis = .horizontal; buttons.distribution = .fillEqually
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        for control in [button, reopen, next, hide] { control.titleLabel?.font = .systemFont(ofSize: 10) }
         panel.addSubview(label)
-        panel.addSubview(button)
-        panel.addSubview(reopen)
+        panel.addSubview(buttons)
         window.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: window.leadingAnchor),
             panel.trailingAnchor.constraint(equalTo: window.trailingAnchor),
-            panel.bottomAnchor.constraint(equalTo: window.safeAreaLayoutGuide.bottomAnchor),
-            panel.heightAnchor.constraint(equalToConstant: 32),
+            panel.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor),
+            panel.heightAnchor.constraint(equalToConstant: 54),
             label.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
-            label.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
-            button.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
-            button.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
-            reopen.trailingAnchor.constraint(equalTo: button.leadingAnchor, constant: -8),
-            reopen.centerYAnchor.constraint(equalTo: panel.centerYAnchor)
+            label.topAnchor.constraint(equalTo: panel.topAnchor, constant: 4),
+            buttons.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            buttons.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            buttons.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            buttons.heightAnchor.constraint(equalToConstant: 34)
         ])
         self.panel = panel
         self.status = label
@@ -71,13 +82,23 @@ final class SimulatorProbe {
         webView?.evaluateJavaScript("window.ISTSimulator?.reopenCurrent()", completionHandler: nil)
     }
 
+    @objc private func nextStorePage() { webView?.evaluateJavaScript("window.ISTSimulator?.nextStorePage()", completionHandler: nil) }
+    @objc private func cleanCapture() {
+        panel?.isHidden = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
+    }
+
     private func poll() {
         guard !polling, let webView = webView else { return }
         polling = true
         webView.evaluateJavaScript("window.ISTSimulator?.snapshot() || '{}'") { [weak self] result, error in
             guard let self = self else { return }
             self.polling = false
-            if let json = result as? String { self.status?.accessibilityValue = json }
+            if let json = result as? String, let data = json.data(using: .utf8),
+               var state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
+                if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) { self.status?.accessibilityValue = value }
+            }
         }
     }
 }

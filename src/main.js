@@ -33,6 +33,7 @@ const app = document.getElementById('app');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
+const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
@@ -237,6 +238,8 @@ const state = {
   mediaSwitchBusy: false,
   videoOwnsPlayback: false,
   backgroundVideoAudioHandoffBusy: false,
+  nativeBackgroundPending: false,
+  nativeBackgroundRestoreBusy: false,
   audioHistoryTimer: null,
   audioLastHistoryAt: 0,
   publicCounted: new Set(),
@@ -3563,6 +3566,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
 }
 
 async function resetWatchVimeoPlayer() {
+  stopNativeBackgroundAudio();
   const player = state.watchVimeo;
   state.watchVimeo = null;
   state.watchVimeoReady = false;
@@ -4798,6 +4802,8 @@ class IosDirectVideoAdapter {
       onPause: state => this.emit('pause', { seconds:state.position || 0, duration:state.duration || 0 }),
       onEnded: state => this.emit('ended', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPipIntent: active => this.emit('pictureinpictureintent', { active:Boolean(active) }),
+      onFullscreen: active => this.emit('fullscreenchange', {fullscreen:Boolean(active)}),
+      onMinimize: () => { if (state.watchVimeo === this) void minimizeWatchToPersistent(); },
       onFatal: detail => this.emit('fatal', detail || {})
     });
     this.video = this.player.v;
@@ -4881,6 +4887,7 @@ class IosDirectVideoAdapter {
   requestPictureInPicture() {
     const video = this.video;
     if (!video) return Promise.reject(new Error('Video element unavailable'));
+    this.emit('pictureinpictureintent', {active:true});
     this.preparePictureInPicture();
     // WKWebView's native presentation-mode API is the most reliable iOS path.
     if (typeof video.webkitSetPresentationMode === 'function') {
@@ -7249,9 +7256,7 @@ function setSleepTimer(value) {
 }
 
 function syncNativeMediaSession(item, isPlaying, position = 0, duration = 0, mediaType = 'video') {
-  // Public iOS uses the browser/WKWebView Media Session API; there is no separate
-  // native playback bridge in this repository. Keep this helper safe and side-effect
-  // free with respect to the HTML audio element.
+  prepareNativeBackgroundAudio(item, isPlaying, position, mediaType);
   if (!('mediaSession' in navigator)) return;
   try {
     navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
@@ -7267,6 +7272,68 @@ function syncNativeMediaSession(item, isPlaying, position = 0, duration = 0, med
       });
     } catch (_) {}
   }
+}
+
+let nativeBackgroundLastSync = '';
+let nativeBackgroundLastSyncAt = 0;
+function nativeBackgroundAudioAvailable() {
+  return IS_IOS && Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('IrgunBackgroundAudio');
+}
+function stopNativeBackgroundAudio() {
+  state.nativeBackgroundPending = false;
+  nativeBackgroundLastSync = '';
+  if (nativeBackgroundAudioAvailable()) IrgunBackgroundAudio.stop({clear:true}).catch(() => {});
+}
+function prepareNativeBackgroundAudio(item, isPlaying, position, mediaType = 'video', force = false) {
+  if (!nativeBackgroundAudioAvailable() || mediaType !== 'video' || document.hidden || state.nativeBackgroundPending) return;
+  if (!state.watchVideo || state.watchMode !== 'video' || String(videoId(state.watchVideo)) !== String(item.id || videoId(item))) return;
+  const player = state.watchVimeo;
+  const direct = player?.player;
+  const url = item.backgroundAudioUrl || direct?.sources?.hls || direct?.sources?.mp4;
+  if (!url) return;
+  const playing = direct ? Boolean(direct.autoplayWanted && !direct.v.ended) : Boolean(isPlaying);
+  const pip = Boolean(state.watchPictureInPicture);
+  const rate = Number(player?.video?.playbackRate) || state.playbackSpeed || 1;
+  const key = `${videoId(state.watchVideo)}:${playing}:${pip}:${rate}:${url}`;
+  if (!force && key === nativeBackgroundLastSync && Date.now() - nativeBackgroundLastSyncAt < 750) return;
+  nativeBackgroundLastSync = key;
+  nativeBackgroundLastSyncAt = Date.now();
+  IrgunBackgroundAudio.prepare({id:String(videoId(state.watchVideo)),url,position:Math.max(0, Number(position) || 0),
+    rate,playing,pip,title:displayShiurTitle(item.title,'Shiur'),artist:item.subtitle || item.speaker || 'Irgun Shiurai Torah'}).catch(error => {
+      nativeBackgroundLastSync = '';
+      console.warn('Native background preparation failed', error);
+    });
+}
+
+async function restoreNativeBackgroundVideo() {
+  if (!state.nativeBackgroundPending || state.nativeBackgroundRestoreBusy || document.hidden || !nativeBackgroundAudioAvailable()) return;
+  const player = state.watchVimeo, video = state.watchVideo, generation = state.watchVimeoGeneration;
+  if (!player || !video || state.watchMode !== 'video') { stopNativeBackgroundAudio(); return; }
+  const id = String(videoId(video));
+  const current = () => state.nativeBackgroundPending && state.watchVimeo === player && state.watchVimeoGeneration === generation && state.watchMode === 'video' && !document.hidden;
+  state.nativeBackgroundRestoreBusy = true;
+  try {
+    const native = await IrgunBackgroundAudio.getState();
+    if (!current() || native.id !== id) return;
+    if (native.active) {
+      await player.setCurrentTime(native.position);
+      if (!current()) return;
+      if (native.playing && player.player?.autoplayWanted !== false) await player.ensureVisualPlayback(false);
+      else await player.pause();
+    } else if (player.player?.autoplayWanted) await player.ensureVisualPlayback(false);
+    if (!current()) return;
+    // Video stays muted until the native owner is stopped, including decoder
+    // recovery. Keep the current DOM and controls throughout this handoff.
+    await IrgunBackgroundAudio.stop({id,clear:false});
+    if (!current()) return;
+    await player.setMuted(false);
+    state.nativeBackgroundPending = false;
+    if (native.playing) scheduleInlineVideoRecovery(player);
+    nativeBackgroundLastSync = '';
+    const at = await player.getCurrentTime();
+    if (current()) syncNativeMediaSession({...video, id, backgroundAudioUrl:video.hasAudio ? audioUrl(mediaApiId(video,id)) : ''}, !player.video?.paused, at, Number(video.duration) || 0, 'video');
+  } catch (error) { console.warn('Native background video return failed',error); }
+  finally { state.nativeBackgroundRestoreBusy = false; }
 }
 
 function setupMediaSession(item) {
@@ -7430,6 +7497,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
       const player = state.watchVimeo;
       if (requestedTime != null) await player.setCurrentTime(state.watchResumeSeconds).catch(() => {});
       if (state.watchVimeo !== player || state.watchMode !== 'video') return;
+      if (state.nativeBackgroundPending) { await restoreNativeBackgroundVideo(); return; }
       restoreVideoAfterSystemPip(true);
       if (!document.hidden) await Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
     }
@@ -7442,6 +7510,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
   if (state.current) saveCurrentAudioHistory(true, false).catch(() => {});
   hardStopHtmlAudioForVideo();
   // Invalidate pending source discovery before waiting for the previous clock.
+  stopNativeBackgroundAudio();
   const openGeneration = ++state.watchVimeoGeneration;
 
   usageAnalytics.event('shiur_opened',{shiurId:String(id),mediaType:'video',dedupeKey:`shiur-open:${id}`,cooldownMs:60000});
@@ -7600,6 +7669,15 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 
 function keepVideoPlayingOnBackground(source) {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
+    const player = state.watchVimeo;
+    if (player?.player?.autoplayWanted === false || (!player?.player && !state.watchVideoPlaying)) return;
+    state.nativeBackgroundPending = true;
+    state.watchResumeSeconds = currentVideoClockForBackground();
+    try { player?.setMuted?.(true); player?.player?.pause(false); } catch (_) {}
+    IrgunBackgroundAudio.beginBackground().catch(error => console.warn('Native background start failed',error));
+    return;
+  }
   if (!state.watchVideo || state.watchMode !== 'video') return;
   // PiP is user-controlled. Do not manufacture a PiP session merely because
   // iOS is moving the app to the background; that created competing restore
@@ -7676,6 +7754,7 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
+  if (state.nativeBackgroundPending) { void restoreNativeBackgroundVideo(); return; }
   restoreVideoAfterSystemPip();
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
   if (state.mediaSwitchBusy) return;
@@ -7694,6 +7773,7 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
     let duration = 0;
@@ -7758,6 +7838,7 @@ function releaseWatchAudioOwner(id) {
 }
 
 async function destroyWatchVideoOwner() {
+  stopNativeBackgroundAudio();
   const player = state.watchVimeo;
   state.watchVimeo = null;
   state.watchVimeoReady = false;
@@ -8070,6 +8151,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
           resumeAfterPip = state.watchVideoPlaying || !player.video?.paused;
         }
         state.watchPictureInPicture = Boolean(data.active);
+        prepareNativeBackgroundAudio(videoMediaItem, state.watchVideoPlaying, currentVideoClockForBackground(), 'video', true);
       });
       player.on('fullscreenchange', data => {
         if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
@@ -8079,6 +8161,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         resumeAfterPip = resumeAfterPip || state.watchVideoPlaying || !player.video?.paused;
         state.pipResumeWanted = resumeAfterPip;
         state.watchPictureInPicture = true;
+        prepareNativeBackgroundAudio(videoMediaItem, true, currentVideoClockForBackground(), 'video', true);
         state.watchVideoPlaying = true;
         parkWatchUiForSystemPip();
         if (state.pipBackgroundReturnPending && state.pipWasBackgrounded && !document.hidden) {
@@ -8095,6 +8178,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         resumeAfterPip = false;
         state.watchResumeSeconds = currentVideoClockForBackground();
         state.watchPictureInPicture = false;
+        prepareNativeBackgroundAudio(videoMediaItem, shouldResume, currentVideoClockForBackground(), 'video', true);
         state.pipBackgroundReturnPending = false;
         state.pipWasBackgrounded = false;
         state.pipResumeWanted = false;

@@ -29,6 +29,7 @@ function fixture() {
   const context = vm.createContext({
     state, console:{warn:()=>{}}, navigator:{}, audio:{paused:true}, IS_IOS:true,
     Capacitor:{isNativePlatform:()=>true},
+    nativeBackgroundAudioAvailable:()=>false, stopNativeBackgroundAudio:()=>{}, prepareNativeBackgroundAudio:()=>{},
     document:{hidden:false, pictureInPictureElement:null, getElementById:()=>frame},
     // No real timers are needed for these controlled transitions.
     setTimeout:()=>0, clearTimeout:()=>{}, videoId:v=>v.id, hardStopHtmlAudioForVideo:()=>{},
@@ -229,7 +230,7 @@ test('destroyed direct players cancel retries and reject new playback',async()=>
   const cleared=[];
   const c=vm.createContext({
     window:{}, location:{protocol:'capacitor:',hostname:'localhost'},
-    clearTimeout:timer=>cleared.push(timer)
+    clearTimeout:timer=>cleared.push(timer), document:{fullscreenElement:null}
   });
   vm.runInContext(directSource,c);
   const p=Object.create(c.window.ISTDirectMediaPlayer.prototype);
@@ -335,4 +336,73 @@ test('explicit Pause during layer recovery is respected',async()=>{
   Object.assign(p,{v,autoplayWanted:true,current:()=>30,duration:()=>120,wakeVideoLayer:()=>{}});
   assert.equal(await p.relatchInlineVideoLayer(),false);
   assert.equal(plays,0);
+});
+
+test('Home uses native ownership without destroying video or starting HTML audio',async()=>{
+  const f=fixture(),p=f.player('native',true);let starts=0,pauses=0;
+  p.player={autoplayWanted:true,pause:stop=>{assert.equal(stop,false);pauses++;}};
+  p.setMuted=async value=>{p.video.muted=value;};
+  f.state.watchVimeo=p;f.context.nativeBackgroundAudioAvailable=()=>true;
+  f.context.IrgunBackgroundAudio={beginBackground:async()=>{starts++;}};
+  f.context.keepVideoPlayingOnBackground('home');await flush();
+  assert.equal(starts,1);assert.equal(pauses,1);assert.equal(p.video.muted,true);
+  assert.equal(f.state.watchVimeo,p);assert.equal(p.destroyed,false);assert.equal(f.observations.handoffs,0);
+});
+
+test('Home does not start native audio after explicit Pause',async()=>{
+  const f=fixture(),p=f.player('paused');p.player={autoplayWanted:false};f.state.watchVimeo=p;
+  f.context.nativeBackgroundAudioAvailable=()=>true;
+  f.context.IrgunBackgroundAudio={beginBackground:()=>{throw new Error('must not start');}};
+  f.context.keepVideoPlayingOnBackground('home');assert.equal(f.state.nativeBackgroundPending,undefined);
+});
+
+function nativeFixture(){
+  const f=fixture(),calls=[];
+  f.context.Capacitor.isPluginAvailable=()=>true;
+  f.context.IrgunBackgroundAudio={prepare:async x=>{calls.push(['prepare',x]);},stop:async x=>{calls.push(['stop',x]);},getState:async()=>({id:'A',active:true,playing:true,position:80})};
+  vm.runInContext(extract("let nativeBackgroundLastSync =",'function setupMediaSession('),f.context);
+  const p=f.player('native',true);p.player={autoplayWanted:true,v:p.video,sources:{hls:'https://example.test/master.m3u8'}};
+  p.setMuted=async x=>{calls.push(['mute',x]);p.video.muted=x;};
+  f.state.watchVimeo=p;return {...f,p,calls};
+}
+test('native return uses actual native clock and stops audio before unmuting video',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.p.video.muted=true;
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.p.video.currentTime,80);assert.equal(f.p.video.paused,false);
+  assert.deepEqual(f.calls.map(x=>x[0]),['stop','mute']);assert.equal(f.p.video.muted,false);
+  assert.equal(f.state.nativeBackgroundPending,false);
+});
+test('native remote Pause is preserved on return',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'A',active:true,playing:false,position:80});
+  f.p.pause=async()=>{f.p.video.paused=true;f.p.player.autoplayWanted=false;};
+  await f.context.restoreNativeBackgroundVideo();assert.equal(f.p.video.paused,true);assert.equal(f.p.video.currentTime,80);
+});
+test('late native return cannot seek or stop a newer shiur',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;let resolve;
+  f.context.IrgunBackgroundAudio.getState=()=>new Promise(done=>{resolve=done;});
+  const returning=f.context.restoreNativeBackgroundVideo();f.state.watchVimeo=f.player('new');f.state.watchVimeoGeneration++;
+  resolve({id:'A',active:true,playing:true,position:80});await returning;
+  assert.equal(f.p.video.currentTime,30);assert.equal(f.calls.length,0);
+});
+
+test('fullscreen late pauses resume only when playback intent remains Play',async()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>{tasks.push(fn);return tasks.length;},clearTimeout:()=>{}}));
+  let recovered=0;Object.assign(p,{fullscreenResumeWanted:true,autoplayWanted:true,v:{paused:true,ended:false},ensureVisualPlayback:async()=>{recovered++;}});
+  p.recoverFullscreenExit();tasks[1]();await flush();assert.equal(recovered,1);
+  p.autoplayWanted=false;tasks[2]();await flush();assert.equal(recovered,1);
+});
+
+test('double tap seeks without a single-tap Pause and swipe cancels its pending tap',async()=>{
+  const tasks=[],cancelled=new Set(),p=Object.create(directPrototype({setTimeout:fn=>{tasks.push(fn);return tasks.length;},clearTimeout:id=>cancelled.add(id)}));
+  const seeks=[];let toggles=0,minimized=0,exits=0;
+  const v={style:{},getBoundingClientRect:()=>({left:0,width:400}),setPointerCapture:()=>{}};
+  Object.assign(p,{v,playBtn:{onclick:()=>toggles++},seekBy:x=>{seeks.push(x);},exitFullscreen:()=>exits++,cb:{onMinimize:()=>minimized++}});
+  p.bindVideoGestures();v.onclick({clientX:320});v.onclick({clientX:320});
+  assert.deepEqual(seeks,[15]);assert.ok(cancelled.has(1));assert.equal(toggles,0);
+  v.onclick({clientX:80});v.onclick({clientX:80});assert.deepEqual(seeks,[15,-15]);
+  v.onclick({clientX:200});v.onpointerdown({pointerId:1,clientX:200,clientY:0});
+  v.onpointerup({pointerId:1,clientX:200,clientY:90,preventDefault:()=>{}});
+  assert.equal(minimized,1);assert.equal(exits,1);assert.ok(cancelled.has(tasks.length));
+  v.onclick({clientX:200});assert.equal(toggles,0);
 });

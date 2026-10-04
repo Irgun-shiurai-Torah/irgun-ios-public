@@ -69,6 +69,7 @@ app_group ||= project.main_group.find_subpath('App', true)
   ['GoogleService-Info.plist', true, false],
   ['App.entitlements', false, false],
   ['IrgunAnalyticsPlugin.swift', false, true],
+  ['IrgunBackgroundAudioPlugin.swift', false, true],
 ].each do |filename, add_to_resources, add_to_sources|
   absolute = File.join(root, 'ios', 'App', 'App', filename)
   abort("Missing required iOS file: #{absolute}") unless File.exist?(absolute)
