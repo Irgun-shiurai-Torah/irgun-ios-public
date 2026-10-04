@@ -64,6 +64,13 @@ jobs:
     if: ${{ github.event_name == 'push' || inputs.target == 'both' || inputs.target == 'ipad15' }}
     runs-on: macos-26
     timeout-minutes: 120
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages_deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -252,6 +259,85 @@ jobs:
           path: ${{ steps.adhoc_ipa.outputs.path }}
           if-no-files-found: error
           retention-days: 30
+
+      - name: Prepare wireless iPad install
+        id: ota
+        shell: bash
+        run: |
+          set -euo pipefail
+          RELEASE_TAG="ios-adhoc-${BUILD_NUMBER}"
+          RELEASE_DIR="$RUNNER_TEMP/ota-release"
+          SITE_DIR="$RUNNER_TEMP/ota-site"
+          mkdir -p "$RELEASE_DIR" "$SITE_DIR"
+
+          cp "${{ steps.adhoc_ipa.outputs.path }}" "$RELEASE_DIR/IrgunShiuraiTorah-AdHoc.ipa"
+          IPA_URL="https://github.com/Irgun-shiurai-Torah/irgun-ios-public/releases/download/${RELEASE_TAG}/IrgunShiuraiTorah-AdHoc.ipa"
+
+          cat > "$SITE_DIR/manifest.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>${IPA_URL}</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key>
+                  <string>${BUNDLE_ID}</string>
+                  <key>bundle-version</key>
+                  <string>${BUILD_NUMBER}</string>
+                  <key>kind</key>
+                  <string>software</string>
+                  <key>title</key>
+                  <string>Irgun Shiurai Torah</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+          sed "s/__BUILD_NUMBER__/${BUILD_NUMBER}/g" ota/index.html > "$SITE_DIR/index.html"
+
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
+          echo "site_dir=$SITE_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Publish wireless Ad Hoc IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ota.outputs.release_tag }}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG"               --target "$GITHUB_SHA"               --title "Irgun iPad wireless build ${BUILD_NUMBER}"               --notes "Ad Hoc iPad build ${BUILD_NUMBER}. Install from the wireless install page. The iPad UDID must be included in the Ad Hoc provisioning profile."               --prerelease
+          fi
+          gh release upload "$TAG"             "${{ steps.ota.outputs.release_dir }}/IrgunShiuraiTorah-AdHoc.ipa"             --clobber
+
+      - name: Configure wireless install page
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload wireless install page
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ steps.ota.outputs.site_dir }}
+
+      - name: Deploy wireless install page
+        id: pages_deploy
+        uses: actions/deploy-pages@v4
 
       - name: Upload Ad Hoc Xcode logs on failure
         if: failure()
