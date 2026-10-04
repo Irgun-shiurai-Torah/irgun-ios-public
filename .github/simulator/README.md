@@ -7,8 +7,9 @@ Optionally supply a shiur `video_id` that has both HLS video and audio; otherwis
 the test chooses an HLS-ready shiur from the first twelve audio-enabled library
 entries. Network/library failures fail the tests and are recorded in diagnostics.
 
-The five UI tests check fresh moving video frames, Audio/Video position, Home and
-reopen, mini-player expansion, and PiP return. PiP is reported as skipped when
+The six UI tests check fresh moving video frames, Audio/Video position, Home and
+reopen, same-shiur deep-link reopening, mini-player expansion, and PiP return.
+PiP is reported as skipped when
 the simulator runtime declares that it is unsupported. A test failure may be a
 playback regression, API/media outage, or simulator limitation; inspect the
 attachments and logs before attributing it to a particular cause.
