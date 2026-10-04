@@ -66,11 +66,6 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: write
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.pages_deploy.outputs.page_url }}
 
     steps:
       - name: Checkout
@@ -265,7 +260,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RELEASE_TAG="ios-adhoc-${BUILD_NUMBER}"
+          RELEASE_TAG="ios-adhoc-latest"
           RELEASE_DIR="$RUNNER_TEMP/ota-release"
           SITE_DIR="$RUNNER_TEMP/ota-site"
           mkdir -p "$RELEASE_DIR" "$SITE_DIR"
@@ -273,7 +268,7 @@ jobs:
           cp "${{ steps.adhoc_ipa.outputs.path }}" "$RELEASE_DIR/IrgunShiuraiTorah-AdHoc.ipa"
           IPA_URL="https://github.com/Irgun-shiurai-Torah/irgun-ios-public/releases/download/${RELEASE_TAG}/IrgunShiuraiTorah-AdHoc.ipa"
 
-          cat > "$SITE_DIR/manifest.plist" <<EOF
+          cat > "$RELEASE_DIR/manifest.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -313,7 +308,7 @@ jobs:
           echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
           echo "site_dir=$SITE_DIR" >> "$GITHUB_OUTPUT"
 
-      - name: Publish wireless Ad Hoc IPA
+      - name: Publish wireless Ad Hoc IPA and manifest
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -321,23 +316,22 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.ota.outputs.release_tag }}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG"               --target "$GITHUB_SHA"               --title "Irgun iPad wireless build ${BUILD_NUMBER}"               --notes "Ad Hoc iPad build ${BUILD_NUMBER}. Install from the wireless install page. The iPad UDID must be included in the Ad Hoc provisioning profile."               --prerelease
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
+              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --prerelease
+          else
+            gh release edit "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
+              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --prerelease
           fi
-          gh release upload "$TAG"             "${{ steps.ota.outputs.release_dir }}/IrgunShiuraiTorah-AdHoc.ipa"             --clobber
-
-      - name: Configure wireless install page
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload wireless install page
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: ${{ steps.ota.outputs.site_dir }}
-
-      - name: Deploy wireless install page
-        id: pages_deploy
-        uses: actions/deploy-pages@v4
+          gh release upload "$TAG" \
+            "${{ steps.ota.outputs.release_dir }}/IrgunShiuraiTorah-AdHoc.ipa" \
+            "${{ steps.ota.outputs.release_dir }}/manifest.plist" \
+            --clobber
 
       - name: Upload Ad Hoc Xcode logs on failure
         if: failure()
