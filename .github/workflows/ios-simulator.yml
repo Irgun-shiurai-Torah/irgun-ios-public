@@ -1,0 +1,178 @@
+name: iOS Simulator Playback Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: Optional shiur ID with HLS and audio (blank chooses from the library)
+        type: string
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ios-simulator.yml
+      - .github/simulator/**
+      - src/**
+      - public/**
+      - package.json
+      - capacitor.config.json
+      - vite.config.js
+      - scripts/**
+  pull_request:
+    paths:
+      - .github/workflows/ios-simulator.yml
+      - .github/simulator/**
+      - src/**
+      - public/**
+      - package.json
+      - capacitor.config.json
+      - vite.config.js
+      - scripts/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-simulator-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playback:
+    name: Playback on ${{ matrix.family }}
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [iPhone, iPad]
+    env:
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      IOS_MARKETING_VERSION: "1.0.1"
+      BUILD_NUMBER: "1"
+      SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
+      DEVICE_FAMILY: ${{ matrix.family }}
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "~26.6.0"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies and add simulator-only observations
+        run: |
+          npm install --no-audit --no-fund
+          python3 .github/simulator/prepare.py web
+          npm run build
+          npx cap add ios
+          npx cap sync ios
+          npx @capacitor/assets generate --ios
+          python3 scripts/prepare_ios_cloud.py
+          ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
+          ruby scripts/patch_xcode_project.rb
+          python3 .github/simulator/prepare.py native
+          ruby .github/simulator/configure.rb
+          bash scripts/assert_no_direct_swiftuicore.sh
+
+      - name: Install CocoaPods dependencies if used
+        run: |
+          if [ -f ios/App/Podfile ]; then
+            cd ios/App
+            pod install --repo-update
+          fi
+
+      - name: Select and boot an installed simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p simulator-results
+          xcodebuild -version > simulator-results/xcode-version.txt
+          xcrun simctl list devices available --json > simulator-results/devices.json
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          devices = json.loads(Path('simulator-results/devices.json').read_text())['devices']
+          candidates = [(runtime, device) for runtime, group in devices.items()
+                        if '.iOS-' in runtime for device in group
+                        if device.get('isAvailable') and device['name'].startswith(os.environ['DEVICE_FAMILY'])]
+          if not candidates:
+              raise SystemExit('No installed simulator for ' + os.environ['DEVICE_FAMILY'])
+          candidates.sort(key=lambda item: tuple(map(int, re.findall(r'\d+', item[0]))), reverse=True)
+          runtime, device = candidates[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('SIMULATOR_UDID=' + device['udid'] + '\n')
+          Path('simulator-results/selected-device.json').write_text(json.dumps({'runtime':runtime, **device}, indent=2))
+          print('Selected', device['name'], runtime, device['udid'])
+          PY
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "$SIMULATOR_UDID"
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
+
+      - name: Run playback UI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER=(-project ios/App/App.xcodeproj)
+          if [ -d ios/App/App.xcworkspace ]; then
+            CONTAINER=(-workspace ios/App/App.xcworkspace)
+          fi
+          xcodebuild "${CONTAINER[@]}" \
+            -scheme SimulatorPlayback \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/SimulatorDerivedData" \
+            -resultBundlePath simulator-results/Playback.xcresult \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee simulator-results/xcodebuild.log
+
+      - name: Collect screenshots and simulator logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p simulator-results/attachments
+          if [ -d simulator-results/Playback.xcresult ]; then
+            xcrun xcresulttool export attachments \
+              --path simulator-results/Playback.xcresult \
+              --output-path simulator-results/attachments || true
+            xcrun xcresulttool get test-results summary \
+              --path simulator-results/Playback.xcresult \
+              > simulator-results/test-summary.json || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl io "$SIMULATOR_UDID" screenshot simulator-results/final-screen.png || true
+            xcrun simctl spawn "$SIMULATOR_UDID" log show --last 20m --style compact \
+              --predicate 'process == "IrgunShiuraiTorah" OR process == "SimulatorUITests-Runner"' \
+              > simulator-results/simulator.log 2>&1 || true
+            xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          fi
+
+      - name: Upload screenshots, playback observations and test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-simulator-${{ matrix.family }}-${{ github.run_number }}
+          path: simulator-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Explain the result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'PY'
+          import os
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## ' + os.environ['DEVICE_FAMILY'] + ' playback tests\n\n')
+              summary.write('Result: **' + os.environ['JOB_STATUS'] + '**. Download the simulator artifact for screenshots, playback JSON, Xcode results and logs.\n\n')
+              summary.write('Checks: fresh HLS video frames, Audio → Video position, Home/reopen, mini/full player, and PiP return. PiP is explicitly skipped if the runtime reports it unavailable.\n\n')
+              summary.write('These tests use the live public library without login. They do not upload to TestFlight. Home/reopen does not prove audible output throughout suspension; notification delivery and physical-device behavior still need device testing.\n')
+          PY
