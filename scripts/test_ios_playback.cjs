@@ -244,3 +244,16 @@ test('destroyed direct players cancel retries and reject new playback',async()=>
   p.destroy();
   assert.equal(p.token,8);
 });
+
+test('delayed Play callback cannot overwrite a newer shiur position',async()=>{
+  const f=fixture(), init=f.context.initWatchVimeo(true), old=f.player('old');
+  f.pending[0].resolve({player:old,backend:'direct'}); await init;
+  let resolveTime;
+  old.getCurrentTime=()=>new Promise(resolve=>{resolveTime=resolve;});
+  const callback=old.handlers.get('play')(); await flush();
+  f.state.watchVimeoGeneration++;
+  f.state.watchVimeo=f.player('new');
+  f.state.watchResumeSeconds=88;
+  resolveTime(31); await callback;
+  assert.equal(f.state.watchResumeSeconds,88);
+});

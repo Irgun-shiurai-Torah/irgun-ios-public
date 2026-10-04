@@ -7923,6 +7923,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         const target = duration > 0 ? Math.min(requestedResume, Math.max(0, duration - 1)) : requestedResume;
         actual = await player.setCurrentTime(target).catch(() => null);
       }
+      if (!isCurrentPlayer()) return;
       if (Number.isFinite(Number(actual)) && (Number(actual) >= requestedResume - 2 || requestedResume <= 2)) {
         state.watchResumeSeconds = Math.max(0, Number(actual));
       }
@@ -7981,8 +7982,10 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVideoPlaying = Boolean(started);
       if (started) {
         const live = await player.getCurrentTime().catch(() => state.watchResumeSeconds || requestedResume);
+        if (!isCurrentPlayer()) return;
         if (requestedResume > 2 && Number(live) < requestedResume - 2 && created.backend === 'direct') {
           const recovered = await player.setCurrentTime(requestedResume).catch(() => null);
+          if (!isCurrentPlayer()) return;
           if (Number.isFinite(Number(recovered)) && Number(recovered) >= requestedResume - 2) {
             state.watchResumeSeconds = Math.max(0, Number(recovered));
           }
@@ -8033,8 +8036,10 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVideoPlaying = true;
       refreshPersistentMiniVideoChrome();
       await setVimeoHandoffMuted(player, false);
+      if (!isCurrentPlayer()) return;
       let t = await player.getCurrentTime().catch(() => 0);
       const d = await player.getDuration().catch(() => Number(video.duration) || 0);
+      if (!isCurrentPlayer()) return;
 
       state.watchAudioToVideoHandoff = false;
       state.watchAudioToVideoHandoffId = '';
