@@ -31,7 +31,7 @@ concurrency:
 
 env:
   BUNDLE_ID: org.irgunshiuraitorah.app
-  IOS_MARKETING_VERSION: "1.0.1"
+  IOS_MARKETING_VERSION: "1.2.67"
   IOS_BUILD_OFFSET: "107"
   IOS_PRODUCT_NAME: IrgunShiuraiTorah
 
@@ -97,6 +97,18 @@ jobs:
           echo "IOS_RESOLVED_BUILD_NUMBER=$RESOLVED_BUILD" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$RESOLVED_BUILD" >> "$GITHUB_ENV"
           echo "Resolved build number: $RESOLVED_BUILD"
+
+      - name: Resolve iOS marketing version from package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version.replace(/-ios$/, '')")"
+          if [ -z "$VERSION" ]; then
+            echo "Could not resolve iOS marketing version from package.json" >&2
+            exit 2
+          fi
+          echo "IOS_MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved iOS marketing version: $VERSION"
 
       - name: Install JavaScript dependencies
         run: npm install
@@ -371,6 +383,18 @@ jobs:
           RESOLVED_BUILD=$((GITHUB_RUN_NUMBER + IOS_BUILD_OFFSET))
           echo "BUILD_NUMBER=$RESOLVED_BUILD" >> "$GITHUB_ENV"
           echo "Resolved build number: $RESOLVED_BUILD"
+
+      - name: Resolve iOS marketing version from package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version.replace(/-ios$/, '')")"
+          if [ -z "$VERSION" ]; then
+            echo "Could not resolve iOS marketing version from package.json" >&2
+            exit 2
+          fi
+          echo "IOS_MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved iOS marketing version: $VERSION"
 
       - name: Install JavaScript dependencies
         run: npm install
