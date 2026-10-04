@@ -19,6 +19,9 @@ artifacts per device contain the original screenshots. Signed-in account pages
 and admin tools require a separate authenticated session and are not fabricated.
 
 The full simulator artifact includes xcresult, logs, screenshots and observations.
+State is read through a simulator-only loopback TCP channel; real UI actions
+still use XCTest taps and swipes. This avoids intermittent stale accessibility
+snapshots of the diagnostic label. The listener binds only to 127.0.0.1.
 Release builds do not inject the simulator bridge or diagnostic panel. Native
 background clock samples establish AVPlayer progress in simulator suspension;
 they do not measure audible output on physical devices. Real push delivery,

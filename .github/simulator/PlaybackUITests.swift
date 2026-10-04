@@ -1,4 +1,5 @@
 import XCTest
+import Network
 
 final class PlaybackUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -20,10 +21,33 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func snapshot() -> [String: Any] {
-        let label = app.staticTexts["ist-simulator-status"]
-        guard let value = label.value as? String,
-              let data = value.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
+        let connection = NWConnection(host: "127.0.0.1", port: 47291, using: .tcp)
+        let queue = DispatchQueue(label: "org.irgun.tests.observation")
+        let finished = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var payload = Data()
+        func receive() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+                lock.lock()
+                if let data = data { payload.append(data) }
+                let done = payload.contains(10) || complete || error != nil
+                lock.unlock()
+                if done { finished.signal() } else { receive() }
+            }
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready: receive()
+            case .failed: finished.signal()
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        let completed = finished.wait(timeout: .now() + 3) == .success
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        lock.lock(); let data = payload; lock.unlock()
+        guard completed, let object = try? JSONSerialization.jsonObject(with: data),
               let result = object as? [String: Any] else { return [:] }
         return result
     }
@@ -68,6 +92,15 @@ final class PlaybackUITests: XCTestCase {
             throw Failure.timedOut(label)
         }
         button.tap()
+        // Retry only a missed harness tap, never an accepted/failed app open.
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            let state = snapshot()
+            if state["opening"] as? Bool == true || !(state["id"] as? String ?? "").isEmpty || !(state["error"] as? String ?? "").isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        let accepted = snapshot()
+        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
     }
 
     private func openSample() throws {

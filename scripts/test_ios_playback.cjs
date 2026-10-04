@@ -65,6 +65,12 @@ function fixture() {
 }
 const flush = async () => { for(let i=0;i<12;i++) await Promise.resolve(); };
 
+test('speaker filters omit unresolved metadata rather than render blank rows',()=>{
+  const context=vm.createContext({state:{metadata:{topics:[]}},allLibraryItems:()=>[{_speakerIds:['missing','known','known']}],speakerLabel:id=>id==='known'?'Rabbi Name':'',uniqueOptions:()=>[]});
+  vm.runInContext(extract('function availableFilters(', 'function locationFilterMatches('),context);
+  assert.deepEqual(Array.from(context.availableFilters().speakers),['known']);
+});
+
 for (const renderFirst of [false,true]) test(`one startup owner, render first=${renderFirst}`, async()=>{
   const f=fixture();
   const init=f.context.initWatchVimeo(!renderFirst);
@@ -378,6 +384,24 @@ test('native remote Pause is preserved on return',async()=>{
   f.p.pause=async()=>{f.p.video.paused=true;f.p.player.autoplayWanted=false;};
   await f.context.restoreNativeBackgroundVideo();assert.equal(f.p.video.paused,true);assert.equal(f.p.video.currentTime,80);
 });
+test('native Home return works when JS background event was suspended',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=false;f.p.video.muted=false;
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.p.video.currentTime,80);assert.equal(f.p.video.paused,false);
+  assert.deepEqual(f.calls.map(x=>x[0]),['mute','stop','mute']);
+  assert.equal(f.calls[0][1],true);assert.equal(f.calls[2][1],false);
+});
+test('closing playback cancels an outstanding native-state request',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;let resolve;
+  f.context.IrgunBackgroundAudio.getState=()=>new Promise(done=>{resolve=done;});
+  const returning=f.context.restoreNativeBackgroundVideo();f.context.stopNativeBackgroundAudio();
+  resolve({id:'A',active:true,playing:true,position:80});await returning;
+  assert.equal(f.p.video.currentTime,30);assert.deepEqual(f.calls.map(x=>x[0]),['stop']);
+});
+test('native return preserves a previously muted video',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.state.nativeBackgroundMuted=true;
+  await f.context.restoreNativeBackgroundVideo();assert.equal(f.p.video.muted,true);
+});
 test('late native return cannot seek or stop a newer shiur',async()=>{
   const f=nativeFixture();f.state.nativeBackgroundPending=true;let resolve;
   f.context.IrgunBackgroundAudio.getState=()=>new Promise(done=>{resolve=done;});
@@ -405,4 +429,17 @@ test('double tap seeks without a single-tap Pause and swipe cancels its pending 
   v.onpointerup({pointerId:1,clientX:200,clientY:90,preventDefault:()=>{}});
   assert.equal(minimized,1);assert.equal(exits,1);assert.ok(cancelled.has(tasks.length));
   v.onclick({clientX:200});assert.equal(toggles,0);
+});
+
+test('touch double taps seek even when WebKit coalesces compatibility clicks',async()=>{
+  const tasks=[],cancelled=new Set(),p=Object.create(directPrototype({setTimeout:fn=>{tasks.push(fn);return tasks.length;},clearTimeout:id=>cancelled.add(id)}));
+  const seeks=[];let toggles=0;
+  const v={style:{},getBoundingClientRect:()=>({left:0,width:400}),setPointerCapture:()=>{}};
+  Object.assign(p,{v,playBtn:{onclick:()=>toggles++},seekBy:x=>seeks.push(x),cb:{}});
+  p.bindVideoGestures();
+  const tap=x=>{v.onpointerdown({pointerId:1,pointerType:'touch',clientX:x,clientY:50});v.onpointerup({pointerId:1,clientX:x,clientY:50});};
+  tap(320);v.onclick({clientX:320});tap(320);v.ondblclick({preventDefault:()=>{}});
+  tap(80);tap(80);v.onclick({clientX:80});
+  assert.deepEqual(seeks,[15,-15]);assert.equal(toggles,0);
+  tasks.forEach((task,i)=>{if(!cancelled.has(i+1))task();});assert.equal(toggles,0);
 });

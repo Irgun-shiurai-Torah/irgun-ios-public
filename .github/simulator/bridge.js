@@ -61,7 +61,12 @@ window.ISTSimulator = {
         const start=Date.now();
         while (state.scheduleDataLoading && Date.now()-start<15000) await new Promise(resolve=>setTimeout(resolve,250));
       }
-      await Promise.allSettled([...document.images].filter(image=>image.getBoundingClientRect().top<innerHeight).map(image=>image.decode?.()));
+      // decode() can stay pending when a reactive render replaces an image.
+      // Bound observation so one image cannot stop every remaining capture.
+      await Promise.race([
+        Promise.allSettled([...document.images].filter(simulatorVisible).map(image=>image.decode?.())),
+        new Promise(resolve=>setTimeout(resolve,8000))
+      ]);
       this.storeReady = true;
     } catch(error) { this.storeError=String(error.message||error); }
   },

@@ -27,22 +27,29 @@ class Player{
    if(dy>=65&&dy>Math.abs(dx)*1.4&&Date.now()-start.at<1200){
     clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
     this.exitFullscreen();this.cb.onMinimize?.();e.preventDefault();
-   }else if(Math.hypot(dx,dy)>20)this.videoIgnoreClickUntil=Date.now()+400;
+   }else if(Math.hypot(dx,dy)>20){
+    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
+   }else{
+    // Touch clicks can be coalesced by WKWebView's double-tap recognizer.
+    // Count physical releases, then ignore their compatibility click events.
+    this.videoIgnoreClickUntil=Date.now()+500;this.handleVideoTap(e.clientX);
+   }
   };
   v.onclick=e=>{
    if(Date.now()<(this.videoIgnoreClickUntil||0))return;
-   const box=v.getBoundingClientRect(),ratio=(e.clientX-box.left)/box.width;
-   const side=ratio<.45?-1:ratio>.55?1:0,previous=this.videoLastTap;
-   clearTimeout(this.videoTapTimer);
-   if(side&&previous?.side===side&&Date.now()-previous.at<=350){
-    this.videoLastTap=null;
-    void this.seekBy(side*15);
-    return;
-   }
-   this.videoLastTap={side,at:Date.now()};
-   this.videoTapTimer=setTimeout(()=>{this.videoLastTap=null;if(!this.destroyed)this.playBtn.onclick()},350);
+   this.handleVideoTap(e.clientX);
   };
   v.ondblclick=e=>e.preventDefault();
+ }
+ handleVideoTap(clientX){
+  const box=this.v.getBoundingClientRect(),ratio=(clientX-box.left)/box.width;
+  const side=ratio<.45?-1:ratio>.55?1:0,previous=this.videoLastTap;
+  clearTimeout(this.videoTapTimer);
+  if(side&&previous?.side===side&&Date.now()-previous.at<=450){
+   this.videoLastTap=null;void this.seekBy(side*15);return;
+  }
+  this.videoLastTap={side,at:Date.now()};
+  this.videoTapTimer=setTimeout(()=>{this.videoLastTap=null;if(!this.destroyed)this.playBtn.onclick()},450);
  }
  async seekBy(seconds){
   const wanted=this.autoplayWanted,token=this.token;
@@ -62,7 +69,7 @@ class Player{
   this.fullscreenButton=btn;
   this.fullscreenListener=()=>{
    const active=document.fullscreenElement===this.r;
-   if(this.standardFullscreen&&!active){this.standardFullscreen=false;this.fullscreenChanged(false);this.recoverFullscreenExit()}
+   if(this.standardFullscreen&&!active){this.standardFullscreen=false;this.fullscreenResumeWanted=this.autoplayWanted&&!this.v.ended;this.fullscreenChanged(false);this.recoverFullscreenExit()}
   };
   document.addEventListener('fullscreenchange',this.fullscreenListener);
   btn.onclick=()=>{
@@ -70,7 +77,7 @@ class Player{
    this.fullscreenResumeWanted=!this.v.paused&&!this.v.ended;
    // Keep our controls and gestures available on iOS. AVKit's separate native
    // fullscreen surface pauses on Done and cannot receive web touch gestures.
-   const nativeIos=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase())&&/iPad|iPhone|iPod/.test(navigator.userAgent);
+   const nativeIos=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase());
    if(!nativeIos&&this.r.requestFullscreen){this.standardFullscreen=true;this.r.requestFullscreen().then(()=>this.fullscreenChanged(true)).catch(()=>{this.standardFullscreen=false;this.enterCustomFullscreen()})}
    else this.enterCustomFullscreen();
   };
@@ -84,6 +91,7 @@ class Player{
   if(this.fullscreenResumeWanted)this.recoverFullscreenExit();
  }
  exitFullscreen(resume=true){
+  if(resume&&(this.customFullscreen||this.standardFullscreen))this.fullscreenResumeWanted=this.autoplayWanted&&!this.v.ended;
   if(this.customFullscreen){
    this.customFullscreen=false;this.r.classList.remove('direct-media-fullscreen');
    if(this.fullscreenPlaceholder?.parentNode){this.fullscreenPlaceholder.parentNode.insertBefore(this.r,this.fullscreenPlaceholder);this.fullscreenPlaceholder.remove()}
@@ -167,7 +175,7 @@ class Player{
  current(){return Math.max(0,Number(this.v?.currentTime)||0)} duration(){const d=Number(this.v?.duration);return Number.isFinite(d)&&d>0?d:0} state(){return{position:this.current(),duration:this.duration(),paused:this.v.paused,ended:this.v.ended,playbackRate:this.v.playbackRate,backend:this.backend}}
  async seekTo(x){
   let n=Math.max(0,Number(x)||0),d=this.duration();if(d)n=Math.min(n,Math.max(0,d-.25));
-  const v=this.v,token=this.token;
+  const v=this.v,token=this.token,sequence=this.seekSequence=(this.seekSequence||0)+1;
   if(n<=1){try{v.currentTime=n}catch(_){}this.timeline();return this.current()}
   // WKWebView can accept a currentTime assignment before native HLS is seekable,
   // then reset it to zero as the first segment arrives. Confirm the actual clock.
@@ -176,7 +184,7 @@ class Player{
    const finish=()=>{if(done)return;done=true;clearTimeout(timer);clearInterval(retry);for(const event of events)v.removeEventListener(event,attempt);this.timeline();resolve(this.current())};
    const attempt=()=>{
     if(done)return;
-    if(token!==this.token){finish();return}
+    if(token!==this.token||sequence!==this.seekSequence){finish();return}
     const target=this.duration()?Math.min(n,Math.max(0,this.duration()-.25)):n;
     if(Math.abs(this.current()-target)<=1){if(!v.seeking&&v.readyState>=2)finish();return}
     try{v.currentTime=target}catch(_){}

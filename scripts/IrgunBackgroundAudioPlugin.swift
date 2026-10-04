@@ -39,6 +39,11 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         Self.current = self
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.startBackground() })
+        observers.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
+            guard let self = self, self.active, let item = note.object as? AVPlayerItem, item === self.player?.currentItem else { return }
+            self.desiredPlaying = false
+            self.updateNowPlaying()
+        })
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.pauseNative() }
         })
@@ -82,6 +87,8 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             self.pip = call.getBool("pip") ?? false
             self.title = call.getString("title") ?? "Irgun Shiurai Torah"
             self.artist = call.getString("artist") ?? ""
+            self.player?.isMuted = call.getBool("muted") ?? false
+            self.player?.volume = Float(max(0, min(1, call.getDouble("volume") ?? 1)))
             if changed { self.player?.seek(to: CMTime(seconds:self.position, preferredTimescale:600)) }
             call.resolve(self.snapshot())
         }
@@ -107,6 +114,7 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             DispatchQueue.main.async {
                 guard let self = self, finished, self.generation == owner, self.active, self.desiredPlaying else { return }
                 self.seeking = false
+                self.activateSession()
                 player.playImmediately(atRate: self.speed)
                 self.updateNowPlaying()
             }
@@ -132,7 +140,7 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     public func snapshot() -> [String: Any] {
         ["id": itemID, "active": active, "playing": active && desiredPlaying,
          "advancing": player?.timeControlStatus == .playing, "position": active && !seeking ? currentTime() : position,
-         "ready": player?.currentItem?.status == .readyToPlay, "failed": player?.currentItem?.status == .failed,
+         "ready": player?.currentItem?.status == .readyToPlay, "failed": player?.currentItem?.status == .failed, "muted": player?.isMuted ?? false,
          "backgroundSamples": backgroundSamples]
     }
     private func pauseNative() { guard active else { return }; desiredPlaying = false; player?.pause(); updateNowPlaying() }

@@ -239,6 +239,7 @@ const state = {
   videoOwnsPlayback: false,
   backgroundVideoAudioHandoffBusy: false,
   nativeBackgroundPending: false,
+  nativeBackgroundMuted: false,
   nativeBackgroundRestoreBusy: false,
   audioHistoryTimer: null,
   audioLastHistoryAt: 0,
@@ -2935,7 +2936,7 @@ function uniqueOptions(items, getter) {
 
 function availableFilters() {
   const items = allLibraryItems();
-  const speakerIds = [...new Set(items.flatMap(item => item._speakerIds || []).filter(Boolean))]
+  const speakerIds = [...new Set(items.flatMap(item => item._speakerIds || []).filter(id => id && speakerLabel(id).trim()))]
     .sort((a, b) => speakerLabel(a).localeCompare(speakerLabel(b)));
   const topicIds = [...new Set([
     ...(state.metadata.topics || []).map(t => t.id),
@@ -7276,10 +7277,12 @@ function syncNativeMediaSession(item, isPlaying, position = 0, duration = 0, med
 
 let nativeBackgroundLastSync = '';
 let nativeBackgroundLastSyncAt = 0;
+let nativeBackgroundEpoch = 0;
 function nativeBackgroundAudioAvailable() {
   return IS_IOS && Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('IrgunBackgroundAudio');
 }
 function stopNativeBackgroundAudio() {
+  nativeBackgroundEpoch += 1;
   state.nativeBackgroundPending = false;
   nativeBackgroundLastSync = '';
   if (nativeBackgroundAudioAvailable()) IrgunBackgroundAudio.stop({clear:true}).catch(() => {});
@@ -7294,27 +7297,39 @@ function prepareNativeBackgroundAudio(item, isPlaying, position, mediaType = 'vi
   const playing = direct ? Boolean(direct.autoplayWanted && !direct.v.ended) : Boolean(isPlaying);
   const pip = Boolean(state.watchPictureInPicture);
   const rate = Number(player?.video?.playbackRate) || state.playbackSpeed || 1;
-  const key = `${videoId(state.watchVideo)}:${playing}:${pip}:${rate}:${url}`;
+  const muted = Boolean(player?.video?.muted);
+  const volume = Number.isFinite(player?.video?.volume) ? player.video.volume : 1;
+  const key = `${videoId(state.watchVideo)}:${playing}:${pip}:${rate}:${muted}:${volume}:${url}`;
   if (!force && key === nativeBackgroundLastSync && Date.now() - nativeBackgroundLastSyncAt < 750) return;
   nativeBackgroundLastSync = key;
   nativeBackgroundLastSyncAt = Date.now();
   IrgunBackgroundAudio.prepare({id:String(videoId(state.watchVideo)),url,position:Math.max(0, Number(position) || 0),
-    rate,playing,pip,title:displayShiurTitle(item.title,'Shiur'),artist:item.subtitle || item.speaker || 'Irgun Shiurai Torah'}).catch(error => {
+    rate,playing,pip,muted,volume,title:displayShiurTitle(item.title,'Shiur'),artist:item.subtitle || item.speaker || 'Irgun Shiurai Torah'}).catch(error => {
       nativeBackgroundLastSync = '';
       console.warn('Native background preparation failed', error);
     });
 }
 
 async function restoreNativeBackgroundVideo() {
-  if (!state.nativeBackgroundPending || state.nativeBackgroundRestoreBusy || document.hidden || !nativeBackgroundAudioAvailable()) return;
+  if (state.nativeBackgroundRestoreBusy || document.hidden || !nativeBackgroundAudioAvailable()) return;
   const player = state.watchVimeo, video = state.watchVideo, generation = state.watchVimeoGeneration;
-  if (!player || !video || state.watchMode !== 'video') { stopNativeBackgroundAudio(); return; }
+  if (!player || !video || state.watchMode !== 'video') { if(state.nativeBackgroundPending)stopNativeBackgroundAudio(); return; }
   const id = String(videoId(video));
-  const current = () => state.nativeBackgroundPending && state.watchVimeo === player && state.watchVimeoGeneration === generation && state.watchMode === 'video' && !document.hidden;
+  const epoch = nativeBackgroundEpoch;
+  const current = () => epoch === nativeBackgroundEpoch && state.watchVimeo === player && state.watchVimeoGeneration === generation && state.watchMode === 'video' && !document.hidden;
   state.nativeBackgroundRestoreBusy = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
     if (!current() || native.id !== id) return;
+    if (!state.nativeBackgroundPending && !native.active) return;
+    // Native Home playback can start even when iOS suspends the WebView before
+    // its background event runs. Reconcile the actual native owner on return.
+    if (!state.nativeBackgroundPending) {
+      state.nativeBackgroundMuted = Boolean(player.video?.muted);
+      state.nativeBackgroundPending = true;
+      await player.setMuted(true);
+      if (!current()) return;
+    }
     if (native.active) {
       await player.setCurrentTime(native.position);
       if (!current()) return;
@@ -7326,12 +7341,10 @@ async function restoreNativeBackgroundVideo() {
     // recovery. Keep the current DOM and controls throughout this handoff.
     await IrgunBackgroundAudio.stop({id,clear:false});
     if (!current()) return;
-    await player.setMuted(false);
+    await player.setMuted(Boolean(state.nativeBackgroundMuted));
     state.nativeBackgroundPending = false;
     if (native.playing) scheduleInlineVideoRecovery(player);
     nativeBackgroundLastSync = '';
-    const at = await player.getCurrentTime();
-    if (current()) syncNativeMediaSession({...video, id, backgroundAudioUrl:video.hasAudio ? audioUrl(mediaApiId(video,id)) : ''}, !player.video?.paused, at, Number(video.duration) || 0, 'video');
   } catch (error) { console.warn('Native background video return failed',error); }
   finally { state.nativeBackgroundRestoreBusy = false; }
 }
@@ -7672,6 +7685,7 @@ function keepVideoPlayingOnBackground(source) {
   if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
     if (player?.player?.autoplayWanted === false || (!player?.player && !state.watchVideoPlaying)) return;
+    if (!state.nativeBackgroundPending) state.nativeBackgroundMuted = Boolean(player?.video?.muted);
     state.nativeBackgroundPending = true;
     state.watchResumeSeconds = currentVideoClockForBackground();
     try { player?.setMuted?.(true); player?.player?.pause(false); } catch (_) {}
@@ -7754,8 +7768,8 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
-  if (state.nativeBackgroundPending) { void restoreNativeBackgroundVideo(); return; }
   restoreVideoAfterSystemPip();
+  if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
   if (state.mediaSwitchBusy) return;
   state.backgroundVideoReturnToVideo = false;

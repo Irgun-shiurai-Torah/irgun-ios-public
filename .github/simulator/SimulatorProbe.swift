@@ -2,6 +2,7 @@
 import UIKit
 import WebKit
 import Capacitor
+import Network
 
 // Compiled into CI simulator builds only; never copied by the release workflow.
 final class SimulatorProbe {
@@ -11,6 +12,10 @@ final class SimulatorProbe {
     private var status: UILabel?
     private var timer: Timer?
     private var polling = false
+    private var listener: NWListener?
+    private let observationQueue = DispatchQueue(label: "org.irgun.simulator.observations")
+    private let observationLock = NSLock()
+    private var observation = Data("{}\n".utf8)
 
     func install(in window: UIWindow?) {
         guard ProcessInfo.processInfo.arguments.contains("--irgun-simulator-tests"),
@@ -66,12 +71,34 @@ final class SimulatorProbe {
         ])
         self.panel = panel
         self.status = label
+        startObservations()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.poll() }
         poll()
     }
 
     private var webView: WKWebView? {
         (window?.rootViewController as? CAPBridgeViewController)?.webView
+    }
+
+    // A simulator-only loopback observation channel avoids Xcode's intermittent
+    // stale AX snapshots of a rapidly changing, large accessibility value.
+    // All actions still use real UI gestures; this channel only reads state.
+    private func startObservations() {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: 47291)
+        guard let listener = try? NWListener(using: parameters) else { return }
+        self.listener = listener
+        listener.newConnectionHandler = { [weak self] connection in
+            connection.stateUpdateHandler = { [weak self] state in
+                guard case .ready = state, let self = self else { return }
+                self.observationLock.lock()
+                let data = self.observation
+                self.observationLock.unlock()
+                connection.send(content: data, completion: .contentProcessed { _ in connection.stateUpdateHandler = nil; connection.cancel() })
+            }
+            connection.start(queue: self?.observationQueue ?? .global())
+        }
+        listener.start(queue: observationQueue)
     }
 
     @objc private func openSample() {
@@ -97,7 +124,12 @@ final class SimulatorProbe {
             if let json = result as? String, let data = json.data(using: .utf8),
                var state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
-                if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) { self.status?.accessibilityValue = value }
+                if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) {
+                    self.status?.accessibilityValue = value
+                    self.observationLock.lock()
+                    self.observation = merged + Data([10])
+                    self.observationLock.unlock()
+                }
             }
         }
     }
