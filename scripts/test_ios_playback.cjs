@@ -378,6 +378,21 @@ test('native return uses actual native clock and stops audio before unmuting vid
   assert.deepEqual(f.calls.map(x=>x[0]),['stop','mute']);assert.equal(f.p.video.muted,false);
   assert.equal(f.state.nativeBackgroundPending,false);
 });
+test('Home return rebuilds the video decoder after releasing native audio',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.p.video.muted=true;
+  f.p.player.reloadInlineVideo=async()=>{assert.equal(f.calls[0][0],'stop');assert.equal(f.p.video.muted,true);assert.equal(f.p.video.currentTime,80);f.calls.push(['reload']);return true;};
+  await f.context.restoreNativeBackgroundVideo();
+  assert.deepEqual(f.calls.map(x=>x[0]),['stop','reload','mute']);
+});
+
+test('Pause during decoder reload keeps the saved clock without restarting',async()=>{
+  const p=Object.create(directPrototype());let plays=0;
+  const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
+    removeAttribute:()=>{},setAttribute:()=>{},load(){this.currentTime=0;this.paused=true;},pause(){this.paused=true;}};
+  Object.assign(p,{v,token:1,destroyed:false,autoplayWanted:true,load:{},meta:async()=>{p.autoplayWanted=false;},
+    current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},play:async()=>{plays++;},waitForVisualFrame:async()=>true});
+  assert.equal(await p.reloadInlineVideo(),false);assert.equal(v.currentTime,62);assert.equal(v.paused,true);assert.equal(plays,0);
+});
 test('native remote Pause is preserved on return',async()=>{
   const f=nativeFixture();f.state.nativeBackgroundPending=true;
   f.context.IrgunBackgroundAudio.getState=async()=>({id:'A',active:true,playing:false,position:80});

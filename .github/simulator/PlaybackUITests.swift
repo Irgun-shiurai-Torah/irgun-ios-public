@@ -83,6 +83,10 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func tapWebButton(_ label: String) throws {
+        if ["Keep playing at bottom of app", "Picture in Picture"].contains(label) {
+            let hide = app.buttons["ist-simulator-hide-controls"]
+            if hide.exists && hide.isHittable { hide.tap() }
+        }
         let button = app.webViews.buttons.matching(identifier: label).firstMatch
         let predicate = NSPredicate(format: "exists == true AND hittable == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: button)
@@ -230,7 +234,7 @@ final class PlaybackUITests: XCTestCase {
         try tapWebButton("Play video"); try assertMovingVideo()
         let playing=number(snapshot(),"videoTime")
         videoPoint(0.8,0.4).doubleTap()
-        _ = try waitFor("Double tap while playing must keep playing") { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
+        _ = try waitFor("Double tap while playing must keep playing", timeout: 6) { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo(); evidence("double-tap-seek")
     }
 
@@ -265,7 +269,7 @@ final class PlaybackUITests: XCTestCase {
         for _ in 0..<26 {
             let previous=snapshot()["storePage"] as? String ?? ""
             app.buttons["ist-simulator-next-page"].tap()
-            let state = try waitFor("Screenshot page must load", timeout: 150) { $0["storeReady"] as? Bool == true && ($0["storePage"] as? String ?? "") != previous }
+            let state = try waitFor("Screenshot page must load", timeout: 150) { !($0["storeError"] as? String ?? "").isEmpty || ($0["storeReady"] as? Bool == true && ($0["storePage"] as? String ?? "") != previous) }
             XCTAssertEqual(state["storeError"] as? String ?? "", "")
             let name=state["storePage"] as? String ?? "unknown"
             app.buttons["ist-simulator-clean-capture"].tap()

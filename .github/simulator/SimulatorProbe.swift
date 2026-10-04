@@ -50,10 +50,14 @@ final class SimulatorProbe {
         hide.setTitle("Clean capture", for: .normal)
         hide.accessibilityIdentifier = "ist-simulator-clean-capture"
         hide.addTarget(self, action: #selector(cleanCapture), for: .touchUpInside)
-        let buttons = UIStackView(arrangedSubviews: [button, reopen, next, hide])
+        let controls = UIButton(type: .system)
+        controls.setTitle("Hide controls", for: .normal)
+        controls.accessibilityIdentifier = "ist-simulator-hide-controls"
+        controls.addTarget(self, action: #selector(hideForAppControls), for: .touchUpInside)
+        let buttons = UIStackView(arrangedSubviews: [button, reopen, next, hide, controls])
         buttons.axis = .horizontal; buttons.distribution = .fillEqually
         buttons.translatesAutoresizingMaskIntoConstraints = false
-        for control in [button, reopen, next, hide] { control.titleLabel?.font = .systemFont(ofSize: 10) }
+        for control in [button, reopen, next, hide, controls] { control.titleLabel?.font = .systemFont(ofSize: 10) }
         panel.addSubview(label)
         panel.addSubview(buttons)
         window.addSubview(panel)
@@ -113,6 +117,10 @@ final class SimulatorProbe {
     @objc private func cleanCapture() {
         panel?.isHidden = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
+    }
+    @objc private func hideForAppControls() {
+        panel?.isHidden = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.panel?.isHidden = false }
     }
 
     private func poll() {

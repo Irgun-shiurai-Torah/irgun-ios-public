@@ -7333,13 +7333,23 @@ async function restoreNativeBackgroundVideo() {
     if (native.active) {
       await player.setCurrentTime(native.position);
       if (!current()) return;
-      if (native.playing && player.player?.autoplayWanted !== false) await player.ensureVisualPlayback(false);
-      else await player.pause();
-    } else if (player.player?.autoplayWanted) await player.ensureVisualPlayback(false);
+    }
     if (!current()) return;
-    // Video stays muted until the native owner is stopped, including decoder
-    // recovery. Keep the current DOM and controls throughout this handoff.
+    // Release the native audio owner before rebuilding WebKit's suspended
+    // decoder. Recovery before stop can produce one frame then freeze again.
     await IrgunBackgroundAudio.stop({id,clear:false});
+    if (!current()) return;
+    const wantsPlay = () => native.playing && player.player?.autoplayWanted !== false;
+    if (native.active && wantsPlay()) {
+      await player.player?.visualPlaybackPromise?.catch(() => {});
+      if (!current()) return;
+      if (wantsPlay()) {
+        const frames = await player.player?.reloadInlineVideo?.();
+        if (!current()) return;
+        if (wantsPlay() && frames !== true) await player.ensureVisualPlayback(true);
+      }
+    } else if (native.active) await player.pause();
+    else if (player.player?.autoplayWanted) await player.ensureVisualPlayback(false);
     if (!current()) return;
     await player.setMuted(Boolean(state.nativeBackgroundMuted));
     state.nativeBackgroundPending = false;

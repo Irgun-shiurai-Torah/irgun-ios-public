@@ -48,7 +48,7 @@ jobs:
         family: [iPhone, iPad]
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
-      IOS_MARKETING_VERSION: "1.0.1"
+      IOS_MARKETING_VERSION: "1.2.69"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
       DEVICE_FAMILY: ${{ matrix.family }}

@@ -22,6 +22,9 @@ The full simulator artifact includes xcresult, logs, screenshots and observation
 State is read through a simulator-only loopback TCP channel; real UI actions
 still use XCTest taps and swipes. This avoids intermittent stale accessibility
 snapshots of the diagnostic label. The listener binds only to 127.0.0.1.
+The diagnostic panel is hidden before testing header controls, so it cannot
+intercept the mini-player button. Media screenshots use the same real shiur
+through normal Audio/Video transitions, reducing repeated source lookups.
 Release builds do not inject the simulator bridge or diagnostic panel. Native
 background clock samples establish AVPlayer progress in simulator suspension;
 they do not measure audible output on physical devices. Real push delivery,

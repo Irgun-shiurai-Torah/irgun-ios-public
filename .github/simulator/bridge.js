@@ -24,30 +24,36 @@ function simulatorVisible(element) {
 }
 
 window.ISTSimulator = {
-  storePage: '', storeReady: false, storeError: '', storeIndex: -1,
+  storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
   async nextStorePage() {
     this.storeReady = false; this.storeError = '';
     const page = this.storePages[++this.storeIndex];
     if (!page) { this.storePage = 'done'; this.storeReady = true; return; }
+    const mediaPage = name => name.startsWith('watch-') || ['audio-player','mini-player','fullscreen'].includes(name);
+    const reuseMedia = mediaPage(page) && mediaPage(this.storePage) && Boolean(state.watchVideo);
     this.storePage = page;
     try {
-      if (state.watchVideo) await closeWatch(false);
-      audio.pause(); state.playerOpen = false; state.current = null; state.filterDialog = ''; state.authMode = 'login';
-      if (page.startsWith('watch-') || ['audio-player','mini-player','fullscreen'].includes(page)) {
-        await this.openSample();
+      if (state.watchVideo && !reuseMedia) await closeWatch(false);
+      if (!reuseMedia) { audio.pause(); state.current = null; }
+      state.playerOpen = false; state.filterDialog = ''; state.authMode = 'login';
+      if (mediaPage(page)) {
+        if (!state.watchVideo) {
+          await this.openSample();
+          if (simulatorError) throw new Error(simulatorError);
+        }
+        const mode = page === 'watch-audio' || page === 'audio-player' ? 'audio' : 'video';
+        if (state.watchMode !== mode) await switchWatchMode(mode);
         await new Promise((resolve,reject) => {
           const start = Date.now(), check = () => {
-            if (state.watchVimeoReady && state.watchVimeo?.video?.readyState >= 2) resolve();
+            if (mode === 'audio' ? (state.current && audio.readyState >= 2 && !state.pendingAudioSeek) : (state.watchVimeoReady && state.watchVimeo?.video?.readyState >= 2)) resolve();
             else if (Date.now()-start>90000) reject(new Error('Screenshot video did not become ready'));
             else setTimeout(check,250);
           }; check();
         });
-        if (page === 'watch-audio' || page === 'audio-player') {
-          await switchWatchMode('audio');
-          if (page === 'audio-player') { state.playerOpen = true; render(); }
-        } else if (page === 'mini-player') { state.screen='home'; render(); await minimizeWatchToPersistent(); }
-        else if (page === 'fullscreen') document.getElementById('dmFull')?.click();
+        if (page === 'audio-player') { state.playerOpen = true; render(); }
+        else if (page === 'mini-player') { state.screen='home'; render(); await minimizeWatchToPersistent(); }
+        else if (page === 'fullscreen') { if (state.watchMinimized) await expandPersistentWatch(); document.getElementById('dmFull')?.click(); }
       } else {
         state.screen = page.startsWith('library-') ? 'library' : page.startsWith('filter-') ? 'shiurim' : page === 'register' ? 'account' : page;
         if (page.startsWith('library-')) state.librarySection = page.slice(8);
@@ -57,6 +63,7 @@ window.ISTSimulator = {
       }
       // Real API content and decoded images only; no invented account/history.
       await new Promise(resolve=>setTimeout(resolve,3000));
+      if (page.startsWith('library-')) document.querySelector('.library-tabs .active')?.scrollIntoView({block:'nearest',inline:'center'});
       if (['home','live','live-boro','live-flatbush','schedule'].includes(page)) {
         const start=Date.now();
         while (state.scheduleDataLoading && Date.now()-start<15000) await new Promise(resolve=>setTimeout(resolve,250));
@@ -79,13 +86,20 @@ window.ISTSimulator = {
     simulatorOpening = true;
     simulatorError = '';
     try {
-      const candidates = simulatorSampleId
-        ? [state.videoById.get(String(simulatorSampleId))].filter(Boolean)
+      const selected = simulatorSampleId || this.selectedSampleId;
+      const candidates = selected
+        ? [state.videoById.get(String(selected))].filter(Boolean)
         : state.videos.filter(video => video.hasAudio).slice(0, 12);
       if (!candidates.length) throw new Error('No sample available in the loaded library');
       for (const video of candidates) {
-        const sources = await loadIosDirectVideoSources(video);
+        let sources;
+        for (let attempt=0;attempt<3;attempt++) {
+          sources = await loadIosDirectVideoSources(video);
+          if (sources?.hls) break;
+          if (attempt<2) await new Promise(resolve=>setTimeout(resolve,1500));
+        }
         if (!sources?.hls || !video.hasAudio) continue;
+        this.selectedSampleId = String(videoId(video));
         await openWatch(videoId(video), 30);
         return;
       }

@@ -232,11 +232,13 @@ class Player{
    // failed. Keep the same element, controls, selected source and event handlers.
    v.autoplay=false;v.removeAttribute('autoplay');v.muted=true;v.load();
    await this.meta(token);
-   if(this.destroyed||token!==this.token||!this.autoplayWanted)return false;
+   if(this.destroyed||token!==this.token)return false;
    await this.seekTo(at);
-   if(this.destroyed||token!==this.token||!this.autoplayWanted)return false;
+   if(this.destroyed||token!==this.token)return false;
    v.playbackRate=rate;v.muted=muted;
+   if(!this.autoplayWanted){v.autoplay=false;v.removeAttribute('autoplay');v.pause();return false}
    v.autoplay=true;v.setAttribute('autoplay','');
+   if(this.backend==='hls-native'&&!this.nativeVariants?.length)void this.loadNativeQualities(this.url,this.token);
    this.loading=false;await this.play();
    return await this.waitForVisualFrame(2200);
   }finally{
