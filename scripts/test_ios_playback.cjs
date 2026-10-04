@@ -31,7 +31,7 @@ function fixture() {
     Capacitor:{isNativePlatform:()=>true},
     document:{hidden:false, pictureInPictureElement:null, getElementById:()=>frame},
     // No real timers are needed for these controlled transitions.
-    setTimeout:()=>0, videoId:v=>v.id, hardStopHtmlAudioForVideo:()=>{},
+    setTimeout:()=>0, clearTimeout:()=>{}, videoId:v=>v.id, hardStopHtmlAudioForVideo:()=>{},
     setVimeoHandoffMuted:async()=>{}, displayShiurTitle:x=>x, audioUrl:x=>x,
     mediaApiId:v=>v.id, syncNativeMediaSession:()=>{},
     currentVideoClockForBackground:()=>state.watchVimeo?.video?.currentTime || state.watchResumeSeconds,
@@ -256,4 +256,83 @@ test('delayed Play callback cannot overwrite a newer shiur position',async()=>{
   f.state.watchResumeSeconds=88;
   resolveTime(31); await callback;
   assert.equal(f.state.watchResumeSeconds,88);
+});
+
+function directPrototype(overrides = {}) {
+  const c=vm.createContext({window:{},location:{protocol:'capacitor:',hostname:'localhost'},
+    document:{hidden:false},requestAnimationFrame:callback=>callback(),console,...overrides});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/direct-media.js'),'utf8'),c);
+  return c.window.ISTDirectMediaPlayer.prototype;
+}
+
+test('decoder reload preserves element, live position, source and speed',async()=>{
+  const p=Object.create(directPrototype());
+  const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
+    src:'https://example.test/720p.m3u8',removeAttribute:()=>{},setAttribute:()=>{},load(){this.currentTime=0;this.paused=true;}};
+  Object.assign(p,{v,token:1,destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},
+    current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},
+    play:async()=>{v.paused=false;},waitForVisualFrame:async()=>true});
+  assert.equal(await p.reloadInlineVideo(),true);
+  assert.equal(p.v,v);
+  assert.equal(v.currentTime,62);
+  assert.equal(v.src,'https://example.test/720p.m3u8');
+  assert.equal(v.playbackRate,1.5);
+  assert.equal(v.muted,false);
+});
+
+test('missing frames trigger exactly one decoder reload after layer recovery',async()=>{
+  const p=Object.create(directPrototype());
+  let reloads=0;
+  const v={paused:false,readyState:4,webkitPresentationMode:'inline',setAttribute:()=>{},pause(){this.paused=true;}};
+  Object.assign(p,{v,autoplayWanted:true,destroyed:false,c:{appendChild:()=>{}},r:{},
+    show:()=>{},wakeVideoLayer:()=>{},current:()=>62,waitForVisualFrame:async()=>false,
+    relatchInlineVideoLayer:async()=>true,play:async()=>{v.paused=false;},
+    reloadInlineVideo:async()=>{reloads++;return true;}});
+  assert.equal(await p.ensureVisualPlayback(),true);
+  assert.equal(reloads,1);
+});
+
+test('overlapping frame recovery shares one operation',async()=>{
+  const p=Object.create(directPrototype());
+  let resolve,calls=0;
+  p.recoverVisualPlayback=()=>{calls++;return new Promise(done=>{resolve=done;});};
+  const first=p.ensureVisualPlayback(), second=p.ensureVisualPlayback(true);
+  assert.equal(calls,1);
+  resolve(true);
+  assert.equal(await first,true);
+  assert.equal(await second,true);
+  assert.equal(p.visualPlaybackPromise,null);
+});
+
+test('late PiP pause is recovered, but an explicit Pause cancels recovery',async()=>{
+  const f=fixture(), p=f.player('pip');
+  const tasks=[];
+  let recoveries=0;
+  f.context.setTimeout=task=>{tasks.push(task);return tasks.length;};
+  p.player={autoplayWanted:true};
+  p.ensureVisualPlayback=async()=>{recoveries++;p.video.paused=false;};
+  f.state.watchVimeo=p;
+  f.context.scheduleInlineVideoRecovery(p);
+  assert.equal(tasks.length,3);
+  p.video.paused=true; // native pause arriving after foreground restoration
+  tasks[1](); await flush();
+  assert.equal(p.video.paused,false);
+  assert.equal(recoveries,1);
+  p.player.autoplayWanted=false;
+  p.video.paused=true;
+  tasks[2](); await flush();
+  assert.equal(p.video.paused,true);
+  assert.equal(recoveries,1);
+});
+
+test('explicit Pause during layer recovery is respected',async()=>{
+  let plays=0,p;
+  const v={paused:false,readyState:2,webkitPresentationMode:'inline',style:{},
+    setAttribute:()=>{},getBoundingClientRect:()=>({}),play:async()=>{plays++;}};
+  p=Object.create(directPrototype({requestAnimationFrame:callback=>{
+    p.autoplayWanted=false;v.paused=true;callback();
+  }}));
+  Object.assign(p,{v,autoplayWanted:true,current:()=>30,duration:()=>120,wakeVideoLayer:()=>{}});
+  assert.equal(await p.relatchInlineVideoLayer(),false);
+  assert.equal(plays,0);
 });

@@ -4850,7 +4850,7 @@ class IosDirectVideoAdapter {
     }
     return this.player.play();
   }
-  async pause() { this.player.pause(false); }
+  async pause() { this.player.pause(true); }
   async getPaused() { return Boolean(this.video?.paused); }
   async getCurrentTime() { return this.player.current(); }
   async getDuration() { return this.player.duration(); }
@@ -7625,6 +7625,18 @@ function keepVideoPlayingOnBackground(source) {
   void handoffPlayingVideoToBackgroundAudio(source);
 }
 
+function scheduleInlineVideoRecovery(player) {
+  const generation = state.watchVimeoGeneration;
+  for (const timer of player.inlineRecoveryTimers || []) clearTimeout(timer);
+  player.inlineRecoveryTimers = [250, 1000, 2500].map(delay => setTimeout(() => {
+    if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player ||
+        state.watchMode !== 'video' || document.hidden || player.player?.autoplayWanted === false) return;
+    if (player.video?.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === player.video) return;
+    // WebKit can pause after its PiP -> inline event has already completed.
+    Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
+  }, delay));
+}
+
 function restoreVideoAfterSystemPip(force = false) {
   if (!IS_IOS || !Capacitor.isNativePlatform() || document.hidden ||
       (!force && (!state.pipBackgroundReturnPending || !state.pipWasBackgrounded)) || state.pipRestoreBusy) return;
@@ -7651,6 +7663,7 @@ function restoreVideoAfterSystemPip(force = false) {
     state.pipResumeWanted = false;
     restoreWatchUiAfterSystemPip();
     if (shouldResume && video.paused) Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
+    if (shouldResume) scheduleInlineVideoRecovery(player);
     state.pipRestoreBusy = false;
     setTimeout(() => {
       if (state.watchVimeo !== player || document.hidden || state.watchMode !== 'video') return;
@@ -7965,7 +7978,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       } catch (error) {
         console.warn('Automatic visible video start attempt failed', error);
       }
-      if (!started) {
+      if (!started && player.player?.autoplayWanted !== false) {
         try {
           if (created.backend === 'direct') started = Boolean(await player.ensureVisualPlayback(true));
           else {
@@ -8090,10 +8103,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
           // iOS can pause the HTML video during the PiP -> inline transition.
           // Request play while the PiP return action still has user activation.
           try { (player.video?.play?.() || player.play?.())?.catch?.(() => {}); } catch (_) {}
-          setTimeout(() => {
-            if (state.watchVimeo !== player || state.watchMode !== 'video' || document.hidden) return;
-            if (player.video?.paused) Promise.resolve(player.ensureVisualPlayback?.(false) || player.play?.()).catch(() => {});
-          }, 180);
+          scheduleInlineVideoRecovery(player);
         }
       });
     }

@@ -6,6 +6,8 @@ let simulatorOpening = false;
 let simulatorFrameVideo = null;
 let simulatorFrames = 0;
 let simulatorFrameTime = 0;
+let simulatorLastFrameAt = 0;
+let simulatorFrameRequest = 0;
 window.addEventListener('error', event => { simulatorError = String(event.message || 'JavaScript error'); });
 window.addEventListener('unhandledrejection', event => { simulatorError = String(event.reason?.message || event.reason); });
 
@@ -56,15 +58,22 @@ window.ISTSimulator = {
       simulatorFrameVideo = video;
       simulatorFrames = 0;
       simulatorFrameTime = 0;
-      if (video?.requestVideoFrameCallback) {
-        const track = (_now, metadata) => {
-          if (simulatorFrameVideo !== video) return;
-          simulatorFrames += 1;
-          simulatorFrameTime = Number(metadata.mediaTime) || 0;
-          video.requestVideoFrameCallback(track);
-        };
+      simulatorLastFrameAt = 0;
+      simulatorFrameRequest += 1;
+    }
+    if (video?.requestVideoFrameCallback && Date.now() - simulatorLastFrameAt > 2000) {
+      // Re-arm observation after load/seek/presentation changes. Continue to
+      // require advancing frame mediaTime; a moving audio clock is insufficient.
+      const request = ++simulatorFrameRequest;
+      simulatorLastFrameAt = Date.now();
+      const track = (_now, metadata) => {
+        if (simulatorFrameVideo !== video || request !== simulatorFrameRequest) return;
+        simulatorFrames += 1;
+        simulatorFrameTime = Number(metadata.mediaTime) || 0;
+        simulatorLastFrameAt = Date.now();
         video.requestVideoFrameCallback(track);
-      }
+      };
+      video.requestVideoFrameCallback(track);
     }
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
@@ -77,6 +86,8 @@ window.ISTSimulator = {
       videoTime: Number(video?.currentTime) || 0, videoPlaying: Boolean(video && !video.paused && !video.ended),
       videoVisible: simulatorVisible(video), controlsVisible: simulatorVisible(document.getElementById('dmPlay')),
       frameApi: Boolean(video?.requestVideoFrameCallback), frames: simulatorFrames, frameTime: simulatorFrameTime,
+      decodedFrames: Number(video?.webkitDecodedFrameCount) || 0,
+      mediaReadyState: Number(video?.readyState) || 0, seeking: Boolean(video?.seeking),
       audioTime: Number(audio.currentTime) || 0, audioPlaying: Boolean(!audio.paused && !audio.ended),
       pendingSeek: Boolean(state.pendingAudioSeek), minimized: Boolean(state.watchMinimized),
       expandX: expandBox ? expandBox.left + expandBox.width / 2 : 0,
