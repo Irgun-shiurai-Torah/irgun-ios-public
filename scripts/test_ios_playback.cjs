@@ -443,3 +443,11 @@ test('touch double taps seek even when WebKit coalesces compatibility clicks',as
   assert.deepEqual(seeks,[15,-15]);assert.equal(toggles,0);
   tasks.forEach((task,i)=>{if(!cancelled.has(i+1))task();});assert.equal(toggles,0);
 });
+
+test('explicit Pause prevents native autoplay from restarting a buffered seek',async()=>{
+  const p=Object.create(directPrototype());let time=30,plays=0;
+  const v={autoplay:true,paused:false,pause(){this.paused=true;},removeAttribute:()=>{}};
+  Object.assign(p,{v,autoplayWanted:true,token:1,current:()=>time,seekTo:async x=>{time=x;if(v.autoplay)v.paused=false;},play:async()=>{plays++;v.paused=false;},showSeekFeedback:()=>{}});
+  p.pause();await p.seekBy(-15);
+  assert.equal(time,15);assert.equal(v.paused,true);assert.equal(plays,0);
+});
