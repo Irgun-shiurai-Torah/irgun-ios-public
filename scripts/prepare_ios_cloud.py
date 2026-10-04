@@ -201,9 +201,61 @@ def patch_app_delegate():
         additions.append('''
     private func irgunConfigurePlaybackAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
         } catch {
             NSLog("Irgun playback audio session configuration failed: \\(error)")
+        }
+    }
+
+    private func irgunInstallAudioSessionObservers() {
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.interruptionNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: AVAudioSession.routeChangeNotification, object: nil)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(irgunHandleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(irgunHandleAudioRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    @objc private func irgunHandleAudioSessionInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let rawType = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+
+        switch type {
+        case .began:
+            irgunDispatchWebLifecycleEvent("irgunNativeAudioInterrupted")
+        case .ended:
+            let rawOptions = (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+            let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
+            if options.contains(.shouldResume) {
+                do { try AVAudioSession.sharedInstance().setActive(true) }
+                catch { NSLog("Irgun playback audio session reactivation failed: \\(error)") }
+                irgunDispatchWebLifecycleEvent("irgunNativeAudioInterruptionEndedShouldResume")
+            } else {
+                irgunDispatchWebLifecycleEvent("irgunNativeAudioInterruptionEnded")
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func irgunHandleAudioRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let rawReason = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else { return }
+        if reason == .oldDeviceUnavailable {
+            irgunDispatchWebLifecycleEvent("irgunNativeAudioRouteLost")
         }
     }
 ''')
@@ -249,6 +301,8 @@ def patch_app_delegate():
         replacement = replacement.replace('{', '{\n        irgunApplyWebViewMediaAndZoomPolicy()', 1)
     if 'irgunConfigurePlaybackAudioSession()' not in replacement:
         replacement = replacement.replace('{', '{\n        irgunConfigurePlaybackAudioSession()', 1)
+    if 'irgunInstallAudioSessionObservers()' not in replacement:
+        replacement = replacement.replace('{', '{\n        irgunInstallAudioSessionObservers()', 1)
     if 'irgunScheduleAnalyticsPluginRegistration()' not in replacement:
         replacement = replacement.replace('{', '{\n        irgunScheduleAnalyticsPluginRegistration()', 1)
     if 'irgunDispatchWebLifecycleEvent("irgunNativeDidBecomeActive")' not in replacement:
