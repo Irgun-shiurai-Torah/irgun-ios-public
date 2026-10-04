@@ -17,6 +17,10 @@ file = test_group.new_file('PlaybackUITests.swift')
 tests.source_build_phase.add_file_reference(file, true)
 tests.build_configurations.each do |config|
   config.build_settings.merge!({
+    'PRODUCT_NAME' => 'SimulatorUITests',
+    'PRODUCT_MODULE_NAME' => 'SimulatorUITests',
+    'EXECUTABLE_NAME' => '$(PRODUCT_NAME)',
+    'WRAPPER_EXTENSION' => 'xctest',
     'PRODUCT_BUNDLE_IDENTIFIER' => 'org.irgunshiuraitorah.app.simulator-tests',
     'SWIFT_VERSION' => '5.0',
     'GENERATE_INFOPLIST_FILE' => 'YES',
