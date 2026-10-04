@@ -80,6 +80,7 @@ final class PlaybackUITests: XCTestCase {
             $0["videoVisible"] as? Bool == true && self.number($0, "videoTime") >= 28
         }
         XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
+        XCTAssertEqual(number(state, "playerCount"), 1, "Exactly one video element should exist")
         evidence("fresh-video")
     }
 
@@ -97,6 +98,22 @@ final class PlaybackUITests: XCTestCase {
     func testFreshVideoHasMovingFrames() throws {
         try openSample()
         try assertMovingVideo()
+    }
+
+    func testReopeningSameShiurKeepsPlayerAndClock() throws {
+        try openSample()
+        try assertMovingVideo()
+        let before = number(snapshot(), "videoTime")
+        let button = app.buttons["ist-simulator-reopen"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        _ = try waitFor("Same-shiur deep link must keep player ready and advancing") {
+            $0["ready"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
+            $0["controlsVisible"] as? Bool == true && self.number($0, "videoTime") > before + 1 &&
+            self.number($0, "playerCount") == 1
+        }
+        try assertMovingVideo()
+        evidence("same-shiur-reopen")
     }
 
     func testAudioToVideoPreservesPositionAndMoves() throws {

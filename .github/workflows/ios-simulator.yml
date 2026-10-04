@@ -64,6 +64,7 @@ jobs:
 
       - name: Install dependencies and add simulator-only observations
         run: |
+          node --test scripts/test_ios_playback.cjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           npm run build

@@ -32,8 +32,14 @@ final class SimulatorProbe {
         button.accessibilityIdentifier = "ist-simulator-open"
         button.addTarget(self, action: #selector(openSample), for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
+        let reopen = UIButton(type: .system)
+        reopen.setTitle("Reopen shiur", for: .normal)
+        reopen.accessibilityIdentifier = "ist-simulator-reopen"
+        reopen.addTarget(self, action: #selector(reopenCurrent), for: .touchUpInside)
+        reopen.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(label)
         panel.addSubview(button)
+        panel.addSubview(reopen)
         window.addSubview(panel)
         NSLayoutConstraint.activate([
             panel.leadingAnchor.constraint(equalTo: window.leadingAnchor),
@@ -43,7 +49,9 @@ final class SimulatorProbe {
             label.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
             label.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
             button.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
-            button.centerYAnchor.constraint(equalTo: panel.centerYAnchor)
+            button.centerYAnchor.constraint(equalTo: panel.centerYAnchor),
+            reopen.trailingAnchor.constraint(equalTo: button.leadingAnchor, constant: -8),
+            reopen.centerYAnchor.constraint(equalTo: panel.centerYAnchor)
         ])
         self.panel = panel
         self.status = label
@@ -57,6 +65,10 @@ final class SimulatorProbe {
 
     @objc private func openSample() {
         webView?.evaluateJavaScript("window.ISTSimulator?.openSample()", completionHandler: nil)
+    }
+
+    @objc private func reopenCurrent() {
+        webView?.evaluateJavaScript("window.ISTSimulator?.reopenCurrent()", completionHandler: nil)
     }
 
     private func poll() {

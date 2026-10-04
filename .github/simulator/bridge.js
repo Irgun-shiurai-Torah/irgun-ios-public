@@ -22,6 +22,10 @@ function simulatorVisible(element) {
 }
 
 window.ISTSimulator = {
+  reopenCurrent() {
+    if (!state.watchVideo) return;
+    openPushDestination(`/watch.html?v=${encodeURIComponent(videoId(state.watchVideo))}`);
+  },
   async openSample() {
     if (simulatorOpening) return;
     simulatorOpening = true;
@@ -68,6 +72,8 @@ window.ISTSimulator = {
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: state.watchVimeo?.player?.backend || '',
+      playerCount: document.querySelectorAll('#directVideoElement').length,
+      initializing: Boolean(state.watchVimeoInitialization),
       videoTime: Number(video?.currentTime) || 0, videoPlaying: Boolean(video && !video.paused && !video.ended),
       videoVisible: simulatorVisible(video), controlsVisible: simulatorVisible(document.getElementById('dmPlay')),
       frameApi: Boolean(video?.requestVideoFrameCallback), frames: simulatorFrames, frameTime: simulatorFrameTime,
