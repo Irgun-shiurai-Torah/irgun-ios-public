@@ -558,8 +558,13 @@ test('touch double taps seek even when WebKit coalesces compatibility clicks',as
   const v={style:{},getBoundingClientRect:()=>({left:0,width:400}),setPointerCapture:()=>{}};
   Object.assign(p,{v,playBtn:{onclick:()=>toggles++},seekBy:x=>seeks.push(x),cb:{}});
   p.bindVideoGestures();
-  const tap=x=>{v.onpointerdown({pointerId:1,pointerType:'touch',clientX:x,clientY:50});v.onpointerup({pointerId:1,clientX:x,clientY:50});};
-  tap(320);v.onclick({clientX:320});tap(320);v.ondblclick({preventDefault:()=>{}});
+  const tap=(x,cancel=false)=>{
+    const t={identifier:1,clientX:x,clientY:50};v.ontouchstart({touches:[t]});
+    v.onpointerdown({pointerId:1,pointerType:'touch',clientX:x,clientY:50});
+    if(cancel)v.onpointercancel();else v.onpointerup({pointerId:1,pointerType:'touch',clientX:x,clientY:50});
+    v.ontouchend({touches:[],changedTouches:[t]});
+  };
+  tap(320);v.onclick({clientX:320});tap(320,true);v.ondblclick({preventDefault:()=>{}});
   tap(80);tap(80);v.onclick({clientX:80});
   assert.deepEqual(seeks,[15,-15]);assert.equal(toggles,0);
   tasks.forEach((task,i)=>{if(!cancelled.has(i+1))task();});assert.equal(toggles,0);

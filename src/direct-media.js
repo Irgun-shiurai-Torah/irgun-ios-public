@@ -14,6 +14,20 @@ class Player{
  bindVideoGestures(){
   const v=this.v;
   v.style.touchAction='none';
+  // WKWebView can cancel pointer events when recognizing a double tap.
+  // Touch releases remain the authoritative taps; pointers still drive swipes.
+  v.ontouchstart=e=>{
+   if(e.touches.length!==1){this.videoTouch=null;return}
+   const t=e.touches[0];this.videoTouch={id:t.identifier,x:t.clientX,y:t.clientY};
+  };
+  v.ontouchcancel=()=>{this.videoTouch=null};
+  v.ontouchend=e=>{
+   const start=this.videoTouch;this.videoTouch=null;
+   if(!start||e.touches.length)return;
+   const t=Array.from(e.changedTouches).find(t=>t.identifier===start.id);
+   if(!t||Math.hypot(t.clientX-start.x,t.clientY-start.y)>20)return;
+   this.videoIgnoreClickUntil=Date.now()+500;this.handleVideoTap(t.clientX);
+  };
   v.onpointerdown=e=>{
    if(e.isPrimary===false||(e.pointerType==='mouse'&&e.button!==0))return;
    this.videoPointer={id:e.pointerId,x:e.clientX,y:e.clientY,at:Date.now()};
@@ -25,7 +39,7 @@ class Player{
    const dx=e.clientX-start.x,dy=e.clientY-start.y;
    if(dy<65||dy<=Math.abs(dx)*1.4)return false;
    // Commit while moving: WebKit can cancel or delay the release during a drag.
-   this.videoPointer=null;
+   this.videoPointer=null;this.videoTouch=null;
    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
    try{v.releasePointerCapture?.(e.pointerId)}catch(_){}
    this.exitFullscreen();this.cb.onMinimize?.();e.preventDefault();return true;
@@ -41,7 +55,8 @@ class Player{
    }else{
     // Touch clicks can be coalesced by WKWebView's double-tap recognizer.
     // Count physical releases, then ignore their compatibility click events.
-    this.videoIgnoreClickUntil=Date.now()+500;this.handleVideoTap(e.clientX);
+    this.videoIgnoreClickUntil=Date.now()+500;
+    if(e.pointerType!=='touch')this.handleVideoTap(e.clientX);
    }
   };
   v.onclick=e=>{
@@ -261,8 +276,8 @@ class Player{
     const old=v,next=old.cloneNode(false);
     next.removeAttribute('src');next.removeAttribute('autoplay');next.autoplay=false;
     next.muted=true;next.volume=volume;
-    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;
-    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointermove','onpointerup','onpointercancel','onclick','ondblclick'])old[name]=null;
+    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;this.videoTouch=null;
+    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointermove','onpointerup','onpointercancel','ontouchstart','ontouchend','ontouchcancel','onclick','ondblclick'])old[name]=null;
     old.pause();old.removeAttribute('src');old.load();
     old.parentNode.replaceChild(next,old);this.v=v=next;
     this.bind();this.cb?.onVideoElementReplaced?.(old,next);
