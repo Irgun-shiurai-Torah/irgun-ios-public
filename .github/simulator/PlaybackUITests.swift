@@ -111,6 +111,16 @@ final class PlaybackUITests: XCTestCase {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
+        // Native overlay taps can be missed during the first launch animation.
+        // Retry once only if JS has not accepted or failed the open request.
+        let acceptanceDeadline = Date().addingTimeInterval(4)
+        while Date() < acceptanceDeadline {
+            let current = snapshot()
+            if current["opening"] as? Bool == true || !(current["id"] as? String ?? "").isEmpty || !(current["error"] as? String ?? "").isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        let accepted = snapshot()
+        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
         let state = try waitFor("HLS sample must start visibly", timeout: 150) {
             $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
             $0["backend"] as? String == "hls-native" && $0["videoPlaying"] as? Bool == true &&
