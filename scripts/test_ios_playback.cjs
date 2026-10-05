@@ -366,6 +366,39 @@ test('playing double tap checks frames even when the media element is not paused
   await p.seekBy(15);assert.equal(checks,1);assert.equal(plays,0);
 });
 
+function pausedSeekFixture(){
+  const {p}=decoderFixture();
+  p.sources={mp4:'https://example.test/shiur.mp4'};p.quality={};p.v.readyState=4;
+  Object.assign(p,{show:()=>{},wakeVideoLayer:()=>{},c:{appendChild:()=>{}},r:{},
+    relatchInlineVideoLayer:async()=>true,showSeekFeedback:()=>{},
+    play:async()=>{p.explicitlyPaused=false;p.autoplayWanted=true;p.v.paused=false;}});
+  p.pause();return p;
+}
+
+test('Play after paused forward/back seeks repairs frameless HLS without losing position or settings',async()=>{
+  const p=pausedSeekFixture();p.waitForVisualFrame=async()=>p.backend==='mp4';
+  await p.seekBy(15);await p.seekBy(-15);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.paused,true);assert.equal(p.decoderReloads,undefined);
+  assert.equal(await p.playFromControl(),true);
+  assert.equal(p.backend,'mp4');assert.equal(p.decoderReloads,2);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);
+  assert.equal(p.v.volume,.7);assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);
+});
+
+test('Play after a paused seek keeps HLS when frames already move',async()=>{
+  const p=pausedSeekFixture();p.waitForVisualFrame=async()=>true;
+  await p.seekBy(15);assert.equal(await p.playFromControl(),true);
+  assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,undefined);assert.equal(p.v.currentTime,77);
+});
+
+test('Pause during explicit Play frame verification cancels recovery and keeps the seek position',async()=>{
+  const p=pausedSeekFixture();await p.seekBy(15);
+  p.waitForVisualFrame=async()=>{p.pause();return false;};
+  assert.equal(await p.playFromControl(),false);
+  assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,undefined);
+  assert.equal(p.v.currentTime,77);assert.equal(p.v.paused,true);assert.equal(p.autoplayWanted,false);
+});
+
 test('Pause during a seek cancels visual recovery and autoplay',async()=>{
   const p=Object.create(directPrototype());let checks=0,plays=0;
   Object.assign(p,{token:1,autoplayWanted:true,v:{paused:true},current:()=>30,
