@@ -97,6 +97,24 @@ final class PlaybackUITests: XCTestCase {
 
     }
 
+    func testTabSwipesNavigateBothDirections() throws {
+        try tapWebButton("Home")
+        func swipe(_ left: Bool, to screen: String) throws {
+            let y = number(snapshot(), "tabSwipeY")
+            let web = app.webViews.firstMatch
+            let width = web.frame.width
+            let start = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.8 : 0.2), dy: y))
+            let end = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.2 : 0.8), dy: y))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            _ = try waitFor("Swipe must open \(screen)") { $0["screen"] as? String == screen }
+        }
+        for screen in ["shiurim", "live", "library", "account"] { try swipe(true, to: screen) }
+        try swipe(true, to: "account") // No wrapping past the last tab.
+        for screen in ["library", "live", "shiurim", "home"] { try swipe(false, to: screen) }
+        try swipe(false, to: "home")
+        evidence("tab-swipes")
+    }
+
     private func openSample() throws {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))

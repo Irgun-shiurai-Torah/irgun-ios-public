@@ -1,6 +1,7 @@
 import './style.css';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
+import { bindTabSwipes } from './tabSwipe.js';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
@@ -8407,6 +8408,20 @@ enforceIosNoZoom();
 
 if (Capacitor.isNativePlatform()) {
   LocalNotifications.addListener('localNotificationActionPerformed', event => { if(event?.notification?.extra?.route==='schedule'){ state.screen='schedule'; state.scheduleDataLoaded=false; render(); } }).catch?.(()=>{});
+}
+
+if (IS_IOS && Capacitor.isNativePlatform()) {
+  bindTabSwipes(app, {
+    getActiveTab: () => state.screen,
+    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+      .map(button => button.dataset.nav),
+    canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
+      && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
+      && (!state.watchVideo || state.watchMinimized)
+      && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),
+    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+  });
 }
 
 render();

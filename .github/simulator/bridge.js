@@ -126,6 +126,7 @@ window.ISTSimulator = {
     const videoBox = video?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
+    const headingBox = document.querySelector('.content h1')?.getBoundingClientRect();
     if (video !== simulatorFrameVideo) {
       simulatorFrameVideo = video;
       simulatorFrames = 0;
@@ -149,6 +150,8 @@ window.ISTSimulator = {
     }
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
+      screen: state.screen,
+      tabSwipeY: Math.min(innerHeight - 140, headingBox ? headingBox.top + headingBox.height / 2 : (document.querySelector('.content')?.getBoundingClientRect().top || 100) + 24),
       opening: simulatorOpening, error: simulatorError,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
