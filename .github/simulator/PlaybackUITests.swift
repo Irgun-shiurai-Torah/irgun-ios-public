@@ -253,6 +253,14 @@ final class PlaybackUITests: XCTestCase {
         try tapWebButton("Fullscreen")
         _ = try waitFor("Fullscreen must open") { $0["fullscreen"] as? Bool == true }
         try assertMovingVideo()
+        try tapWebButton("Pause video")
+        _ = try waitFor("Fullscreen Pause must stop playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
+        let paused = number(snapshot(),"videoTime")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(number(snapshot(),"videoTime"), paused, accuracy: 0.5)
+        try tapWebButton("Play video")
+        _ = try waitFor("Fullscreen Play must resume playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo()
         let before = number(snapshot(),"videoTime")
         try tapWebButton("Exit Fullscreen")
         _ = try waitFor("Fullscreen exit must keep playing") { $0["fullscreen"] as? Bool == false && $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > before + 1 }
@@ -278,6 +286,12 @@ final class PlaybackUITests: XCTestCase {
         let playing=number(snapshot(),"videoTime")
         videoPoint(0.8,0.4).doubleTap()
         _ = try waitFor("Double tap while playing must keep playing", timeout: 6) { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo()
+        let backward=number(snapshot(),"videoTime")
+        videoPoint(0.2,0.4).doubleTap()
+        _ = try waitFor("Left double tap while playing must seek back 15 seconds and keep playing", timeout: 6) {
+            abs(self.number($0,"videoTime") - backward + 15)<3 && $0["videoPlaying"] as? Bool == true
+        }
         try assertMovingVideo(); evidence("double-tap-seek")
     }
 
