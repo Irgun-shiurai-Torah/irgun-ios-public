@@ -3626,11 +3626,10 @@ function homeHtml() {
       <div class="hero-photo" aria-hidden="true"></div>
       <div class="hero-overlay" aria-hidden="true"></div>
       <div class="hero-content">
-        <span class="hero-eyebrow">TORAH • LIVE • ON DEMAND</span>
         <h1>Torah, wherever you are.</h1>
         <p>Live shiurim, thousands of recordings, powerful search, schedules and your personal Torah library — in one app.</p>
         <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} Browse Shiurim</button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} Watch Live</button></div>
-        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim watched &amp; listened to</span></div>
+        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim played</span></div>
       </div>
     </section>
 
