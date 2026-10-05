@@ -85,6 +85,20 @@ final class PlaybackUITests: XCTestCase {
     private func tapWebButton(_ label: String) throws {
         let hide = app.buttons["ist-simulator-hide-controls"]
         if hide.exists && hide.isHittable { hide.tap() }
+        // WebKit's AX tree can lag a replaced video surface. Touch the actual
+        // visible DOM control, with a fresh hit test, rather than invoking JS.
+        if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
+            let state = try waitFor("Visible player button: \(label)") {
+                let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
+                return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
+                    buttons.values.contains { $0["label"] as? String == label && $0["hittable"] as? Bool == true }
+            }
+            let buttons = state["playerButtons"] as? [String: [String: Any]] ?? [:]
+            let button = buttons.values.first { $0["label"] as? String == label }!
+            app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx:number(button,"x"),dy:number(button,"y"))).tap()
+            return
+        }
         let button = app.webViews.buttons.matching(identifier: label).firstMatch
         let predicate = NSPredicate(format: "exists == true AND hittable == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: button)
@@ -95,6 +109,29 @@ final class PlaybackUITests: XCTestCase {
         }
         button.tap()
 
+    }
+
+    func testTabSwipesNavigateBothDirections() throws {
+        try tapWebButton("Home")
+        func swipe(_ left: Bool, to screen: String) throws {
+            let current = snapshot()["screen"] as? String ?? ""
+            let state = try waitFor("Settled content for swipe from \(current)") {
+                $0["screen"] as? String == current && $0["pageLoading"] as? Bool == false &&
+                self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 && self.number($0,"tabSwipeY") >= 180
+            }
+            let y = number(state, "tabSwipeY")
+            let web = app.webViews.firstMatch
+            let width = web.frame.width
+            let start = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.8 : 0.2), dy: y))
+            let end = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.2 : 0.8), dy: y))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            _ = try waitFor("Swipe must open \(screen)") { $0["screen"] as? String == screen }
+        }
+        for screen in ["shiurim", "live", "library", "account"] { try swipe(true, to: screen) }
+        try swipe(true, to: "account") // No wrapping past the last tab.
+        for screen in ["library", "live", "shiurim", "home"] { try swipe(false, to: screen) }
+        try swipe(false, to: "home")
+        evidence("tab-swipes")
     }
 
     private func openSample() throws {
@@ -111,9 +148,10 @@ final class PlaybackUITests: XCTestCase {
         }
         let accepted = snapshot()
         if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
-        let state = try waitFor("HLS sample must start visibly", timeout: 150) {
+        let state = try waitFor("Same-shiur HLS sample or MP4 recovery must start visibly", timeout: 150) {
             $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
-            $0["backend"] as? String == "hls-native" && $0["videoPlaying"] as? Bool == true &&
+            ($0["backend"] as? String == "hls-native" || $0["recoveryMP4"] as? Bool == true) &&
+            ($0["id"] as? String) == ($0["sampleId"] as? String) && $0["videoPlaying"] as? Bool == true &&
             $0["videoVisible"] as? Bool == true && self.number($0, "videoTime") >= 28
         }
         XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
@@ -215,6 +253,14 @@ final class PlaybackUITests: XCTestCase {
         try tapWebButton("Fullscreen")
         _ = try waitFor("Fullscreen must open") { $0["fullscreen"] as? Bool == true }
         try assertMovingVideo()
+        try tapWebButton("Pause video")
+        _ = try waitFor("Fullscreen Pause must stop playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
+        let paused = number(snapshot(),"videoTime")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(number(snapshot(),"videoTime"), paused, accuracy: 0.5)
+        try tapWebButton("Play video")
+        _ = try waitFor("Fullscreen Play must resume playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo()
         let before = number(snapshot(),"videoTime")
         try tapWebButton("Exit Fullscreen")
         _ = try waitFor("Fullscreen exit must keep playing") { $0["fullscreen"] as? Bool == false && $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > before + 1 }
@@ -240,6 +286,12 @@ final class PlaybackUITests: XCTestCase {
         let playing=number(snapshot(),"videoTime")
         videoPoint(0.8,0.4).doubleTap()
         _ = try waitFor("Double tap while playing must keep playing", timeout: 6) { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo()
+        let backward=number(snapshot(),"videoTime")
+        videoPoint(0.2,0.4).doubleTap()
+        _ = try waitFor("Left double tap while playing must seek back 15 seconds and keep playing", timeout: 6) {
+            abs(self.number($0,"videoTime") - backward + 15)<3 && $0["videoPlaying"] as? Bool == true
+        }
         try assertMovingVideo(); evidence("double-tap-seek")
     }
 

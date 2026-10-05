@@ -10,10 +10,36 @@ function loadHls(api){if(window.Hls)return Promise.resolve(window.Hls);if(hlsPro
 class Player{
  constructor(o={}){this.c=o.container;this.iframe=o.iframe;this.api=String(o.apiBase||'').replace(/\/$/,'');this.cb=o;this.hls=null;this.backend='none';this.url='';this.sources={};this.loading=false;this.token=0;this.autoplayWanted=false;this.destroyed=false;this.hlsFatalRetries=0;this.hlsRetryTimer=null;this.hlsStableTimer=null;this.bufferTimer=null;this.lastProgressPosition=0;this.nativeVariants=[];this.build();if(o.poster)this.v.poster=String(o.poster)}
  build(){const r=document.createElement('div');r.id='directMediaPlayer';r.className='direct-media-player';r.hidden=true;r.innerHTML=`<video id="directVideoElement" class="direct-media-video" playsinline webkit-playsinline="true" preload="metadata"></video><div id="dmLoading" class="direct-media-loading" hidden><span class="direct-media-spinner"></span><span>Loading video...</span></div><div id="dmError" class="direct-media-error" hidden><span id="dmErrorText"></span><button id="dmRetry" type="button">Try Again</button></div><div class="direct-media-controls"><button id="dmPlay" class="direct-media-icon-button" type="button"><i class="fa-solid fa-play"></i></button><span id="dmNow" class="direct-media-time">0:00</span><input id="dmSeek" class="direct-media-seek" type="range" min="0" max="1000" value="0"><span id="dmDur" class="direct-media-time">0:00</span><button id="dmMute" class="direct-media-icon-button" type="button"><i class="fa-solid fa-volume-high"></i></button><input id="dmVol" class="direct-media-volume" type="range" min="0" max="1" step=".05" value="1"><select id="dmSpeed" class="direct-media-select">${SPEEDS.map(x=>`<option value="${x}"${x===1?' selected':''}>${x}x</option>`).join('')}</select><select id="dmQuality" class="direct-media-select" hidden><option value="-1">Auto</option></select><button id="dmPip" class="direct-media-icon-button" type="button" aria-label="Picture in Picture" title="Picture in Picture"><i class="fa-solid fa-window-restore"></i></button><button id="dmFull" class="direct-media-icon-button" type="button" aria-label="Fullscreen" title="Fullscreen"><i class="fa-solid fa-expand"></i></button></div>`;this.c.appendChild(r);this.r=r;this.v=r.querySelector('video');this.load=r.querySelector('#dmLoading');this.err=r.querySelector('#dmError');this.errText=r.querySelector('#dmErrorText');this.playBtn=r.querySelector('#dmPlay');this.seek=r.querySelector('#dmSeek');this.now=r.querySelector('#dmNow');this.dur=r.querySelector('#dmDur');this.vol=r.querySelector('#dmVol');this.mute=r.querySelector('#dmMute');this.speed=r.querySelector('#dmSpeed');this.v.defaultPlaybackRate=1;this.v.playbackRate=1;this.speed.value='1';this.quality=r.querySelector('#dmQuality');this.pipBtn=r.querySelector('#dmPip');this.bind()}
- bind(){const v=this.v;this.playBtn.onclick=()=>v.paused?this.play().catch(()=>{}):this.pause();this.bindVideoGestures();v.onplay=()=>{this.loading=false;this.load.hidden=true;this.err.hidden=true;this.icons();if(this.backend.startsWith('hls')){clearTimeout(this.hlsStableTimer);this.hlsStableTimer=setTimeout(()=>{this.hlsFatalRetries=0},5000)}this.cb.onPlay?.(this.state())};v.onpause=()=>{clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true;this.icons();if(!this.loading&&!v.ended)this.cb.onPause?.(this.state())};v.ontimeupdate=()=>{const position=this.current();if(Math.abs(position-this.lastProgressPosition)>.05){clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true}this.lastProgressPosition=position;this.timeline();this.cb.onTimeUpdate?.(this.state())};v.ondurationchange=()=>this.timeline();v.onended=()=>this.cb.onEnded?.(this.state());v.onwaiting=v.onstalled=()=>{clearTimeout(this.bufferTimer);const at=this.current();this.bufferTimer=setTimeout(()=>{if(!this.loading&&!v.paused&&!v.ended&&v.readyState<3&&this.current()<=at+.05)this.load.hidden=false},800)};v.onplaying=v.oncanplay=()=>{clearTimeout(this.bufferTimer);this.load.hidden=true};v.onerror=()=>{if(!this.loading&&v.error)setTimeout(()=>this.fatal(new Error('Direct video playback failed')),0)};const seekFromPointer=e=>{const d=this.duration();if(!d)return;const rect=this.seek.getBoundingClientRect();if(!rect.width)return;const clientX=Number(e.clientX);if(!Number.isFinite(clientX))return;const x=Math.max(0,Math.min(rect.width,clientX-rect.left));const ratio=x/rect.width;this.seek.value=String(Math.round(ratio*1000));this.now.textContent=fmt(d*ratio);void this.seekTo(d*ratio)};this.seek.onpointerdown=e=>{if(e.pointerType!=="touch"&&typeof e.button==="number"&&e.button!==0)return;seekFromPointer(e)};this.seek.onclick=seekFromPointer;this.seek.oninput=()=>{const d=this.duration();this.now.textContent=fmt(d*Number(this.seek.value)/1000)};this.seek.onchange=()=>this.seekTo(this.duration()*Number(this.seek.value)/1000);this.mute.onclick=()=>v.muted=!v.muted;this.vol.oninput=()=>{v.volume=Number(this.vol.value);if(v.volume)v.muted=false};v.onvolumechange=()=>this.volumeUI();this.speed.onchange=()=>this.setPlaybackRate(Number(this.speed.value));this.quality.onchange=()=>{if(this.hls)this.hls.currentLevel=Number(this.quality.value);else if(this.backend==='hls-native')this.selectNativeQuality(this.quality.value).catch(e=>this.notify(e))};rpip(this.pipBtn,v,active=>this.cb.onPipIntent?.(active));this.bindFullscreen(this.r.querySelector('#dmFull'));this.r.querySelector('#dmRetry').onclick=()=>this.activate(this.sources,this.current(),!v.paused,true).catch(e=>this.notify(e));this.icons();this.volumeUI()}
+ bind(){const v=this.v;this.playBtn.onclick=()=>v.paused?this.playFromControl().catch(()=>{}):this.pause();this.bindVideoGestures();v.onplay=()=>{this.loading=false;this.load.hidden=true;this.err.hidden=true;this.icons();if(this.backend.startsWith('hls')){clearTimeout(this.hlsStableTimer);this.hlsStableTimer=setTimeout(()=>{this.hlsFatalRetries=0},5000)}this.cb.onPlay?.(this.state())};v.onpause=()=>{clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true;this.icons();if(!this.loading&&!v.ended)this.cb.onPause?.(this.state())};v.ontimeupdate=()=>{const position=this.current();if(Math.abs(position-this.lastProgressPosition)>.05){clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true}this.lastProgressPosition=position;this.timeline();this.cb.onTimeUpdate?.(this.state())};v.ondurationchange=()=>this.timeline();v.onended=()=>this.cb.onEnded?.(this.state());v.onwaiting=v.onstalled=()=>{clearTimeout(this.bufferTimer);const at=this.current();this.bufferTimer=setTimeout(()=>{if(!this.loading&&!v.paused&&!v.ended&&v.readyState<3&&this.current()<=at+.05)this.load.hidden=false},800)};v.onplaying=v.oncanplay=()=>{clearTimeout(this.bufferTimer);this.load.hidden=true};this.bindMediaError(v);const seekFromPointer=e=>{const d=this.duration();if(!d)return;const rect=this.seek.getBoundingClientRect();if(!rect.width)return;const clientX=Number(e.clientX);if(!Number.isFinite(clientX))return;const x=Math.max(0,Math.min(rect.width,clientX-rect.left));const ratio=x/rect.width;this.seek.value=String(Math.round(ratio*1000));this.now.textContent=fmt(d*ratio);void this.seekTo(d*ratio)};this.seek.onpointerdown=e=>{if(e.pointerType!=="touch"&&typeof e.button==="number"&&e.button!==0)return;seekFromPointer(e)};this.seek.onclick=seekFromPointer;this.seek.oninput=()=>{const d=this.duration();this.now.textContent=fmt(d*Number(this.seek.value)/1000)};this.seek.onchange=()=>this.seekTo(this.duration()*Number(this.seek.value)/1000);this.mute.onclick=()=>v.muted=!v.muted;this.vol.oninput=()=>{v.volume=Number(this.vol.value);if(v.volume)v.muted=false};v.onvolumechange=()=>this.volumeUI();this.speed.onchange=()=>this.setPlaybackRate(Number(this.speed.value));this.quality.onchange=()=>{if(this.hls)this.hls.currentLevel=Number(this.quality.value);else if(this.backend==='hls-native')this.selectNativeQuality(this.quality.value).catch(e=>this.notify(e))};rpip(this.pipBtn,v,active=>this.cb.onPipIntent?.(active));this.bindFullscreen(this.r.querySelector('#dmFull'));this.r.querySelector('#dmRetry').onclick=()=>this.activate(this.sources,this.current(),!v.paused,true).catch(e=>this.notify(e));this.icons();this.volumeUI()}
+ bindMediaError(v){
+  v.onerror=()=>{
+   const token=this.token,error=v.error;
+   if(this.loading||!error)return;
+   setTimeout(()=>{
+    // A Home handoff or decoder replacement can leave an error queued by the
+    // previous source. It must never tear down the newly recovered player.
+    if(this.destroyed||this.v!==v||this.token!==token||this.loading||this.backgroundReturnPending||v.error!==error)return;
+    this.fatal(new Error('Direct video playback failed'));
+   },0);
+  };
+ }
  bindVideoGestures(){
   const v=this.v;
   v.style.touchAction='none';
+  // WKWebView can cancel pointer events when recognizing a double tap.
+  // Touch releases remain the authoritative taps; pointers still drive swipes.
+  v.ontouchstart=e=>{
+   if(e.touches.length!==1){this.videoTouch=null;return}
+   const t=e.touches[0];this.videoTouch={id:t.identifier,x:t.clientX,y:t.clientY};
+  };
+  v.ontouchcancel=()=>{this.videoTouch=null};
+  v.ontouchend=e=>{
+   const start=this.videoTouch;this.videoTouch=null;
+   if(!start||e.touches.length)return;
+   const t=Array.from(e.changedTouches).find(t=>t.identifier===start.id);
+   if(!t||Math.hypot(t.clientX-start.x,t.clientY-start.y)>20)return;
+   this.videoIgnoreClickUntil=Date.now()+500;this.handleVideoTap(t.clientX);
+  };
   v.onpointerdown=e=>{
    if(e.isPrimary===false||(e.pointerType==='mouse'&&e.button!==0))return;
    this.videoPointer={id:e.pointerId,x:e.clientX,y:e.clientY,at:Date.now()};
@@ -25,7 +51,7 @@ class Player{
    const dx=e.clientX-start.x,dy=e.clientY-start.y;
    if(dy<65||dy<=Math.abs(dx)*1.4)return false;
    // Commit while moving: WebKit can cancel or delay the release during a drag.
-   this.videoPointer=null;
+   this.videoPointer=null;this.videoTouch=null;
    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
    try{v.releasePointerCapture?.(e.pointerId)}catch(_){}
    this.exitFullscreen();this.cb.onMinimize?.();e.preventDefault();return true;
@@ -41,7 +67,8 @@ class Player{
    }else{
     // Touch clicks can be coalesced by WKWebView's double-tap recognizer.
     // Count physical releases, then ignore their compatibility click events.
-    this.videoIgnoreClickUntil=Date.now()+500;this.handleVideoTap(e.clientX);
+    this.videoIgnoreClickUntil=Date.now()+500;
+    if(e.pointerType!=='touch')this.handleVideoTap(e.clientX);
    }
   };
   v.onclick=e=>{
@@ -183,7 +210,26 @@ class Player{
   }finally{if(token===this.token){this.loading=false;this.load.hidden=true}}
  }
  destroy(){if(this.destroyed)return;this.destroyed=true;clearTimeout(this.videoTapTimer);clearTimeout(this.seekFeedbackTimer);for(const timer of this.fullscreenRecoveryTimers||[])clearTimeout(timer);this.exitFullscreen(false);if(this.fullscreenListener)document.removeEventListener('fullscreenchange',this.fullscreenListener);++this.token;clearTimeout(this.hlsRetryTimer);clearTimeout(this.hlsStableTimer);this.clear()}
- fatal(e){if(this.destroyed)return;if(this.backend.startsWith('hls')&&this.sources.hls&&this.hlsFatalRetries<2){const p=this.current(),a=Boolean(this.autoplayWanted||!this.v.paused),attempt=++this.hlsFatalRetries;clearTimeout(this.hlsRetryTimer);this.loading=true;this.load.hidden=false;this.hlsRetryTimer=setTimeout(()=>{this.hlsLoad(this.sources.hls,p,a).then(()=>{if(a)return this.ensureVisualPlayback(false)}).catch(x=>this.fatal(x))},250*attempt);return}if(this.backend.startsWith('hls')&&this.sources.mp4){const p=this.current(),a=Boolean(this.autoplayWanted||!this.v.paused);this.mp4(this.sources.mp4,p,a).catch(x=>this.notify(x));return}this.notify(e)}
+ fatal(e){
+  if(this.destroyed)return;
+  if(this.backend.startsWith('hls')&&this.sources.hls&&this.hlsFatalRetries<2){
+   const p=this.current(),a=Boolean(this.autoplayWanted||!this.v.paused),attempt=++this.hlsFatalRetries;
+   const failedToken=this.token,failedVideo=this.v;
+   clearTimeout(this.hlsRetryTimer);this.loading=true;this.load.hidden=false;
+   this.hlsRetryTimer=setTimeout(()=>{
+    if(this.destroyed||this.token!==failedToken||this.v!==failedVideo)return;
+    const pending=this.hlsLoad(this.sources.hls,p,a),retryToken=this.token;
+    const current=()=>!this.destroyed&&this.token===retryToken&&this.v===failedVideo;
+    pending.then(()=>{if(current()&&a)return this.ensureVisualPlayback(false)}).catch(x=>{if(current())this.fatal(x)});
+   },250*attempt);return;
+  }
+  if(this.backend.startsWith('hls')&&this.sources.mp4){
+   const p=this.current(),a=Boolean(this.autoplayWanted||!this.v.paused);
+   const pending=this.mp4(this.sources.mp4,p,a),token=this.token,video=this.v;
+   pending.catch(x=>{if(!this.destroyed&&this.token===token&&this.v===video)this.notify(x)});return;
+  }
+  this.notify(e);
+ }
  notify(e){this.load.hidden=true;this.err.hidden=false;this.errText.textContent=String(e?.message||e||'Video failed');this.cb.onFatal?.({error:e,position:this.current(),autoplay:!this.v.paused,backend:this.backend})}
  current(){return Math.max(0,Number(this.v?.currentTime)||0)} duration(){const d=Number(this.v?.duration);return Number.isFinite(d)&&d>0?d:0} state(){return{position:this.current(),duration:this.duration(),paused:this.v.paused,ended:this.v.ended,playbackRate:this.v.playbackRate,backend:this.backend}}
  async seekTo(x){
@@ -234,24 +280,51 @@ class Player{
   const hasDecodeCounter=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames);
   return Boolean(!v.paused&&v.readyState>=2&&(decoded||(!hasDecodeCounter&&this.current()>beforeTime+.15)));
  }
- async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}}this.wakeVideoLayer();return !v.paused}
- async play(){if(this.destroyed)throw new Error('Video player destroyed');this.explicitlyPaused=false;this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}await this.v.play();this.wakeVideoLayer();return true}
+ async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}}this.wakeVideoLayer();return !v.paused}
+ async play(){if(this.destroyed)throw new Error('Video player destroyed');this.explicitlyPaused=false;this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}const v=this.v,token=this.token;await v.play();if(this.destroyed||this.v!==v||this.token!==token||!this.autoplayWanted)return false;this.wakeVideoLayer();return true}
+ async playForRecovery(timeout=2200){
+  if(this.destroyed||!this.autoplayWanted)return false;
+  const v=this.v,token=this.token;let timer;
+  try{
+   // WebKit can leave play() pending forever on a stuck native HLS seek.
+   // Keep recovery bounded so frame checks and the alternate decoder can run.
+   const played=await Promise.race([
+    Promise.resolve(this.play()).then(()=>true,()=>false),
+    new Promise(resolve=>{timer=setTimeout(()=>resolve(false),timeout)})
+   ]);
+   return played&&!this.destroyed&&this.v===v&&this.token===token&&this.autoplayWanted&&!v.paused;
+  }finally{clearTimeout(timer)}
+ }
+ async playFromControl(){
+  const token=this.token;
+  await this.play();
+  if(this.destroyed||token!==this.token||!this.autoplayWanted)return false;
+  // A paused HLS seek can freeze the decoder until the next explicit Play.
+  // Verify frames here too; low-level play() stays separate to avoid recursive
+  // recovery while rebuilding a decoder. Working video keeps its source.
+  return await this.ensureVisualPlayback();
+ }
  async reloadInlineVideo(allowSourceFallback=false){
   if(this.decoderReloadPromise)return this.decoderReloadPromise;
   const pending=(async()=>{
-   const frames=await this.rebuildInlineVideo();
+   const saved={at:this.current(),rate:this.v.playbackRate,muted:this.v.muted,volume:this.v.volume};
+   const rebuilding=this.rebuildInlineVideo(),token=this.token;
+   let frames=false;
+   try{frames=await rebuilding}catch(error){console.warn('Native video decoder rebuild failed',error)}
+   if(token!==this.token)return false;
    if(frames||!allowSourceFallback||this.backend!=='hls-native'||!this.sources?.mp4||this.destroyed||document.hidden||!this.autoplayWanted)return frames;
    // A native HLS item can keep advancing audio with no decoded
    // video even after replacement. Recover using the same shiur's alternate
    // direct video source, preserving the current clock and user's Play intent.
-   try{return await this.rebuildInlineVideo(this.sources.mp4)}catch(error){console.warn('Alternate video source recovery failed',error);return false}
+   try{return await this.rebuildInlineVideo(this.sources.mp4,{...saved,at:Math.max(saved.at,this.current())})}catch(error){console.warn('Alternate video source recovery failed',error);return false}
   })();this.decoderReloadPromise=pending;
   try{return await pending}finally{if(this.decoderReloadPromise===pending)this.decoderReloadPromise=null}
  }
- async rebuildInlineVideo(alternateSource=''){
+ async rebuildInlineVideo(alternateSource='',saved=null){
   if(this.destroyed||document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return false;
   let v=this.v;
-  const at=this.current(),rate=v.playbackRate,muted=v.muted,volume=v.volume,source=alternateSource||v.src,token=++this.token;
+  const at=saved?.at??this.current(),rate=saved?.rate??v.playbackRate,muted=saved?.muted??v.muted,volume=saved?.volume??v.volume,source=alternateSource||v.src,token=++this.token;
+  clearTimeout(this.hlsRetryTimer);
   this.loading=true;this.load.hidden=false;
   try{
    // A suspended WebKit video surface can stay frozen across load() calls.
@@ -261,8 +334,8 @@ class Player{
     const old=v,next=old.cloneNode(false);
     next.removeAttribute('src');next.removeAttribute('autoplay');next.autoplay=false;
     next.muted=true;next.volume=volume;
-    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;
-    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointermove','onpointerup','onpointercancel','onclick','ondblclick'])old[name]=null;
+    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;this.videoTouch=null;
+    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointermove','onpointerup','onpointercancel','ontouchstart','ontouchend','ontouchcancel','onclick','ondblclick'])old[name]=null;
     old.pause();old.removeAttribute('src');old.load();
     old.parentNode.replaceChild(next,old);this.v=v=next;
     this.bind();this.cb?.onVideoElementReplaced?.(old,next);
@@ -279,7 +352,8 @@ class Player{
    if(!this.autoplayWanted){v.autoplay=false;v.removeAttribute('autoplay');v.pause();return false}
    v.autoplay=true;v.setAttribute('autoplay','');
    if(this.backend==='hls-native'&&!this.nativeVariants?.length)void this.loadNativeQualities(this.url,this.token);
-   this.loading=false;await this.play();
+   this.loading=false;await this.playForRecovery();
+   if(this.destroyed||token!==this.token||!this.autoplayWanted)return false;
    return await this.waitForVisualFrame(2200);
   }finally{
    if(!this.destroyed&&token===this.token){v.muted=muted;this.loading=false;this.load.hidden=true}
@@ -296,7 +370,7 @@ class Player{
   if(this.destroyed||!this.autoplayWanted)return false;
   this.show();this.wakeVideoLayer();
   try{this.v.autoplay=true;this.v.setAttribute('autoplay','')}catch(_){}
-  if(this.v.paused)try{await this.play()}catch(_){}
+  if(this.v.paused)try{await this.playForRecovery()}catch(_){}
   if(document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return !this.v.paused;
   const nativeShell=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase());
   let frameSeen=await this.waitForVisualFrame();
@@ -316,7 +390,7 @@ class Player{
    await new Promise(resolve=>requestAnimationFrame(resolve));
    if(this.destroyed||!this.autoplayWanted)return false;
    try{if(at>0)this.v.currentTime=at}catch(_){}
-   try{await this.play()}catch(_){}
+   try{await this.playForRecovery()}catch(_){}
    frameSeen=await this.waitForVisualFrame();
    if(this.destroyed||!this.autoplayWanted)return false;
   }
@@ -326,7 +400,7 @@ class Player{
   if(this.destroyed||!this.autoplayWanted)return false;
   if(this.v.paused){
    if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}
-   try{await this.v.play()}catch(_){}
+   try{await this.playForRecovery()}catch(_){}
   }
   this.wakeVideoLayer();
   return !this.v.paused&&(!nativeShell||frameSeen);

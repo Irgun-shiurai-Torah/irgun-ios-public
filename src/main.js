@@ -1,6 +1,8 @@
 import './style.css';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
+import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
+const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
@@ -3626,11 +3628,10 @@ function homeHtml() {
       <div class="hero-photo" aria-hidden="true"></div>
       <div class="hero-overlay" aria-hidden="true"></div>
       <div class="hero-content">
-        <span class="hero-eyebrow">TORAH • LIVE • ON DEMAND</span>
         <h1>Torah, wherever you are.</h1>
         <p>Live shiurim, thousands of recordings, powerful search, schedules and your personal Torah library — in one app.</p>
         <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} Browse Shiurim</button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} Watch Live</button></div>
-        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim watched &amp; listened to</span></div>
+        <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim played</span></div>
       </div>
     </section>
 
@@ -6014,7 +6015,9 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+// Preserve the current touch target until an eligible tab gesture completes.
 function render() {
+  if (tabSwipeRenderGate.shouldDefer()) return;
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {
@@ -7325,6 +7328,7 @@ async function restoreNativeBackgroundVideo() {
   const epoch = nativeBackgroundEpoch;
   const current = () => epoch === nativeBackgroundEpoch && state.watchVimeo === player && state.watchVimeoGeneration === generation && state.watchMode === 'video' && !document.hidden;
   state.nativeBackgroundRestoreBusy = true;
+  if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
     if (!current() || native.id !== id) return;
@@ -7366,7 +7370,10 @@ async function restoreNativeBackgroundVideo() {
     if (native.playing) scheduleInlineVideoRecovery(player);
     nativeBackgroundLastSync = '';
   } catch (error) { console.warn('Native background video return failed',error); }
-  finally { state.nativeBackgroundRestoreBusy = false; }
+  finally {
+    if (player.player) player.player.backgroundReturnPending = false;
+    state.nativeBackgroundRestoreBusy = false;
+  }
 }
 
 function setupMediaSession(item) {
@@ -8408,6 +8415,21 @@ enforceIosNoZoom();
 
 if (Capacitor.isNativePlatform()) {
   LocalNotifications.addListener('localNotificationActionPerformed', event => { if(event?.notification?.extra?.route==='schedule'){ state.screen='schedule'; state.scheduleDataLoaded=false; render(); } }).catch?.(()=>{});
+}
+
+if (IS_IOS && Capacitor.isNativePlatform()) {
+  bindTabSwipes(app, {
+    onGestureState: active => tabSwipeRenderGate.setActive(active),
+    getActiveTab: () => state.screen,
+    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+      .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
+      .map(button => button.dataset.nav),
+    canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
+      && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
+      && (!state.watchVideo || state.watchMinimized)
+      && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),
+    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+  });
 }
 
 render();

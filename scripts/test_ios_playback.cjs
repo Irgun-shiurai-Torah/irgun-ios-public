@@ -289,8 +289,35 @@ function directPrototype(overrides = {}) {
   return c.window.ISTDirectMediaPlayer.prototype;
 }
 
-function decoderFixture(){
-  const p=Object.create(directPrototype());
+for(const change of ['video','source','handoff','destroy','cleared error'])test(`queued media error cannot destroy recovery after ${change}`,()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let failures=0;
+  const v={error:{code:3}};Object.assign(p,{v,token:1,loading:false,destroyed:false,fatal:()=>failures++});
+  p.bindMediaError(v);v.onerror();
+  if(change==='video')p.v={};
+  if(change==='source')p.token++;
+  if(change==='handoff')p.backgroundReturnPending=true;
+  if(change==='destroy')p.destroyed=true;
+  if(change==='cleared error')v.error=null;
+  tasks.forEach(fn=>fn());assert.equal(failures,0);
+});
+test('current media errors still reach failure handling after the deferred callback',()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let failures=0;
+  const v={error:{code:3}};Object.assign(p,{v,token:1,loading:false,destroyed:false,fatal:()=>failures++});
+  p.bindMediaError(v);v.onerror();tasks.forEach(fn=>fn());assert.equal(failures,1);
+});
+test('late HLS retry rejection cannot notify or replace a newer recovered source',async()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let reject,notices=0;
+  Object.assign(p,{token:1,v:{paused:false},sources:{hls:'hls',mp4:'mp4'},backend:'hls-native',hlsFatalRetries:0,
+    autoplayWanted:true,load:{},current:()=>54,
+    hlsLoad:()=>{p.token++;return new Promise((_resolve,fail)=>{reject=fail;});},notify:()=>notices++});
+  p.fatal(new Error('old HLS failure'));tasks[0]();
+  p.token++;p.v={paused:false};p.backend='mp4';
+  reject(new Error('late retry error'));await flush();
+  assert.equal(notices,0);assert.equal(p.backend,'mp4');assert.equal(tasks.length,1);
+});
+
+function decoderFixture(overrides={}){
+  const p=Object.create(directPrototype(overrides));
   const loaded=[],replaced=[];let bindings=0;
   const parent={child:null,replaceChild(next,old){assert.equal(this.child,old);this.child=next;next.parentNode=this;old.parentNode=null;}};
   const make=src=>({currentTime:0,playbackRate:1,volume:.7,muted:false,paused:true,webkitPresentationMode:'inline',src,
@@ -364,6 +391,39 @@ test('playing double tap checks frames even when the media element is not paused
     seekTo:async x=>{assert.equal(x,45);},play:async()=>{plays++;},
     ensureVisualPlayback:async()=>{checks++;return true;},showSeekFeedback:()=>{}});
   await p.seekBy(15);assert.equal(checks,1);assert.equal(plays,0);
+});
+
+function pausedSeekFixture(){
+  const {p}=decoderFixture();
+  p.sources={mp4:'https://example.test/shiur.mp4'};p.quality={};p.v.readyState=4;
+  Object.assign(p,{show:()=>{},wakeVideoLayer:()=>{},c:{appendChild:()=>{}},r:{},
+    relatchInlineVideoLayer:async()=>true,showSeekFeedback:()=>{},
+    play:async()=>{p.explicitlyPaused=false;p.autoplayWanted=true;p.v.paused=false;}});
+  p.pause();return p;
+}
+
+test('Play after paused forward/back seeks repairs frameless HLS without losing position or settings',async()=>{
+  const p=pausedSeekFixture();p.waitForVisualFrame=async()=>p.backend==='mp4';
+  await p.seekBy(15);await p.seekBy(-15);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.paused,true);assert.equal(p.decoderReloads,undefined);
+  assert.equal(await p.playFromControl(),true);
+  assert.equal(p.backend,'mp4');assert.equal(p.decoderReloads,2);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);
+  assert.equal(p.v.volume,.7);assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);
+});
+
+test('Play after a paused seek keeps HLS when frames already move',async()=>{
+  const p=pausedSeekFixture();p.waitForVisualFrame=async()=>true;
+  await p.seekBy(15);assert.equal(await p.playFromControl(),true);
+  assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,undefined);assert.equal(p.v.currentTime,77);
+});
+
+test('Pause during explicit Play frame verification cancels recovery and keeps the seek position',async()=>{
+  const p=pausedSeekFixture();await p.seekBy(15);
+  p.waitForVisualFrame=async()=>{p.pause();return false;};
+  assert.equal(await p.playFromControl(),false);
+  assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,undefined);
+  assert.equal(p.v.currentTime,77);assert.equal(p.v.paused,true);assert.equal(p.autoplayWanted,false);
 });
 
 test('Pause during a seek cancels visual recovery and autoplay',async()=>{
@@ -558,8 +618,13 @@ test('touch double taps seek even when WebKit coalesces compatibility clicks',as
   const v={style:{},getBoundingClientRect:()=>({left:0,width:400}),setPointerCapture:()=>{}};
   Object.assign(p,{v,playBtn:{onclick:()=>toggles++},seekBy:x=>seeks.push(x),cb:{}});
   p.bindVideoGestures();
-  const tap=x=>{v.onpointerdown({pointerId:1,pointerType:'touch',clientX:x,clientY:50});v.onpointerup({pointerId:1,clientX:x,clientY:50});};
-  tap(320);v.onclick({clientX:320});tap(320);v.ondblclick({preventDefault:()=>{}});
+  const tap=(x,cancel=false)=>{
+    const t={identifier:1,clientX:x,clientY:50};v.ontouchstart({touches:[t]});
+    v.onpointerdown({pointerId:1,pointerType:'touch',clientX:x,clientY:50});
+    if(cancel)v.onpointercancel();else v.onpointerup({pointerId:1,pointerType:'touch',clientX:x,clientY:50});
+    v.ontouchend({touches:[],changedTouches:[t]});
+  };
+  tap(320);v.onclick({clientX:320});tap(320,true);v.ondblclick({preventDefault:()=>{}});
   tap(80);tap(80);v.onclick({clientX:80});
   assert.deepEqual(seeks,[15,-15]);assert.equal(toggles,0);
   tasks.forEach((task,i)=>{if(!cancelled.has(i+1))task();});assert.equal(toggles,0);
@@ -604,4 +669,50 @@ for(const backend of ['hlsLoad','mp4'])test(`Pause cancels late ${backend} metad
     loadNativeQualities:async()=>{},play:async()=>{plays++;p.v.paused=false;}});
   const loading=p[backend]('https://example.test/video',62,true);p.pause();resolveMeta();await loading;
   assert.equal(plays,0);assert.equal(p.autoplayWanted,false);assert.equal(p.explicitlyPaused,true);assert.equal(p.v.currentTime,62);assert.equal(p.v.paused,true);
+});
+
+
+function stalledRecoveryFixture() {
+  const timers=[];
+  const f=decoderFixture({setTimeout:fn=>{timers.push(fn);return timers.length;},clearTimeout:()=>{}});
+  f.p.sources={mp4:'https://example.test/shiur.mp4'};f.p.quality={};
+  f.p.play=()=>f.p.backend==='hls-native'?new Promise(()=>{}):Promise.resolve(f.p.v.paused=false);
+  f.p.waitForVisualFrame=async()=>f.p.backend==='mp4';
+  return {...f,timers};
+}
+
+test('a never-settling HLS Play cannot block same-shiur MP4 decoder recovery',async()=>{
+  const {p,timers}=stalledRecoveryFixture();
+  const pending=p.reloadInlineVideo(true);await flush();
+  assert.equal(timers.length,1);timers[0]();
+  assert.equal(await pending,true);assert.equal(p.backend,'mp4');assert.equal(p.decoderReloadPromise,null);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);
+  assert.equal(p.v.volume,.7);assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);
+});
+
+test('Pause during a pending HLS Play prevents timeout recovery from starting MP4',async()=>{
+  const {p,timers}=stalledRecoveryFixture();
+  const pending=p.reloadInlineVideo(true);await flush();p.pause();timers[0]();
+  assert.equal(await pending,false);assert.equal(p.backend,'hls-native');assert.equal(p.v.paused,true);
+  assert.equal(p.autoplayWanted,false);assert.equal(p.decoderReloads,1);
+});
+
+test('a newer source cancels alternate recovery from an old pending Play',async()=>{
+  const {p,timers}=stalledRecoveryFixture();
+  const pending=p.reloadInlineVideo(true);await flush();p.token++;p.backend='mp4';timers[0]();
+  assert.equal(await pending,false);assert.equal(p.decoderReloads,1);
+});
+
+test('moving HLS keeps its source even if its Play promise has not settled',async()=>{
+  const {p,timers}=stalledRecoveryFixture();p.waitForVisualFrame=async()=>true;
+  const pending=p.reloadInlineVideo(true);await flush();p.v.paused=false;timers[0]();
+  assert.equal(await pending,true);assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,1);
+});
+
+test('failed HLS metadata recovers MP4 without resetting position or settings',async()=>{
+  const {p}=decoderFixture();p.sources={mp4:'https://example.test/shiur.mp4'};p.quality={};
+  p.meta=async()=>{if(p.backend==='hls-native')throw new Error('metadata timed out');};
+  assert.equal(await p.reloadInlineVideo(true),true);assert.equal(p.backend,'mp4');
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);assert.equal(p.v.volume,.7);
+  assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);
 });

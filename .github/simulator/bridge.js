@@ -8,6 +8,24 @@ let simulatorFrames = 0;
 let simulatorFrameTime = 0;
 let simulatorLastFrameAt = 0;
 let simulatorFrameRequest = 0;
+const simulatorGestures = [];
+const simulatorWarnings = [];
+const simulatorOriginalWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  if (/video|HLS|decoder|native background|Vimeo/i.test(String(args[0]||''))) {
+    simulatorWarnings.push({at:Date.now(),message:String(args[0]||''),error:args.find(x=>x instanceof Error)?.message||''});
+    if(simulatorWarnings.length>12)simulatorWarnings.shift();
+  }
+  simulatorOriginalWarn(...args);
+};
+for (const type of ['pointerdown','pointerup','pointercancel','touchstart','touchend','touchcancel']) {
+  document.addEventListener(type,event=>{
+    if(!event.target?.closest('#directMediaPlayer,.content,.watch-overlay,.watch-top'))return;
+    const point=event.changedTouches?.[0]||event;
+    simulatorGestures.push({type,at:Date.now(),x:point.clientX,y:point.clientY,target:event.target.id,screen:state.screen});
+    if(simulatorGestures.length>20)simulatorGestures.shift();
+  },{capture:true,passive:true});
+}
 window.addEventListener('error', event => { simulatorError = String(event.message || 'JavaScript error'); });
 window.addEventListener('unhandledrejection', event => { simulatorError = String(event.reason?.message || event.reason); });
 
@@ -126,6 +144,26 @@ window.ISTSimulator = {
     const videoBox = video?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
+    const contentBox = document.querySelector('.content')?.getBoundingClientRect();
+    let tabSwipeY = 0;
+    // Pick a real content row after layout; refuse header, input and carousel hits.
+    for (let y = Math.max(180, contentBox?.top + 24 || 180); y < innerHeight - 140; y += 20) {
+      const safe = [.2,.8].every(x => {
+        const hit = document.elementFromPoint(innerWidth*x,y);
+        if (!hit?.closest('.content') || hit.closest('input,textarea,select,button,video,iframe,[role="dialog"]')) return false;
+        for(let node=hit;node && node.closest('.content');node=node.parentElement) {
+          if (/auto|scroll/.test(getComputedStyle(node).overflowX) && node.scrollWidth>node.clientWidth+2) return false;
+        }
+        return true;
+      });
+      if(safe){tabSwipeY=y;break;}
+    }
+    const playerButtons = Object.fromEntries(['dmPlay','dmFull','watchMinimize'].map(id => {
+      const el=id==='watchMinimize'?[...document.querySelectorAll('[data-minimize-watch]')].find(simulatorVisible):document.getElementById(id), b=el?.getBoundingClientRect();
+      const x=b?b.left+b.width/2:0,y=b?b.top+b.height/2:0;
+      return [id,{label:el?.getAttribute('aria-label')||'',x,y,
+        hittable:simulatorVisible(el)&&Boolean(el?.contains(document.elementFromPoint(x,y)))}];
+    }));
     if (video !== simulatorFrameVideo) {
       simulatorFrameVideo = video;
       simulatorFrames = 0;
@@ -149,11 +187,19 @@ window.ISTSimulator = {
     }
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
+      screen: state.screen,
+      observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
+      gestures: simulatorGestures, warnings: simulatorWarnings,
+      directFallbackId: String(state.watchDirectFallbackId||''),
+      nativeRestoreBusy: Boolean(state.nativeBackgroundRestoreBusy),
+      initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),
       opening: simulatorOpening, error: simulatorError,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: state.watchVimeo?.player?.backend || '',
+      sampleId: this.selectedSampleId,
+      recoveryMP4: Boolean(state.watchVimeo?.player?.backend==='mp4' && state.watchVimeo?.player?.decoderReloads>0),
       playIntent: Boolean(state.watchVimeo?.player?.autoplayWanted),
       decoderReloads: Number(state.watchVimeo?.player?.decoderReloads) || 0,
       decoderLoading: Boolean(state.watchVimeo?.player?.loading),
