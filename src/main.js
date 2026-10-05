@@ -7354,7 +7354,7 @@ async function restoreNativeBackgroundVideo() {
       await player.player?.visualPlaybackPromise?.catch(() => {});
       if (!current()) return;
       if (wantsPlay()) {
-        const frames = await player.player?.reloadInlineVideo?.();
+        const frames = await player.player?.reloadInlineVideo?.(true);
         if (!current()) return;
         if (wantsPlay() && frames !== true) await player.ensureVisualPlayback(true);
       }

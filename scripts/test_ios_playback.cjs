@@ -317,6 +317,24 @@ test('decoder reload replaces the frozen surface and preserves live clock, sourc
   assert.equal(p.v.muted,false);assert.equal(p.decoderReloads,1);
 });
 
+test('Home recovery changes a frameless HLS item to the same shiur MP4 while preserving position and settings',async()=>{
+  const {p}=decoderFixture();p.sources={mp4:'https://example.test/shiur.mp4'};p.quality={};
+  p.waitForVisualFrame=async()=>p.backend==='mp4';
+  assert.equal(await p.reloadInlineVideo(true),true);
+  assert.equal(p.backend,'mp4');assert.equal(p.v.src,p.sources.mp4);assert.equal(p.url,p.sources.mp4);
+  assert.equal(p.decoderReloads,2);assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);
+  assert.equal(p.v.volume,.7);assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);assert.equal(p.quality.hidden,true);
+});
+test('Home recovery keeps working HLS and does not switch sources unnecessarily',async()=>{
+  const {p}=decoderFixture();p.sources={mp4:'https://example.test/shiur.mp4'};
+  assert.equal(await p.reloadInlineVideo(true),true);assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,1);
+});
+test('Pause while checking HLS frames cancels the Home alternate-source autoplay',async()=>{
+  const {p}=decoderFixture();p.sources={mp4:'https://example.test/shiur.mp4'};
+  p.waitForVisualFrame=async()=>{p.pause();return false;};
+  assert.equal(await p.reloadInlineVideo(true),false);assert.equal(p.backend,'hls-native');assert.equal(p.decoderReloads,1);assert.equal(p.v.paused,true);
+});
+
 test('missing frames trigger exactly one decoder reload after layer recovery',async()=>{
   const p=Object.create(directPrototype());
   let reloads=0;
