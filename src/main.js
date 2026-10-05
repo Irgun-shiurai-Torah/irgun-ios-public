@@ -7325,6 +7325,7 @@ async function restoreNativeBackgroundVideo() {
   const epoch = nativeBackgroundEpoch;
   const current = () => epoch === nativeBackgroundEpoch && state.watchVimeo === player && state.watchVimeoGeneration === generation && state.watchMode === 'video' && !document.hidden;
   state.nativeBackgroundRestoreBusy = true;
+  if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
     if (!current() || native.id !== id) return;
@@ -7366,7 +7367,10 @@ async function restoreNativeBackgroundVideo() {
     if (native.playing) scheduleInlineVideoRecovery(player);
     nativeBackgroundLastSync = '';
   } catch (error) { console.warn('Native background video return failed',error); }
-  finally { state.nativeBackgroundRestoreBusy = false; }
+  finally {
+    if (player.player) player.player.backgroundReturnPending = false;
+    state.nativeBackgroundRestoreBusy = false;
+  }
 }
 
 function setupMediaSession(item) {

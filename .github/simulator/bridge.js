@@ -9,6 +9,15 @@ let simulatorFrameTime = 0;
 let simulatorLastFrameAt = 0;
 let simulatorFrameRequest = 0;
 const simulatorGestures = [];
+const simulatorWarnings = [];
+const simulatorOriginalWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  if (/video|HLS|decoder|native background|Vimeo/i.test(String(args[0]||''))) {
+    simulatorWarnings.push({at:Date.now(),message:String(args[0]||''),error:args.find(x=>x instanceof Error)?.message||''});
+    if(simulatorWarnings.length>12)simulatorWarnings.shift();
+  }
+  simulatorOriginalWarn(...args);
+};
 for (const type of ['pointerdown','pointerup','pointercancel','touchstart','touchend','touchcancel']) {
   document.addEventListener(type,event=>{
     if(!event.target?.closest('#directMediaPlayer'))return;
@@ -180,7 +189,10 @@ window.ISTSimulator = {
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
-      gestures: simulatorGestures,
+      gestures: simulatorGestures, warnings: simulatorWarnings,
+      directFallbackId: String(state.watchDirectFallbackId||''),
+      nativeRestoreBusy: Boolean(state.nativeBackgroundRestoreBusy),
+      initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),
       opening: simulatorOpening, error: simulatorError,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',

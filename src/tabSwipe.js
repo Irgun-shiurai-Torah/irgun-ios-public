@@ -5,6 +5,21 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
   const view = root.ownerDocument.defaultView;
   const excluded = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), video, iframe, .direct-media-player, .watch-overlay, .mini-player, .sheet-backdrop, .bottom-nav, [role="dialog"]';
   const reset = () => { gesture = null; };
+  const commit = (event, touch) => {
+    const start = gesture;
+    if (!start || !canNavigate() || getActiveTab() !== start.tab) return reset();
+    const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+    // Commit during movement: native scrolling or a reactive render can cancel
+    // touchend after the user's horizontal intent is already unambiguous.
+    reset();
+    const tabs = getTabs(), index = tabs.indexOf(start.tab);
+    const next = index < 0 ? null : tabs[index + (dx < 0 ? 1 : -1)];
+    if (!next) return;
+    suppressClickUntil = Date.now() + 600;
+    if (event.cancelable) event.preventDefault();
+    navigate(next);
+  };
   const allowedTarget = target => {
     if (!target?.closest?.('.content') || target.closest(excluded)) return false;
     for (let node = target; node && node !== root; node = node.parentElement) {
@@ -29,22 +44,13 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     if (!gesture.horizontal && dy > 12 && dy >= dx) return reset();
     if (dx > 16 && dx > dy * 1.5) gesture.horizontal = true;
     if (gesture.horizontal && event.cancelable) event.preventDefault();
+    if (gesture.horizontal) commit(event, touch);
   }, { passive: false });
   root.addEventListener('touchend', event => {
-    const start = gesture;
+    if (!gesture || event.touches.length) return reset();
+    const touch = Array.from(event.changedTouches).find(item => item.identifier === gesture.id);
+    if (touch) commit(event, touch);
     reset();
-    if (!start || event.touches.length || !canNavigate() || getActiveTab() !== start.tab) return;
-    const touch = Array.from(event.changedTouches).find(item => item.identifier === start.id);
-    if (!touch) return;
-    const dx = touch.clientX - start.x, dy = touch.clientY - start.y;
-    if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
-    // Tabs are ordered by their physical positions, including the Hebrew layout.
-    const tabs = getTabs(), index = tabs.indexOf(start.tab);
-    const next = index < 0 ? null : tabs[index + (dx < 0 ? 1 : -1)];
-    if (!next) return;
-    suppressClickUntil = Date.now() + 600;
-    if (event.cancelable) event.preventDefault();
-    navigate(next);
   }, { passive: false });
   root.addEventListener('touchcancel', reset, { passive: true });
   root.addEventListener('click', event => {

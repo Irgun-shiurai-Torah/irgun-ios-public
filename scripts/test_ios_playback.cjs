@@ -289,6 +289,33 @@ function directPrototype(overrides = {}) {
   return c.window.ISTDirectMediaPlayer.prototype;
 }
 
+for(const change of ['video','source','handoff','destroy','cleared error'])test(`queued media error cannot destroy recovery after ${change}`,()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let failures=0;
+  const v={error:{code:3}};Object.assign(p,{v,token:1,loading:false,destroyed:false,fatal:()=>failures++});
+  p.bindMediaError(v);v.onerror();
+  if(change==='video')p.v={};
+  if(change==='source')p.token++;
+  if(change==='handoff')p.backgroundReturnPending=true;
+  if(change==='destroy')p.destroyed=true;
+  if(change==='cleared error')v.error=null;
+  tasks.forEach(fn=>fn());assert.equal(failures,0);
+});
+test('current media errors still reach failure handling after the deferred callback',()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let failures=0;
+  const v={error:{code:3}};Object.assign(p,{v,token:1,loading:false,destroyed:false,fatal:()=>failures++});
+  p.bindMediaError(v);v.onerror();tasks.forEach(fn=>fn());assert.equal(failures,1);
+});
+test('late HLS retry rejection cannot notify or replace a newer recovered source',async()=>{
+  const tasks=[],p=Object.create(directPrototype({setTimeout:fn=>tasks.push(fn)}));let reject,notices=0;
+  Object.assign(p,{token:1,v:{paused:false},sources:{hls:'hls',mp4:'mp4'},backend:'hls-native',hlsFatalRetries:0,
+    autoplayWanted:true,load:{},current:()=>54,
+    hlsLoad:()=>{p.token++;return new Promise((_resolve,fail)=>{reject=fail;});},notify:()=>notices++});
+  p.fatal(new Error('old HLS failure'));tasks[0]();
+  p.token++;p.v={paused:false};p.backend='mp4';
+  reject(new Error('late retry error'));await flush();
+  assert.equal(notices,0);assert.equal(p.backend,'mp4');assert.equal(tasks.length,1);
+});
+
 function decoderFixture(){
   const p=Object.create(directPrototype());
   const loaded=[],replaced=[];let bindings=0;

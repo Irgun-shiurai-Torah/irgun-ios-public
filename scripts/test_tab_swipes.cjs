@@ -85,3 +85,13 @@ test('committed swipe suppresses its compatibility click, preserving keyboard ac
   assert.equal(f.emit('click', [], [], { detail: 0 }).prevented, false);
   assert.deepEqual(f.visits, ['shiurim']);
 });
+
+for (const left of [true,false]) test(`tab swipe commits once before a cancelled release, left=${left}`,async()=>{
+  const f=await fixture();f.setActive('live');
+  f.emit('touchstart',[f.touch(220,200)]);
+  f.emit('touchmove',[f.touch(left?100:340,201)]);
+  assert.deepEqual(f.visits,[left?'library':'shiurim']);
+  f.emit('touchcancel',[]);
+  f.emit('touchend',[],[f.touch(left?80:360,201)]);
+  assert.equal(f.visits.length,1);
+});
