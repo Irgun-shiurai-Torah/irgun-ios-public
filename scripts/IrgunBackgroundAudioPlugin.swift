@@ -3,6 +3,7 @@ import Capacitor
 import AVFoundation
 import MediaPlayer
 import UIKit
+import WebKit
 
 // Prepare while the WebView is active. Home/lock starts AVPlayer from a native
 // lifecycle notification, so playback and seeking do not require suspended JS.
@@ -130,9 +131,24 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc public func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             if let id = call.getString("id"), id != self.itemID { call.resolve(); return }
+            let releaseToWebVideo = self.active && (call.getBool("releaseToWebVideo") ?? false)
             self.generation += 1; self.player?.pause(); self.active = false; self.seeking = false
             self.removeRemoteCommands()
             if call.getBool("clear") ?? false { self.desiredPlaying = false; self.clearPlayer(); self.itemID = ""; self.source = "" }
+            if releaseToWebVideo {
+                // The WebView owns its media session separately. Pause/dispose
+                // native audio before allowing that interrupted owner to resume.
+                do { try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+                catch { NSLog("Irgun background session release failed: %@", String(describing: error)) }
+                if let webView = self.bridge?.webView {
+                    webView.setAllMediaPlaybackSuspended(false) {
+                        webView.setNeedsLayout()
+                        webView.layoutIfNeeded()
+                        call.resolve()
+                    }
+                    return
+                }
+            }
             call.resolve()
         }
     }

@@ -416,6 +416,15 @@ test('Home return rebuilds the video decoder after releasing native audio',async
   assert.deepEqual(f.calls.map(x=>x[0]),['stop','reload','mute']);
 });
 
+test('Home return pauses WebKit without cancelling Play before releasing the native session',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;
+  f.p.player.pause=stop=>{assert.equal(stop,false);f.p.video.paused=true;f.calls.push(['pause-web']);};
+  f.p.player.reloadInlineVideo=async()=>{assert.equal(f.calls[1][0],'stop');assert.equal(f.calls[1][1].releaseToWebVideo,true);assert.equal(f.p.player.autoplayWanted,true);f.p.video.paused=false;f.calls.push(['reload']);return true;};
+  await f.context.restoreNativeBackgroundVideo();
+  assert.deepEqual(f.calls.map(x=>x[0]),['pause-web','stop','reload','mute']);
+  assert.equal(f.p.video.currentTime,80);assert.equal(f.p.video.paused,false);
+});
+
 test('Pause during decoder reload keeps the saved clock without restarting',async()=>{
   const {p}=decoderFixture();let plays=0;
   p.meta=async()=>{p.pause();};p.play=async()=>{plays++;};

@@ -7340,7 +7340,10 @@ async function restoreNativeBackgroundVideo() {
     if (!current()) return;
     // Dispose the background AVPlayer item before seeking/reloading WebKit.
     // Pausing it alone retains the decoder that played while we were hidden.
-    await IrgunBackgroundAudio.stop({id,clear:true});
+    // Stop the WebKit audio object too before releasing the native session.
+    // Pause(false) preserves the user's Play/Pause intent across this handoff.
+    if (native.active) player.player?.pause?.(false);
+    await IrgunBackgroundAudio.stop({id,clear:true,releaseToWebVideo:true});
     if (!current()) return;
     if (native.active) {
       await player.setCurrentTime(native.position);
