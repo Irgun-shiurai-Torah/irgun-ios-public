@@ -146,6 +146,23 @@ test('reopening during discovery promotes Play and preserves requested seek',asy
   assert.equal(f.pending.length,1);
 });
 
+test('late Watch tap promotes the real direct Play intent after render-first discovery',async()=>{
+  const f=fixture(),init=f.context.initWatchVimeo(false),p=f.player('loading');
+  p.player={autoplayWanted:false};
+  p.ensureVisualPlayback=async()=>{p.video.paused=!p.player.autoplayWanted;return !p.video.paused;};
+  await f.context.initWatchVimeo(true);
+  f.pending[0].resolve({player:p,backend:'direct'});await init;
+  assert.equal(p.player.autoplayWanted,true);assert.equal(p.video.paused,false);
+});
+test('Pause pressed during initialization survives its late automatic start',async()=>{
+  const f=fixture(),init=f.context.initWatchVimeo(true),p=f.player('loading');
+  p.player={autoplayWanted:true};
+  f.context.setVimeoHandoffMuted=async()=>{p.player.explicitlyPaused=true;p.player.autoplayWanted=false;p.video.paused=true;};
+  p.ensureVisualPlayback=async()=>{if(!p.player.autoplayWanted)return false;throw new Error('must not resume');};
+  f.pending[0].resolve({player:p,backend:'direct'});await init;
+  assert.equal(p.player.autoplayWanted,false);assert.equal(p.video.paused,true);assert.equal(f.state.watchVideoPlaying,false);
+});
+
 test('absence of video is never mistaken for PiP',()=>{
   const f=fixture();
   f.context.keepVideoPlayingOnBackground('home');
@@ -334,7 +351,7 @@ test('late PiP pause is recovered, but an explicit Pause cancels recovery',async
   p.ensureVisualPlayback=async()=>{recoveries++;p.video.paused=false;};
   f.state.watchVimeo=p;
   f.context.scheduleInlineVideoRecovery(p);
-  assert.equal(tasks.length,3);
+  assert.equal(tasks.length,5);
   p.video.paused=true; // native pause arriving after foreground restoration
   tasks[1](); await flush();
   assert.equal(p.video.paused,false);
@@ -500,4 +517,14 @@ test('explicit Pause prevents native autoplay from restarting a buffered seek',a
   Object.assign(p,{v,autoplayWanted:true,token:1,current:()=>time,seekTo:async x=>{time=x;if(v.autoplay)v.paused=false;},play:async()=>{plays++;v.paused=false;},showSeekFeedback:()=>{}});
   p.pause();await p.seekBy(-15);
   assert.equal(time,15);assert.equal(v.paused,true);assert.equal(plays,0);
+});
+
+for(const backend of ['hlsLoad','mp4'])test(`Pause cancels late ${backend} metadata autoplay`,async()=>{
+  const p=Object.create(directPrototype());let resolveMeta,plays=0;
+  Object.assign(p,{token:0,load:{},err:{},destroyed:false,autoplayWanted:true,
+    v:{paused:true,canPlayType:()=>true,setAttribute:()=>{},removeAttribute:()=>{},load:()=>{},pause(){this.paused=true;}},
+    clear:()=>{},meta:()=>new Promise(resolve=>{resolveMeta=resolve;}),seekTo:async x=>{p.v.currentTime=x;},
+    loadNativeQualities:async()=>{},play:async()=>{plays++;p.v.paused=false;}});
+  const loading=p[backend]('https://example.test/video',62,true);p.pause();resolveMeta();await loading;
+  assert.equal(plays,0);assert.equal(p.autoplayWanted,false);assert.equal(p.explicitlyPaused,true);assert.equal(p.v.currentTime,62);assert.equal(p.v.paused,true);
 });

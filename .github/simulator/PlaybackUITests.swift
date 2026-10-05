@@ -83,10 +83,8 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func tapWebButton(_ label: String) throws {
-        if ["Keep playing at bottom of app", "Picture in Picture"].contains(label) {
-            let hide = app.buttons["ist-simulator-hide-controls"]
-            if hide.exists && hide.isHittable { hide.tap() }
-        }
+        let hide = app.buttons["ist-simulator-hide-controls"]
+        if hide.exists && hide.isHittable { hide.tap() }
         let button = app.webViews.buttons.matching(identifier: label).firstMatch
         let predicate = NSPredicate(format: "exists == true AND hittable == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: button)
@@ -96,15 +94,7 @@ final class PlaybackUITests: XCTestCase {
             throw Failure.timedOut(label)
         }
         button.tap()
-        // Retry only a missed harness tap, never an accepted/failed app open.
-        let deadline = Date().addingTimeInterval(4)
-        while Date() < deadline {
-            let state = snapshot()
-            if state["opening"] as? Bool == true || !(state["id"] as? String ?? "").isEmpty || !(state["error"] as? String ?? "").isEmpty { break }
-            Thread.sleep(forTimeInterval: 0.3)
-        }
-        let accepted = snapshot()
-        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
+
     }
 
     private func openSample() throws {
@@ -132,7 +122,12 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func assertMovingVideo() throws {
-        let before = snapshot()
+        let before = try waitFor("Video must settle before frame sampling") {
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
+            $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
+            self.number($0, "frames") >= 1 && self.number($0, "frameTime") > 0
+        }
         XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
         _ = try waitFor("Video frames and media clock must advance") {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
@@ -189,7 +184,7 @@ final class PlaybackUITests: XCTestCase {
         try assertMovingVideo()
         let before = number(snapshot(), "videoTime")
         XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval: 12)
+        Thread.sleep(forTimeInterval: 20)
         let home = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         home.name = "home-during-playback"
         home.lifetime = .keepAlways

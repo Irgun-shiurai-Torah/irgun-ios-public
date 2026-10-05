@@ -7737,7 +7737,7 @@ function keepVideoPlayingOnBackground(source) {
 function scheduleInlineVideoRecovery(player) {
   const generation = state.watchVimeoGeneration;
   for (const timer of player.inlineRecoveryTimers || []) clearTimeout(timer);
-  player.inlineRecoveryTimers = [250, 1000, 2500].map(delay => setTimeout(() => {
+  player.inlineRecoveryTimers = [250, 1000, 2500, 5000, 10000].map(delay => setTimeout(() => {
     if (generation !== state.watchVimeoGeneration || state.watchVimeo !== player ||
         state.watchMode !== 'video' || document.hidden || player.player?.autoplayWanted === false) return;
     if (player.video?.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === player.video) return;
@@ -8034,6 +8034,9 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       return;
     }
     state.watchVimeo = player;
+    // A Watch tap can arrive after render has already started source discovery.
+    // Promote that Play request, while preserving an explicit Pause during load.
+    if (initialization.userInitiated && player.player && !player.player.explicitlyPaused) player.player.autoplayWanted = true;
     state.watchVimeoReady = true;
     await setVimeoHandoffMuted(player, false);
     if (!isCurrentPlayer()) return;
