@@ -51,7 +51,7 @@ window.ISTSimulator = {
             else setTimeout(check,250);
           }; check();
         });
-        if (page === 'audio-player') { state.playerOpen = true; render(); }
+        if (page === 'audio-player') { state.screen='home'; state.playerOpen = true; render(); }
         else if (page === 'mini-player') { state.screen='home'; render(); await minimizeWatchToPersistent(); }
         else if (page === 'fullscreen') { if (state.watchMinimized) await expandPersistentWatch(); document.getElementById('dmFull')?.click(); }
       } else {
@@ -74,6 +74,17 @@ window.ISTSimulator = {
         Promise.allSettled([...document.images].filter(simulatorVisible).map(image=>image.decode?.())),
         new Promise(resolve=>setTimeout(resolve,8000))
       ]);
+      if (['watch-video','fullscreen'].includes(page)) {
+        await new Promise((resolve,reject)=>{
+          const start=Date.now(),check=()=>{
+            this.snapshot();
+            const player=state.watchVimeo?.player;
+            if(simulatorFrames>0&&simulatorVisible(player?.v)&&!player?.loading&&player?.load?.hidden!==false)resolve();
+            else if(Date.now()-start>30000)reject(new Error('Screenshot video has no presented frame or is still loading'));
+            else setTimeout(check,250);
+          };check();
+        });
+      }
       this.storeReady = true;
     } catch(error) { this.storeError=String(error.message||error); }
   },
@@ -143,6 +154,10 @@ window.ISTSimulator = {
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: state.watchVimeo?.player?.backend || '',
+      playIntent: Boolean(state.watchVimeo?.player?.autoplayWanted),
+      decoderReloads: Number(state.watchVimeo?.player?.decoderReloads) || 0,
+      decoderLoading: Boolean(state.watchVimeo?.player?.loading),
+      visualRecoveryPending: Boolean(state.watchVimeo?.player?.visualPlaybackPromise),
       playerCount: document.querySelectorAll('#directVideoElement').length,
       initializing: Boolean(state.watchVimeoInitialization),
       videoTime: Number(video?.currentTime) || 0, videoPlaying: Boolean(video && !video.paused && !video.ended),

@@ -267,27 +267,37 @@ test('delayed Play callback cannot overwrite a newer shiur position',async()=>{
 
 function directPrototype(overrides = {}) {
   const c=vm.createContext({window:{},location:{protocol:'capacitor:',hostname:'localhost'},
-    document:{hidden:false},requestAnimationFrame:callback=>callback(),console,...overrides});
+    document:{hidden:false},requestAnimationFrame:callback=>callback(),setTimeout,clearTimeout,console,...overrides});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/direct-media.js'),'utf8'),c);
   return c.window.ISTDirectMediaPlayer.prototype;
 }
 
-test('decoder reload preserves element, live position, source and speed',async()=>{
+function decoderFixture(){
   const p=Object.create(directPrototype());
-  const loaded=[];
-  const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
-    src:'https://example.test/720p.m3u8',removeAttribute(name){if(name==='src')this.src='';},setAttribute:()=>{},
-    load(){loaded.push(this.src);this.currentTime=0;this.paused=true;}};
+  const loaded=[],replaced=[];let bindings=0;
+  const parent={child:null,replaceChild(next,old){assert.equal(this.child,old);this.child=next;next.parentNode=this;old.parentNode=null;}};
+  const make=src=>({currentTime:0,playbackRate:1,volume:.7,muted:false,paused:true,webkitPresentationMode:'inline',src,
+    removeAttribute(name){if(name==='src')this.src='';},setAttribute:()=>{},
+    cloneNode(){return make(this.src);},pause(){this.paused=true;},
+    load(){loaded.push(this.src);this.currentTime=0;this.paused=true;}});
+  const v=make('https://example.test/720p.m3u8');v.currentTime=62;v.playbackRate=1.5;v.paused=false;v.parentNode=parent;parent.child=v;
   Object.assign(p,{v,token:1,backend:'hls-native',destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},loadNativeQualities:async()=>{},
-    current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},
-    play:async()=>{v.paused=false;},waitForVisualFrame:async()=>true});
+    cb:{onVideoElementReplaced:(old,next)=>replaced.push([old,next])},bind:()=>{bindings++;},
+    current:()=>p.v.currentTime,seekTo:async x=>{p.v.currentTime=x;},
+    play:async()=>{p.v.paused=false;},waitForVisualFrame:async()=>true});
+  return {p,v,parent,loaded,replaced,bindings:()=>bindings};
+}
+test('decoder reload replaces the frozen surface and preserves live clock, source and speed',async()=>{
+  const {p,v,parent,loaded,replaced,bindings}=decoderFixture();
   assert.equal(await p.reloadInlineVideo(),true);
-  assert.equal(p.v,v);
-  assert.equal(v.currentTime,62);
-  assert.equal(v.src,'https://example.test/720p.m3u8');
+  assert.notEqual(p.v,v);assert.equal(parent.child,p.v);assert.equal(v.parentNode,null);
+  assert.equal(v.paused,true);assert.equal(v.src,'');
+  assert.deepEqual(replaced,[[v,p.v]]);assert.equal(bindings(),1);
+  assert.equal(p.v.currentTime,62);
+  assert.equal(p.v.src,'https://example.test/720p.m3u8');
   assert.deepEqual(loaded,['','https://example.test/720p.m3u8']);
-  assert.equal(v.playbackRate,1.5);
-  assert.equal(v.muted,false);
+  assert.equal(p.v.playbackRate,1.5);assert.equal(p.v.volume,.7);
+  assert.equal(p.v.muted,false);assert.equal(p.decoderReloads,1);
 });
 
 test('missing frames trigger exactly one decoder reload after layer recovery',async()=>{
@@ -304,6 +314,7 @@ test('missing frames trigger exactly one decoder reload after layer recovery',as
 
 test('overlapping frame recovery shares one operation',async()=>{
   const p=Object.create(directPrototype());
+  p.autoplayWanted=true;
   let resolve,calls=0;
   p.recoverVisualPlayback=()=>{calls++;return new Promise(done=>{resolve=done;});};
   const first=p.ensureVisualPlayback(), second=p.ensureVisualPlayback(true);
@@ -389,12 +400,33 @@ test('Home return rebuilds the video decoder after releasing native audio',async
 });
 
 test('Pause during decoder reload keeps the saved clock without restarting',async()=>{
-  const p=Object.create(directPrototype());let plays=0;
-  const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
-    removeAttribute:()=>{},setAttribute:()=>{},load(){this.currentTime=0;this.paused=true;},pause(){this.paused=true;}};
-  Object.assign(p,{v,token:1,destroyed:false,autoplayWanted:true,load:{},meta:async()=>{p.autoplayWanted=false;},
-    current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},play:async()=>{plays++;},waitForVisualFrame:async()=>true});
-  assert.equal(await p.reloadInlineVideo(),false);assert.equal(v.currentTime,62);assert.equal(v.paused,true);assert.equal(plays,0);
+  const {p}=decoderFixture();let plays=0;
+  p.meta=async()=>{p.pause();};p.play=async()=>{plays++;};
+  assert.equal(await p.reloadInlineVideo(),false);assert.equal(p.v.currentTime,62);assert.equal(p.v.paused,true);assert.equal(plays,0);
+});
+
+test('recovery never starts an explicitly paused video',async()=>{
+  const p=Object.create(directPrototype());let calls=0;
+  Object.assign(p,{destroyed:false,autoplayWanted:false,show:()=>{calls++;},play:async()=>{calls++;}});
+  assert.equal(await p.ensureVisualPlayback(true),false);
+  assert.equal(await p.recoverVisualPlayback(true),false);assert.equal(calls,0);
+});
+test('concurrent decoder reloads replace the surface only once',async()=>{
+  const {p}=decoderFixture();let finish;
+  p.meta=()=>new Promise(done=>{finish=done;});
+  const first=p.reloadInlineVideo(),second=p.reloadInlineVideo();
+  assert.equal(p.decoderReloads,1);finish();
+  assert.equal(await first,true);assert.equal(await second,true);assert.equal(p.decoderReloads,1);
+});
+test('adapter transfers PiP events to the replacement video',()=>{
+  const c=vm.createContext({console});
+  vm.runInContext(extract('class IosDirectVideoAdapter {','async function createIosWatchPlayer(')+'\nthis.Adapter=IosDirectVideoAdapter;',c);
+  const adapter=Object.create(c.Adapter.prototype);let enters=0;
+  adapter.onEnterPip=()=>enters++;adapter.onLeavePip=()=>{};adapter.onWebkitPresentationModeChanged=()=>{};
+  const video=()=>({handlers:new Map(),addEventListener(name,fn){this.handlers.set(name,fn);},removeEventListener(name){this.handlers.delete(name);}});
+  const old=video(),next=video();adapter.setVideoElement(old);adapter.setVideoElement(next);
+  assert.equal(adapter.video,next);assert.equal(old.handlers.size,0);assert.equal(next.handlers.size,3);
+  next.handlers.get('enterpictureinpicture')();assert.equal(enters,1);
 });
 test('native remote Pause is preserved on return',async()=>{
   const f=nativeFixture();f.state.nativeBackgroundPending=true;

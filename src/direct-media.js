@@ -66,6 +66,7 @@ class Player{
   clearTimeout(this.seekFeedbackTimer);this.seekFeedbackTimer=setTimeout(()=>{if(this.seekFeedback)this.seekFeedback.hidden=true},700);
  }
  bindFullscreen(btn){
+  if(this.fullscreenListener)document.removeEventListener('fullscreenchange',this.fullscreenListener);
   this.fullscreenButton=btn;
   this.fullscreenListener=()=>{
    const active=document.fullscreenElement===this.r;
@@ -224,15 +225,31 @@ class Player{
  async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}}this.wakeVideoLayer();return !v.paused}
  async play(){if(this.destroyed)throw new Error('Video player destroyed');this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}await this.v.play();this.wakeVideoLayer();return true}
  async reloadInlineVideo(){
+  if(this.decoderReloadPromise)return this.decoderReloadPromise;
+  const pending=this.rebuildInlineVideo();this.decoderReloadPromise=pending;
+  try{return await pending}finally{if(this.decoderReloadPromise===pending)this.decoderReloadPromise=null}
+ }
+ async rebuildInlineVideo(){
   if(this.destroyed||document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return false;
-  const v=this.v,at=this.current(),rate=v.playbackRate,muted=v.muted,token=++this.token;
+  let v=this.v;
+  const at=this.current(),rate=v.playbackRate,muted=v.muted,volume=v.volume,source=v.src,token=++this.token;
   this.loading=true;this.load.hidden=false;
   try{
-   // Disconnect the suspended native media resource before loading it again.
-   // Keep the same element, controls, selected source and event handlers.
+   // A suspended WebKit video surface can stay frozen across load() calls.
+   // Replace that surface while keeping the player, controls and live clock.
    v.autoplay=false;v.removeAttribute('autoplay');v.muted=true;
-   const source=v.src;
-   if(source&&this.backend!=='hls-js'){v.removeAttribute('src');v.load();v.src=source}
+   if(source&&this.backend!=='hls-js'){
+    const old=v,next=old.cloneNode(false);
+    next.removeAttribute('src');next.removeAttribute('autoplay');next.autoplay=false;
+    next.muted=true;next.volume=volume;
+    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;
+    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointerup','onpointercancel','onclick','ondblclick'])old[name]=null;
+    old.pause();old.removeAttribute('src');old.load();
+    old.parentNode.replaceChild(next,old);this.v=v=next;
+    this.bind();this.cb?.onVideoElementReplaced?.(old,next);
+    this.decoderReloads=(this.decoderReloads||0)+1;
+    v.src=source;
+   }
    v.load();
    await this.meta(token);
    if(this.destroyed||token!==this.token)return false;
@@ -249,13 +266,14 @@ class Player{
   }
  }
  async ensureVisualPlayback(forceRelatch=false){
-  if(this.destroyed)return false;
+  if(this.destroyed||!this.autoplayWanted)return false;
   if(this.visualPlaybackPromise)return this.visualPlaybackPromise;
   const pending=this.recoverVisualPlayback(forceRelatch);
   this.visualPlaybackPromise=pending;
   try{return await pending}finally{if(this.visualPlaybackPromise===pending)this.visualPlaybackPromise=null}
  }
  async recoverVisualPlayback(forceRelatch=false){
+  if(this.destroyed||!this.autoplayWanted)return false;
   this.show();this.wakeVideoLayer();
   try{this.v.autoplay=true;this.v.setAttribute('autoplay','')}catch(_){}
   if(this.v.paused)try{await this.play()}catch(_){}

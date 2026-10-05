@@ -4805,9 +4805,9 @@ class IosDirectVideoAdapter {
       onPipIntent: active => this.emit('pictureinpictureintent', { active:Boolean(active) }),
       onFullscreen: active => this.emit('fullscreenchange', {fullscreen:Boolean(active)}),
       onMinimize: () => { if (state.watchVimeo === this) void minimizeWatchToPersistent(); },
+      onVideoElementReplaced: (_old, video) => this.setVideoElement(video),
       onFatal: detail => this.emit('fatal', detail || {})
     });
-    this.video = this.player.v;
     this.pipActive = false;
     this.onEnterPip = () => this.setPipState(true);
     this.onLeavePip = () => this.setPipState(false);
@@ -4815,10 +4815,17 @@ class IosDirectVideoAdapter {
       this.setPipState(this.video?.webkitPresentationMode === 'picture-in-picture');
     };
     this.onFullscreenChange = () => this.emit('fullscreenchange', { fullscreen:Boolean(document.fullscreenElement) });
+    this.setVideoElement(this.player.v);
+    document.addEventListener('fullscreenchange', this.onFullscreenChange);
+  }
+  setVideoElement(video) {
+    this.video?.removeEventListener('enterpictureinpicture', this.onEnterPip);
+    this.video?.removeEventListener('leavepictureinpicture', this.onLeavePip);
+    this.video?.removeEventListener('webkitpresentationmodechanged', this.onWebkitPresentationModeChanged);
+    this.video = video;
     this.video?.addEventListener('enterpictureinpicture', this.onEnterPip);
     this.video?.addEventListener('leavepictureinpicture', this.onLeavePip);
     this.video?.addEventListener('webkitpresentationmodechanged', this.onWebkitPresentationModeChanged);
-    document.addEventListener('fullscreenchange', this.onFullscreenChange);
   }
   setPipState(active) {
     const next = Boolean(active);
