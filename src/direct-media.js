@@ -280,8 +280,21 @@ class Player{
   const hasDecodeCounter=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames);
   return Boolean(!v.paused&&v.readyState>=2&&(decoded||(!hasDecodeCounter&&this.current()>beforeTime+.15)));
  }
- async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await v.play()}catch(_){}}this.wakeVideoLayer();return !v.paused}
- async play(){if(this.destroyed)throw new Error('Video player destroyed');this.explicitlyPaused=false;this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}await this.v.play();this.wakeVideoLayer();return true}
+ async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}}this.wakeVideoLayer();return !v.paused}
+ async play(){if(this.destroyed)throw new Error('Video player destroyed');this.explicitlyPaused=false;this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}const v=this.v,token=this.token;await v.play();if(this.destroyed||this.v!==v||this.token!==token||!this.autoplayWanted)return false;this.wakeVideoLayer();return true}
+ async playForRecovery(timeout=2200){
+  if(this.destroyed||!this.autoplayWanted)return false;
+  const v=this.v,token=this.token;let timer;
+  try{
+   // WebKit can leave play() pending forever on a stuck native HLS seek.
+   // Keep recovery bounded so frame checks and the alternate decoder can run.
+   const played=await Promise.race([
+    Promise.resolve(this.play()).then(()=>true,()=>false),
+    new Promise(resolve=>{timer=setTimeout(()=>resolve(false),timeout)})
+   ]);
+   return played&&!this.destroyed&&this.v===v&&this.token===token&&this.autoplayWanted&&!v.paused;
+  }finally{clearTimeout(timer)}
+ }
  async playFromControl(){
   const token=this.token;
   await this.play();
@@ -294,19 +307,23 @@ class Player{
  async reloadInlineVideo(allowSourceFallback=false){
   if(this.decoderReloadPromise)return this.decoderReloadPromise;
   const pending=(async()=>{
-   const frames=await this.rebuildInlineVideo();
+   const saved={at:this.current(),rate:this.v.playbackRate,muted:this.v.muted,volume:this.v.volume};
+   const rebuilding=this.rebuildInlineVideo(),token=this.token;
+   let frames=false;
+   try{frames=await rebuilding}catch(error){console.warn('Native video decoder rebuild failed',error)}
+   if(token!==this.token)return false;
    if(frames||!allowSourceFallback||this.backend!=='hls-native'||!this.sources?.mp4||this.destroyed||document.hidden||!this.autoplayWanted)return frames;
    // A native HLS item can keep advancing audio with no decoded
    // video even after replacement. Recover using the same shiur's alternate
    // direct video source, preserving the current clock and user's Play intent.
-   try{return await this.rebuildInlineVideo(this.sources.mp4)}catch(error){console.warn('Alternate video source recovery failed',error);return false}
+   try{return await this.rebuildInlineVideo(this.sources.mp4,{...saved,at:Math.max(saved.at,this.current())})}catch(error){console.warn('Alternate video source recovery failed',error);return false}
   })();this.decoderReloadPromise=pending;
   try{return await pending}finally{if(this.decoderReloadPromise===pending)this.decoderReloadPromise=null}
  }
- async rebuildInlineVideo(alternateSource=''){
+ async rebuildInlineVideo(alternateSource='',saved=null){
   if(this.destroyed||document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return false;
   let v=this.v;
-  const at=this.current(),rate=v.playbackRate,muted=v.muted,volume=v.volume,source=alternateSource||v.src,token=++this.token;
+  const at=saved?.at??this.current(),rate=saved?.rate??v.playbackRate,muted=saved?.muted??v.muted,volume=saved?.volume??v.volume,source=alternateSource||v.src,token=++this.token;
   clearTimeout(this.hlsRetryTimer);
   this.loading=true;this.load.hidden=false;
   try{
@@ -335,7 +352,8 @@ class Player{
    if(!this.autoplayWanted){v.autoplay=false;v.removeAttribute('autoplay');v.pause();return false}
    v.autoplay=true;v.setAttribute('autoplay','');
    if(this.backend==='hls-native'&&!this.nativeVariants?.length)void this.loadNativeQualities(this.url,this.token);
-   this.loading=false;await this.play();
+   this.loading=false;await this.playForRecovery();
+   if(this.destroyed||token!==this.token||!this.autoplayWanted)return false;
    return await this.waitForVisualFrame(2200);
   }finally{
    if(!this.destroyed&&token===this.token){v.muted=muted;this.loading=false;this.load.hidden=true}
@@ -352,7 +370,7 @@ class Player{
   if(this.destroyed||!this.autoplayWanted)return false;
   this.show();this.wakeVideoLayer();
   try{this.v.autoplay=true;this.v.setAttribute('autoplay','')}catch(_){}
-  if(this.v.paused)try{await this.play()}catch(_){}
+  if(this.v.paused)try{await this.playForRecovery()}catch(_){}
   if(document.hidden||this.v.webkitPresentationMode==='picture-in-picture')return !this.v.paused;
   const nativeShell=['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase());
   let frameSeen=await this.waitForVisualFrame();
@@ -372,7 +390,7 @@ class Player{
    await new Promise(resolve=>requestAnimationFrame(resolve));
    if(this.destroyed||!this.autoplayWanted)return false;
    try{if(at>0)this.v.currentTime=at}catch(_){}
-   try{await this.play()}catch(_){}
+   try{await this.playForRecovery()}catch(_){}
    frameSeen=await this.waitForVisualFrame();
    if(this.destroyed||!this.autoplayWanted)return false;
   }
@@ -382,7 +400,7 @@ class Player{
   if(this.destroyed||!this.autoplayWanted)return false;
   if(this.v.paused){
    if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}
-   try{await this.v.play()}catch(_){}
+   try{await this.playForRecovery()}catch(_){}
   }
   this.wakeVideoLayer();
   return !this.v.paused&&(!nativeShell||frameSeen);

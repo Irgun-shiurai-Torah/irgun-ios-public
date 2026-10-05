@@ -87,7 +87,7 @@ final class PlaybackUITests: XCTestCase {
         if hide.exists && hide.isHittable { hide.tap() }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
-        if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video"].contains(label) {
+        if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
             let state = try waitFor("Visible player button: \(label)") {
                 let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
                 return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&

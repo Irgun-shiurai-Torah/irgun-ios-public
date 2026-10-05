@@ -20,7 +20,7 @@ console.warn = (...args) => {
 };
 for (const type of ['pointerdown','pointerup','pointercancel','touchstart','touchend','touchcancel']) {
   document.addEventListener(type,event=>{
-    if(!event.target?.closest('#directMediaPlayer,.content'))return;
+    if(!event.target?.closest('#directMediaPlayer,.content,.watch-overlay,.watch-top'))return;
     const point=event.changedTouches?.[0]||event;
     simulatorGestures.push({type,at:Date.now(),x:point.clientX,y:point.clientY,target:event.target.id,screen:state.screen});
     if(simulatorGestures.length>20)simulatorGestures.shift();
@@ -158,8 +158,8 @@ window.ISTSimulator = {
       });
       if(safe){tabSwipeY=y;break;}
     }
-    const playerButtons = Object.fromEntries(['dmPlay','dmFull'].map(id => {
-      const el=document.getElementById(id), b=el?.getBoundingClientRect();
+    const playerButtons = Object.fromEntries(['dmPlay','dmFull','watchMinimize'].map(id => {
+      const el=id==='watchMinimize'?[...document.querySelectorAll('[data-minimize-watch]')].find(simulatorVisible):document.getElementById(id), b=el?.getBoundingClientRect();
       const x=b?b.left+b.width/2:0,y=b?b.top+b.height/2:0;
       return [id,{label:el?.getAttribute('aria-label')||'',x,y,
         hittable:simulatorVisible(el)&&Boolean(el?.contains(document.elementFromPoint(x,y)))}];
