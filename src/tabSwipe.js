@@ -1,10 +1,28 @@
 // Use touch events so WKWebView scrolling cannot cancel a pointer swipe.
-export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, navigate }) {
+export function createSwipeRenderGate(render, schedule = queueMicrotask) {
+  let active = false, queued = false;
+  return {
+    shouldDefer() {
+      if (active) { queued = true; return true; }
+      queued = false; return false;
+    },
+    setActive(value) {
+      active = value;
+      if (!active && queued) schedule(() => { if (!active && queued) render(); });
+    }
+  };
+}
+
+export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, navigate, onGestureState = () => {} }) {
   let gesture = null;
   let suppressClickUntil = 0;
   const view = root.ownerDocument.defaultView;
   const excluded = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), video, iframe, .direct-media-player, .watch-overlay, .mini-player, .sheet-backdrop, .bottom-nav, [role="dialog"]';
-  const reset = () => { gesture = null; };
+  const reset = () => {
+    if (!gesture) return;
+    gesture = null;
+    onGestureState(false);
+  };
   const commit = (event, touch) => {
     const start = gesture;
     if (!start || !canNavigate() || getActiveTab() !== start.tab) return reset();
@@ -33,6 +51,7 @@ export function bindTabSwipes(root, { getActiveTab, getTabs, canNavigate, naviga
     if (event.touches.length !== 1 || !canNavigate() || !allowedTarget(event.target)) return;
     const touch = event.touches[0];
     gesture = { id: touch.identifier, x: touch.clientX, y: touch.clientY, tab: getActiveTab(), horizontal: false };
+    onGestureState(true);
   }, { passive: true });
   root.addEventListener('touchmove', event => {
     if (!gesture) return;

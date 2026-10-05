@@ -20,9 +20,9 @@ console.warn = (...args) => {
 };
 for (const type of ['pointerdown','pointerup','pointercancel','touchstart','touchend','touchcancel']) {
   document.addEventListener(type,event=>{
-    if(!event.target?.closest('#directMediaPlayer'))return;
+    if(!event.target?.closest('#directMediaPlayer,.content'))return;
     const point=event.changedTouches?.[0]||event;
-    simulatorGestures.push({type,at:Date.now(),x:point.clientX,y:point.clientY,target:event.target.id});
+    simulatorGestures.push({type,at:Date.now(),x:point.clientX,y:point.clientY,target:event.target.id,screen:state.screen});
     if(simulatorGestures.length>20)simulatorGestures.shift();
   },{capture:true,passive:true});
 }

@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const binder = import('../src/tabSwipe.js');
 
-async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false } = {}) {
+async function fixture({ rtl = false, blocked = false, scrollable = false, excluded = false, onGestureState, onNavigate = () => {} } = {}) {
   const handlers = new Map(), visits = [];
   let active = 'home', allowed = !blocked;
   const root = {
@@ -24,7 +24,7 @@ async function fixture({ rtl = false, blocked = false, scrollable = false, exclu
   const tabs = ['home','shiurim','live','library','account'];
   (await binder).bindTabSwipes(root, {
     getActiveTab: () => active, getTabs: () => rtl ? [...tabs].reverse() : tabs,
-    canNavigate: () => allowed, navigate: tab => { active = tab; visits.push(tab); }
+    canNavigate: () => allowed, onGestureState, navigate: tab => { active = tab; visits.push(tab); onNavigate(tab); }
   });
   function swipe(dx, dy = 0) {
     emit('touchstart', [touch(220, 200)]);
@@ -94,4 +94,38 @@ for (const left of [true,false]) test(`tab swipe commits once before a cancelled
   f.emit('touchcancel',[]);
   f.emit('touchend',[],[f.touch(left?80:360,201)]);
   assert.equal(f.visits.length,1);
+});
+
+async function renderFixture() {
+  const scheduled = [], rendered = [];
+  let screen = 'live', gate;
+  function render() { if (!gate.shouldDefer()) rendered.push(screen); }
+  gate = (await binder).createSwipeRenderGate(render, callback => scheduled.push(callback));
+  const f = await fixture({ onGestureState: active => gate.setActive(active), onNavigate: tab => { screen = tab; render(); } });
+  f.setActive(screen);
+  return { ...f, render, rendered, flush: () => { while (scheduled.length) scheduled.shift()(); } };
+}
+
+test('Live updates wait for the reverse swipe and coalesce into the destination render', async () => {
+  const f = await renderFixture();
+  f.emit('touchstart', [f.touch(88, 180)]);
+  f.render(); f.render();
+  assert.deepEqual(f.rendered, []);
+  f.emit('touchmove', [f.touch(352, 180)]);
+  f.flush();
+  assert.deepEqual(f.visits, ['shiurim']);
+  assert.deepEqual(f.rendered, ['shiurim']);
+});
+
+for (const vertical of [false, true]) test(`queued Live updates resume after ${vertical ? 'vertical scroll' : 'touch cancellation'}`, async () => {
+  const f = await renderFixture();
+  f.emit('touchstart', [f.touch(220, 200)]);
+  f.render(); f.render();
+  if (vertical) f.emit('touchmove', [f.touch(225, 240)]);
+  else f.emit('touchcancel', []);
+  f.flush();
+  assert.deepEqual(f.visits, []);
+  assert.deepEqual(f.rendered, ['live']);
+  f.render();
+  assert.deepEqual(f.rendered, ['live', 'live']);
 });

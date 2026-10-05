@@ -1,7 +1,8 @@
 import './style.css';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
-import { bindTabSwipes } from './tabSwipe.js';
+import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
+const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
@@ -6014,7 +6015,9 @@ function analyticsScreenLabel() {
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
+// Preserve the current touch target until an eligible tab gesture completes.
 function render() {
+  if (tabSwipeRenderGate.shouldDefer()) return;
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {
@@ -8416,6 +8419,7 @@ if (Capacitor.isNativePlatform()) {
 
 if (IS_IOS && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
+    onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
     getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
