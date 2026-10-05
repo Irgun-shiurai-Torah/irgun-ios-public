@@ -171,7 +171,9 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         generation += 1
         player?.pause()
         if let timeObserver = timeObserver { player?.removeTimeObserver(timeObserver) }
-        timeObserver = nil; player = nil; active = false; removeRemoteCommands()
+        timeObserver = nil
+        player?.replaceCurrentItem(with: nil)
+        player = nil; active = false; removeRemoteCommands()
     }
     deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) }; clearPlayer() }
 }

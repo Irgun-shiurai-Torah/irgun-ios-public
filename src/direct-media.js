@@ -228,9 +228,12 @@ class Player{
   const v=this.v,at=this.current(),rate=v.playbackRate,muted=v.muted,token=++this.token;
   this.loading=true;this.load.hidden=false;
   try{
-   // Rebuild the native decoder at the live position after layer-only recovery
-   // failed. Keep the same element, controls, selected source and event handlers.
-   v.autoplay=false;v.removeAttribute('autoplay');v.muted=true;v.load();
+   // Disconnect the suspended native media resource before loading it again.
+   // Keep the same element, controls, selected source and event handlers.
+   v.autoplay=false;v.removeAttribute('autoplay');v.muted=true;
+   const source=v.src;
+   if(source&&this.backend!=='hls-js'){v.removeAttribute('src');v.load();v.src=source}
+   v.load();
    await this.meta(token);
    if(this.destroyed||token!==this.token)return false;
    await this.seekTo(at);

@@ -274,15 +274,18 @@ function directPrototype(overrides = {}) {
 
 test('decoder reload preserves element, live position, source and speed',async()=>{
   const p=Object.create(directPrototype());
+  const loaded=[];
   const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
-    src:'https://example.test/720p.m3u8',removeAttribute:()=>{},setAttribute:()=>{},load(){this.currentTime=0;this.paused=true;}};
-  Object.assign(p,{v,token:1,destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},
+    src:'https://example.test/720p.m3u8',removeAttribute(name){if(name==='src')this.src='';},setAttribute:()=>{},
+    load(){loaded.push(this.src);this.currentTime=0;this.paused=true;}};
+  Object.assign(p,{v,token:1,backend:'hls-native',destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},
     current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},
     play:async()=>{v.paused=false;},waitForVisualFrame:async()=>true});
   assert.equal(await p.reloadInlineVideo(),true);
   assert.equal(p.v,v);
   assert.equal(v.currentTime,62);
   assert.equal(v.src,'https://example.test/720p.m3u8');
+  assert.deepEqual(loaded,['','https://example.test/720p.m3u8']);
   assert.equal(v.playbackRate,1.5);
   assert.equal(v.muted,false);
 });
@@ -380,7 +383,7 @@ test('native return uses actual native clock and stops audio before unmuting vid
 });
 test('Home return rebuilds the video decoder after releasing native audio',async()=>{
   const f=nativeFixture();f.state.nativeBackgroundPending=true;f.p.video.muted=true;
-  f.p.player.reloadInlineVideo=async()=>{assert.equal(f.calls[0][0],'stop');assert.equal(f.p.video.muted,true);assert.equal(f.p.video.currentTime,80);f.calls.push(['reload']);return true;};
+  f.p.player.reloadInlineVideo=async()=>{assert.equal(f.calls[0][0],'stop');assert.equal(f.calls[0][1].clear,true);assert.equal(f.p.video.muted,true);assert.equal(f.p.video.currentTime,80);f.calls.push(['reload']);return true;};
   await f.context.restoreNativeBackgroundVideo();
   assert.deepEqual(f.calls.map(x=>x[0]),['stop','reload','mute']);
 });

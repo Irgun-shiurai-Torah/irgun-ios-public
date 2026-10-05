@@ -7330,15 +7330,15 @@ async function restoreNativeBackgroundVideo() {
       await player.setMuted(true);
       if (!current()) return;
     }
+    if (!current()) return;
+    // Dispose the background AVPlayer item before seeking/reloading WebKit.
+    // Pausing it alone retains the decoder that played while we were hidden.
+    await IrgunBackgroundAudio.stop({id,clear:true});
+    if (!current()) return;
     if (native.active) {
       await player.setCurrentTime(native.position);
       if (!current()) return;
     }
-    if (!current()) return;
-    // Release the native audio owner before rebuilding WebKit's suspended
-    // decoder. Recovery before stop can produce one frame then freeze again.
-    await IrgunBackgroundAudio.stop({id,clear:false});
-    if (!current()) return;
     const wantsPlay = () => native.playing && player.player?.autoplayWanted !== false;
     if (native.active && wantsPlay()) {
       await player.player?.visualPlaybackPromise?.catch(() => {});
