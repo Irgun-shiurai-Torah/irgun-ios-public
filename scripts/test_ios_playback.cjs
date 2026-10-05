@@ -342,9 +342,36 @@ test('missing frames trigger exactly one decoder reload after layer recovery',as
   Object.assign(p,{v,autoplayWanted:true,destroyed:false,c:{appendChild:()=>{}},r:{},
     show:()=>{},wakeVideoLayer:()=>{},current:()=>62,waitForVisualFrame:async()=>false,
     relatchInlineVideoLayer:async()=>true,play:async()=>{v.paused=false;},
-    reloadInlineVideo:async()=>{reloads++;return true;}});
+    reloadInlineVideo:async allowSourceFallback=>{assert.equal(allowSourceFallback,true);reloads++;return true;}});
   assert.equal(await p.ensureVisualPlayback(),true);
   assert.equal(reloads,1);
+});
+
+test('startup recovery replaces frameless native HLS with MP4 after HLS rebuilding fails',async()=>{
+  const {p}=decoderFixture();
+  p.sources={mp4:'https://example.test/shiur.mp4'};p.quality={};
+  p.v.readyState=4;p.v.setAttribute=()=>{};
+  Object.assign(p,{show:()=>{},wakeVideoLayer:()=>{},c:{appendChild:()=>{}},r:{},relatchInlineVideoLayer:async()=>true});
+  p.waitForVisualFrame=async()=>p.backend==='mp4';
+  assert.equal(await p.ensureVisualPlayback(),true);
+  assert.equal(p.backend,'mp4');assert.equal(p.decoderReloads,2);
+  assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);assert.equal(p.v.volume,.7);
+});
+
+test('playing double tap checks frames even when the media element is not paused',async()=>{
+  const p=Object.create(directPrototype());let checks=0,plays=0;
+  Object.assign(p,{token:1,autoplayWanted:true,v:{paused:false},current:()=>30,
+    seekTo:async x=>{assert.equal(x,45);},play:async()=>{plays++;},
+    ensureVisualPlayback:async()=>{checks++;return true;},showSeekFeedback:()=>{}});
+  await p.seekBy(15);assert.equal(checks,1);assert.equal(plays,0);
+});
+
+test('Pause during a seek cancels visual recovery and autoplay',async()=>{
+  const p=Object.create(directPrototype());let checks=0,plays=0;
+  Object.assign(p,{token:1,autoplayWanted:true,v:{paused:true},current:()=>30,
+    seekTo:async()=>{p.autoplayWanted=false;},play:async()=>{plays++;},
+    ensureVisualPlayback:async()=>{checks++;},showSeekFeedback:()=>{}});
+  await p.seekBy(15);assert.equal(checks,0);assert.equal(plays,0);
 });
 
 test('overlapping frame recovery shares one operation',async()=>{

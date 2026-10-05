@@ -57,6 +57,9 @@ class Player{
   if(this.destroyed||token!==this.token)return;
   // Seek without changing Pause/Play intent; some iOS seeks pause temporarily.
   if(wanted&&this.autoplayWanted&&this.v.paused)await this.play().catch(()=>{});
+  // Native HLS may keep playing audio after a seek while its video frames stop.
+  // Verify the visual decoder too, without restarting an explicitly paused item.
+  if(wanted&&this.autoplayWanted)await this.ensureVisualPlayback().catch(()=>{});
   this.showSeekFeedback(seconds);
  }
  showSeekFeedback(seconds){
@@ -229,7 +232,7 @@ class Player{
   const pending=(async()=>{
    const frames=await this.rebuildInlineVideo();
    if(frames||!allowSourceFallback||this.backend!=='hls-native'||!this.sources?.mp4||this.destroyed||document.hidden||!this.autoplayWanted)return frames;
-   // A foregrounded native HLS item can keep advancing audio with no decoded
+   // A native HLS item can keep advancing audio with no decoded
    // video even after replacement. Recover using the same shiur's alternate
    // direct video source, preserving the current clock and user's Play intent.
    try{return await this.rebuildInlineVideo(this.sources.mp4)}catch(error){console.warn('Alternate video source recovery failed',error);return false}
@@ -309,7 +312,7 @@ class Player{
    if(this.destroyed||!this.autoplayWanted)return false;
   }
   if(!frameSeen&&nativeShell&&!document.hidden&&!this.destroyed&&this.v.webkitPresentationMode!=='picture-in-picture'){
-   try{frameSeen=await this.reloadInlineVideo()}catch(error){console.warn('Native video decoder reload failed',error)}
+   try{frameSeen=await this.reloadInlineVideo(true)}catch(error){console.warn('Native video decoder reload failed',error)}
   }
   if(this.destroyed||!this.autoplayWanted)return false;
   if(this.v.paused){
