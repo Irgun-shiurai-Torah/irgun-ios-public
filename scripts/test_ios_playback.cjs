@@ -278,7 +278,7 @@ test('decoder reload preserves element, live position, source and speed',async()
   const v={currentTime:62,playbackRate:1.5,muted:false,paused:false,webkitPresentationMode:'inline',
     src:'https://example.test/720p.m3u8',removeAttribute(name){if(name==='src')this.src='';},setAttribute:()=>{},
     load(){loaded.push(this.src);this.currentTime=0;this.paused=true;}};
-  Object.assign(p,{v,token:1,backend:'hls-native',destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},
+  Object.assign(p,{v,token:1,backend:'hls-native',destroyed:false,autoplayWanted:true,load:{},meta:async()=>{},loadNativeQualities:async()=>{},
     current:()=>v.currentTime,seekTo:async x=>{v.currentTime=x;},
     play:async()=>{v.paused=false;},waitForVisualFrame:async()=>true});
   assert.equal(await p.reloadInlineVideo(),true);
