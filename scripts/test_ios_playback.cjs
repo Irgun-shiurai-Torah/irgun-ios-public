@@ -573,6 +573,29 @@ test('explicit Pause prevents native autoplay from restarting a buffered seek',a
   assert.equal(time,15);assert.equal(v.paused,true);assert.equal(plays,0);
 });
 
+for(const paused of [false,true])test(`downward movement minimizes once even if WebKit cancels release, paused=${paused}`,()=>{
+  const p=Object.create(directPrototype());let minimized=0,exits=0,toggles=0;
+  const v={paused,style:{},setPointerCapture:()=>{},releasePointerCapture:()=>{}};
+  Object.assign(p,{v,autoplayWanted:!paused,cb:{onMinimize:()=>minimized++},exitFullscreen:()=>exits++,playBtn:{onclick:()=>toggles++}});
+  p.bindVideoGestures();
+  v.onpointerdown({pointerId:1,clientX:200,clientY:50});
+  v.onpointermove({pointerId:1,clientX:205,clientY:125,preventDefault:()=>{}});
+  assert.equal(minimized,1);
+  v.onpointercancel();v.onpointerup({pointerId:1,clientX:205,clientY:180});v.onclick({clientX:205});
+  assert.equal(minimized,1);assert.equal(exits,1);assert.equal(toggles,0);
+  assert.equal(v.paused,paused);assert.equal(p.autoplayWanted,!paused);
+});
+
+test('slow downward release still minimizes without turning into a tap',()=>{
+  const p=Object.create(directPrototype());let minimized=0;
+  const v={style:{},setPointerCapture:()=>{}};
+  Object.assign(p,{v,cb:{onMinimize:()=>minimized++},exitFullscreen:()=>{}});
+  p.bindVideoGestures();v.onpointerdown({pointerId:1,clientX:200,clientY:50});
+  p.videoPointer.at=Date.now()-1500;
+  v.onpointerup({pointerId:1,clientX:205,clientY:150,preventDefault:()=>{}});
+  assert.equal(minimized,1);assert.equal(p.videoPointer,null);
+});
+
 for(const backend of ['hlsLoad','mp4'])test(`Pause cancels late ${backend} metadata autoplay`,async()=>{
   const p=Object.create(directPrototype());let resolveMeta,plays=0;
   Object.assign(p,{token:0,load:{},err:{},destroyed:false,autoplayWanted:true,

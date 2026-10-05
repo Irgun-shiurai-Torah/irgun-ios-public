@@ -20,14 +20,23 @@ class Player{
    try{v.setPointerCapture(e.pointerId)}catch(_){}
   };
   v.onpointercancel=()=>{this.videoPointer=null};
+  const minimizeFromSwipe=e=>{
+   const start=this.videoPointer;if(!start||start.id!==e.pointerId)return false;
+   const dx=e.clientX-start.x,dy=e.clientY-start.y;
+   if(dy<65||dy<=Math.abs(dx)*1.4)return false;
+   // Commit while moving: WebKit can cancel or delay the release during a drag.
+   this.videoPointer=null;
+   clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
+   try{v.releasePointerCapture?.(e.pointerId)}catch(_){}
+   this.exitFullscreen();this.cb.onMinimize?.();e.preventDefault();return true;
+  };
+  v.onpointermove=e=>{minimizeFromSwipe(e)};
   v.onpointerup=e=>{
+   if(minimizeFromSwipe(e))return;
    const start=this.videoPointer;this.videoPointer=null;
    if(!start||start.id!==e.pointerId)return;
    const dx=e.clientX-start.x,dy=e.clientY-start.y;
-   if(dy>=65&&dy>Math.abs(dx)*1.4&&Date.now()-start.at<1200){
-    clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
-    this.exitFullscreen();this.cb.onMinimize?.();e.preventDefault();
-   }else if(Math.hypot(dx,dy)>20){
+   if(Math.hypot(dx,dy)>20){
     clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoIgnoreClickUntil=Date.now()+500;
    }else{
     // Touch clicks can be coalesced by WKWebView's double-tap recognizer.
@@ -253,7 +262,7 @@ class Player{
     next.removeAttribute('src');next.removeAttribute('autoplay');next.autoplay=false;
     next.muted=true;next.volume=volume;
     clearTimeout(this.videoTapTimer);this.videoLastTap=null;this.videoPointer=null;
-    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointerup','onpointercancel','onclick','ondblclick'])old[name]=null;
+    for(const name of ['onplay','onpause','ontimeupdate','ondurationchange','onended','onwaiting','onstalled','onplaying','oncanplay','onerror','onvolumechange','onpointerdown','onpointermove','onpointerup','onpointercancel','onclick','ondblclick'])old[name]=null;
     old.pause();old.removeAttribute('src');old.load();
     old.parentNode.replaceChild(next,old);this.v=v=next;
     this.bind();this.cb?.onVideoElementReplaced?.(old,next);
