@@ -1,4 +1,5 @@
 import XCTest
+import Network
 
 final class PlaybackUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -20,10 +21,33 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func snapshot() -> [String: Any] {
-        let label = app.staticTexts["ist-simulator-status"]
-        guard label.exists, let value = label.value as? String,
-              let data = value.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data),
+        let connection = NWConnection(host: "127.0.0.1", port: 47291, using: .tcp)
+        let queue = DispatchQueue(label: "org.irgun.tests.observation")
+        let finished = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var payload = Data()
+        func receive() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+                lock.lock()
+                if let data = data { payload.append(data) }
+                let done = payload.contains(10) || complete || error != nil
+                lock.unlock()
+                if done { finished.signal() } else { receive() }
+            }
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready: receive()
+            case .failed: finished.signal()
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        let completed = finished.wait(timeout: .now() + 3) == .success
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        lock.lock(); let data = payload; lock.unlock()
+        guard completed, let object = try? JSONSerialization.jsonObject(with: data),
               let result = object as? [String: Any] else { return [:] }
         return result
     }
@@ -59,6 +83,8 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func tapWebButton(_ label: String) throws {
+        let hide = app.buttons["ist-simulator-hide-controls"]
+        if hide.exists && hide.isHittable { hide.tap() }
         let button = app.webViews.buttons.matching(identifier: label).firstMatch
         let predicate = NSPredicate(format: "exists == true AND hittable == true")
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: button)
@@ -68,12 +94,23 @@ final class PlaybackUITests: XCTestCase {
             throw Failure.timedOut(label)
         }
         button.tap()
+
     }
 
     private func openSample() throws {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
+        // Native overlay taps can be missed during the first launch animation.
+        // Retry once only if JS has not accepted or failed the open request.
+        let acceptanceDeadline = Date().addingTimeInterval(4)
+        while Date() < acceptanceDeadline {
+            let current = snapshot()
+            if current["opening"] as? Bool == true || !(current["id"] as? String ?? "").isEmpty || !(current["error"] as? String ?? "").isEmpty { break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        let accepted = snapshot()
+        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
         let state = try waitFor("HLS sample must start visibly", timeout: 150) {
             $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
             $0["backend"] as? String == "hls-native" && $0["videoPlaying"] as? Bool == true &&
@@ -85,7 +122,12 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func assertMovingVideo() throws {
-        let before = snapshot()
+        let before = try waitFor("Video must settle before frame sampling") {
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
+            $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
+            self.number($0, "frames") >= 1 && self.number($0, "frameTime") > 0
+        }
         XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
         _ = try waitFor("Video frames and media clock must advance") {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
@@ -142,18 +184,106 @@ final class PlaybackUITests: XCTestCase {
         try assertMovingVideo()
         let before = number(snapshot(), "videoTime")
         XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval: 6)
+        Thread.sleep(forTimeInterval: 20)
         let home = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         home.name = "home-during-playback"
         home.lifetime = .keepAlways
         add(home)
         app.activate()
+        let native = try waitFor("Native background samples must be available") {
+            (($0["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []).count >= 3
+        }
+        let samples = (native["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []
+        XCTAssertGreaterThan((samples.last ?? 0) - (samples.first ?? 0), 4, "Native clock must advance while UIApplication is backgrounded")
         _ = try waitFor("Reopen must resume video beyond the pre-Home position", timeout: 60) {
             $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
             $0["videoPlaying"] as? Bool == true && self.number($0, "videoTime") >= before + 3
         }
         try assertMovingVideo()
         evidence("home-reopen")
+    }
+
+    private func videoPoint(_ x: Double, _ y: Double) -> XCUICoordinate {
+        let s = snapshot()
+        return app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: number(s,"videoX") + number(s,"videoWidth") * x,
+            dy: number(s,"videoY") + number(s,"videoHeight") * y))
+    }
+
+    func testFullscreenExitKeepsPlayingAndPausedStaysPaused() throws {
+        try openSample(); try assertMovingVideo()
+        try tapWebButton("Fullscreen")
+        _ = try waitFor("Fullscreen must open") { $0["fullscreen"] as? Bool == true }
+        try assertMovingVideo()
+        let before = number(snapshot(),"videoTime")
+        try tapWebButton("Exit Fullscreen")
+        _ = try waitFor("Fullscreen exit must keep playing") { $0["fullscreen"] as? Bool == false && $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > before + 1 }
+        try assertMovingVideo()
+        try tapWebButton("Pause video")
+        _ = try waitFor("Explicit Pause") { $0["videoPlaying"] as? Bool == false }
+        try tapWebButton("Fullscreen"); try tapWebButton("Exit Fullscreen")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true)
+        evidence("fullscreen-exit")
+    }
+
+    func testDoubleTapSeeksBothWaysWithoutChangingPause() throws {
+        try openSample(); try assertMovingVideo()
+        try tapWebButton("Pause video")
+        _ = try waitFor("Pause before seeking") { $0["videoPlaying"] as? Bool == false }
+        let before=number(snapshot(),"videoTime")
+        videoPoint(0.8,0.4).doubleTap()
+        _ = try waitFor("Right double tap must seek 15 seconds") { abs(self.number($0,"videoTime") - before - 15)<2 && $0["videoPlaying"] as? Bool == false }
+        videoPoint(0.2,0.4).doubleTap()
+        _ = try waitFor("Left double tap must seek back 15 seconds") { abs(self.number($0,"videoTime") - before)<2 && $0["videoPlaying"] as? Bool == false }
+        try tapWebButton("Play video"); try assertMovingVideo()
+        let playing=number(snapshot(),"videoTime")
+        videoPoint(0.8,0.4).doubleTap()
+        _ = try waitFor("Double tap while playing must keep playing", timeout: 6) { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo(); evidence("double-tap-seek")
+    }
+
+    func testSwipeDownMinimizesPlayingAndPausedVideo() throws {
+        try openSample(); try assertMovingVideo()
+        videoPoint(0.5,0.15).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        _ = try waitFor("Swipe must minimize playing video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
+        try assertMovingVideo()
+        let s=snapshot()
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(s,"expandX"),dy:number(s,"expandY"))).tap()
+        _ = try waitFor("Expand before paused swipe") { $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true }
+        try tapWebButton("Pause video")
+        _ = try waitFor("Pause before swipe") { $0["videoPlaying"] as? Bool == false }
+        videoPoint(0.5,0.15).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        _ = try waitFor("Swipe must minimize paused video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
+        Thread.sleep(forTimeInterval: 1)
+        XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true); evidence("swipe-minimize")
+    }
+
+    func testPausedVideoDoesNotStartOnHome() throws {
+        try openSample(); try tapWebButton("Pause video")
+        _ = try waitFor("Pause before Home") { $0["videoPlaying"] as? Bool == false }
+        XCUIDevice.shared.press(.home); Thread.sleep(forTimeInterval: 4); app.activate()
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true)
+        let native = snapshot()["nativeAudio"] as? [String:Any] ?? [:]
+        XCTAssertFalse(native["active"] as? Bool ?? true)
+        evidence("paused-home")
+    }
+
+    func testZZAppStoreScreenshotsOfAllPublicPages() throws {
+        for _ in 0..<26 {
+            let previous=snapshot()["storePage"] as? String ?? ""
+            app.buttons["ist-simulator-next-page"].tap()
+            let state = try waitFor("Screenshot page must load", timeout: 150) { !($0["storeError"] as? String ?? "").isEmpty || ($0["storeReady"] as? Bool == true && ($0["storePage"] as? String ?? "") != previous) }
+            XCTAssertEqual(state["storeError"] as? String ?? "", "")
+            let name=state["storePage"] as? String ?? "unknown"
+            app.buttons["ist-simulator-clean-capture"].tap()
+            Thread.sleep(forTimeInterval: 0.7)
+            let screenshot=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+            screenshot.name="store-\(name)"; screenshot.lifetime = .keepAlways; add(screenshot)
+            let ready=NSPredicate(format:"exists == true AND hittable == true")
+            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:app.buttons["ist-simulator-next-page"])],timeout:8),.completed)
+        }
     }
 
     func testMiniPlayerThenExpandKeepsMoving() throws {

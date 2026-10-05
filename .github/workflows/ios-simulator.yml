@@ -41,14 +41,14 @@ jobs:
   playback:
     name: Playback on ${{ matrix.family }}
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         family: [iPhone, iPad]
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
-      IOS_MARKETING_VERSION: "1.0.1"
+      IOS_MARKETING_VERSION: "1.2.69"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
       DEVICE_FAMILY: ${{ matrix.family }}
@@ -101,7 +101,11 @@ jobs:
                         if device.get('isAvailable') and device['name'].startswith(os.environ['DEVICE_FAMILY'])]
           if not candidates:
               raise SystemExit('No installed simulator for ' + os.environ['DEVICE_FAMILY'])
-          candidates.sort(key=lambda item: tuple(map(int, re.findall(r'\d+', item[0]))), reverse=True)
+          def preferred(item):
+              name=item[1]['name']
+              match=('Pro Max' in name) if os.environ['DEVICE_FAMILY']=='iPhone' else ('Pro' in name and '13' in name)
+              return (tuple(map(int,re.findall(r'\d+',item[0]))),match,tuple(map(int,re.findall(r'\d+',name))))
+          candidates.sort(key=preferred, reverse=True)
           runtime, device = candidates[0]
           with open(os.environ['GITHUB_ENV'], 'a') as env:
               env.write('SIMULATOR_UDID=' + device['udid'] + '\n')
@@ -164,6 +168,46 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Package clean App Store screenshots
+        if: always()
+        run: python3 .github/simulator/package_screenshots.py
+
+      - name: Upload clean screenshots (part 1)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-${{ matrix.family }}-${{ github.run_number }}-1
+          path: simulator-results/screenshot-downloads/App-Store-Screenshots-1.zip
+          if-no-files-found: warn
+      - name: Upload clean screenshots (part 2)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-${{ matrix.family }}-${{ github.run_number }}-2
+          path: simulator-results/screenshot-downloads/App-Store-Screenshots-2.zip
+          if-no-files-found: warn
+      - name: Upload clean screenshots (part 3)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-${{ matrix.family }}-${{ github.run_number }}-3
+          path: simulator-results/screenshot-downloads/App-Store-Screenshots-3.zip
+          if-no-files-found: warn
+      - name: Upload clean screenshots (part 4)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-${{ matrix.family }}-${{ github.run_number }}-4
+          path: simulator-results/screenshot-downloads/App-Store-Screenshots-4.zip
+          if-no-files-found: warn
+      - name: Upload clean screenshots (part 5)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-store-${{ matrix.family }}-${{ github.run_number }}-5
+          path: simulator-results/screenshot-downloads/App-Store-Screenshots-5.zip
+          if-no-files-found: warn
+
       - name: Explain the result
         if: always()
         env:
@@ -174,6 +218,6 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('## ' + os.environ['DEVICE_FAMILY'] + ' playback tests\n\n')
               summary.write('Result: **' + os.environ['JOB_STATUS'] + '**. Download the simulator artifact for screenshots, playback JSON, Xcode results and logs.\n\n')
-              summary.write('Checks: fresh HLS video frames, Audio → Video position, Home/reopen, mini/full player, and PiP return. PiP is explicitly skipped if the runtime reports it unavailable.\n\n')
-              summary.write('These tests use the live public library without login. They do not upload to TestFlight. Home/reopen does not prove audible output throughout suspension; notification delivery and physical-device behavior still need device testing.\n')
+              summary.write('Checks: moving HLS frames, Audio/Video position, native background clock, paused Home, fullscreen, double tap, swipe down, mini/full, deep links, PiP, and 26 clean screenshots. PiP is explicitly skipped if the runtime reports it unavailable.\n\n')
+              summary.write('These tests use the live public library without login. They do not upload to TestFlight. Native background clock samples do not measure physical-device audio output; notification delivery and physical-device behavior still need device testing.\n')
           PY

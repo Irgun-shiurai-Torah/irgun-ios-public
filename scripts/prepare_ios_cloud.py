@@ -104,6 +104,7 @@ def write_analytics_plugin():
     if not ANALYTICS_PLUGIN_TEMPLATE.exists():
         die(f'Analytics plugin template is missing: {ANALYTICS_PLUGIN_TEMPLATE}')
     ANALYTICS_PLUGIN.write_text(ANALYTICS_PLUGIN_TEMPLATE.read_text())
+    (IOS_APP / 'IrgunBackgroundAudioPlugin.swift').write_text((ROOT / 'scripts/IrgunBackgroundAudioPlugin.swift').read_text())
 
 def patch_app_delegate():
     app_delegate = IOS_APP / 'AppDelegate.swift'
@@ -135,6 +136,7 @@ def patch_app_delegate():
               let capacitorBridge = bridgeVC.bridge as? CapacitorBridge else { return }
         let plugin = IrgunAnalyticsPlugin()
         capacitorBridge.registerPluginInstance(plugin)
+        capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())
         irgunAnalyticsPlugin = plugin
     }
 
@@ -265,6 +267,9 @@ def patch_app_delegate():
         if idx < 0:
             die('Could not find the end of AppDelegate.swift')
         text = text[:idx] + ''.join(additions) + text[idx:]
+
+    if 'capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())' not in text:
+        text = text.replace('capacitorBridge.registerPluginInstance(plugin)', 'capacitorBridge.registerPluginInstance(plugin)\n        capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())', 1)
 
     # Dispatch native lifecycle transitions into the WebView before iOS suspends it.
     for method_name, event_name in [
