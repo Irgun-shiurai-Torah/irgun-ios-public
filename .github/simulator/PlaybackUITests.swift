@@ -9,6 +9,9 @@ final class PlaybackUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication(bundleIdentifier: "org.irgunshiuraitorah.app")
         app.launchArguments = ["--irgun-simulator-tests"]
+        if name.contains("testReportedShiurDirectPlaybackAndUnlistedEmbed") {
+            app.launchArguments.append("--irgun-reported-mp4")
+        }
         app.launch()
         _ = try waitFor("Library must load from the API", timeout: 90) {
             ($0["libraryReady"] as? Bool == true) && self.number($0, "libraryCount") > 0
@@ -178,6 +181,40 @@ final class PlaybackUITests: XCTestCase {
     func testFreshVideoHasMovingFrames() throws {
         try openSample()
         try assertMovingVideo()
+    }
+
+    func testReportedShiurDirectPlaybackAndUnlistedEmbed() throws {
+        let button = app.buttons["ist-simulator-open"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        let state = try waitFor("Reported IST-DL6067 must start as visible direct video", timeout: 150) {
+            $0["id"] as? String == "1233236785:585d5d53db" && $0["ready"] as? Bool == true &&
+            $0["mode"] as? String == "video" && $0["videoVisible"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == true &&
+            ["mp4", "hls-native"].contains($0["backend"] as? String ?? "")
+        }
+        XCTAssertEqual(state["videoSource"] as? String, state["reportedExpectedSource"] as? String)
+        let sources = state["reportedSources"] as? [String: Any] ?? [:]
+        if (sources["hls"] as? String ?? "").isEmpty {
+            XCTAssertEqual(state["backend"] as? String, "mp4", "MP4-only shiur must not fall back to Vimeo")
+        }
+        let embed = URLComponents(string: state["vimeoEmbed"] as? String ?? "")
+        XCTAssertEqual(embed?.path, "/video/1233236785")
+        XCTAssertEqual(embed?.queryItems?.first { $0.name == "h" }?.value, "585d5d53db")
+        XCTAssertEqual(state["directFallbackId"] as? String, "")
+        XCTAssertFalse(state["fallbackBanner"] as? Bool ?? true)
+        XCTAssertEqual(number(state, "playerCount"), 1)
+        try assertMovingVideo()
+        evidence("reported-shiur-moving")
+        try tapWebButton("Pause video")
+        _ = try waitFor("Reported shiur native Pause") { $0["videoPlaying"] as? Bool == false }
+        let paused = number(snapshot(), "videoTime")
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
+        try tapWebButton("Play video")
+        try assertMovingVideo()
+        XCTAssertFalse(snapshot()["fallbackBanner"] as? Bool ?? true)
+        evidence("reported-shiur-resumed")
     }
 
     func testReopeningSameShiurKeepsPlayerAndClock() throws {

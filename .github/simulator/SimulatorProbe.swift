@@ -106,7 +106,8 @@ final class SimulatorProbe {
     }
 
     @objc private func openSample() {
-        webView?.evaluateJavaScript("window.ISTSimulator?.openSample()", completionHandler: nil)
+        let action = ProcessInfo.processInfo.arguments.contains("--irgun-reported-mp4") ? "openReportedShiur" : "openSample"
+        webView?.evaluateJavaScript("window.ISTSimulator?.\(action)()", completionHandler: nil)
     }
 
     @objc private func reopenCurrent() {

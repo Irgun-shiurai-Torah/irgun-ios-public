@@ -65,6 +65,56 @@ function fixture() {
 }
 const flush = async () => { for(let i=0;i<12;i++) await Promise.resolve(); };
 
+test('reported unlisted Vimeo ID keeps its video number and privacy code',()=>{
+  const c=vm.createContext({});
+  vm.runInContext(extract('function watchVimeoEmbedSrc(', 'const iosDirectVideoSourceCache'),c);
+  const url=new URL(c.watchVimeoEmbedSrc({vimeoId:'1233236785:585d5d53db'},42.9));
+  assert.equal(url.pathname,'/video/1233236785');
+  assert.equal(url.searchParams.get('h'),'585d5d53db');
+  assert.equal(url.searchParams.get('autoplay'),'1');
+  assert.equal(url.hash,'#t=42s');
+});
+test('public Vimeo embed retains the existing playback parameters',()=>{
+  const c=vm.createContext({});
+  vm.runInContext(extract('function watchVimeoEmbedSrc(', 'const iosDirectVideoSourceCache'),c);
+  assert.equal(c.watchVimeoEmbedSrc({id:'1182395717'}),'https://player.vimeo.com/video/1182395717?playsinline=1&autoplay=1&title=0&byline=0&portrait=0');
+});
+test('invalid Vimeo IDs do not turn into a different numeric video',()=>{
+  const c=vm.createContext({});
+  vm.runInContext(extract('function watchVimeoEmbedSrc(', 'const iosDirectVideoSourceCache'),c);
+  for(const id of ['drivev-123','123:bad/hash',''])assert.equal(c.watchVimeoEmbedSrc({id}),'about:blank');
+});
+test('iOS source discovery accepts the reported MP4 without HLS',async()=>{
+  const calls=[];
+  const c=vm.createContext({IS_IOS:true,Capacitor:{isNativePlatform:()=>true},videoId:v=>v.id,API:'https://api.example.test',AbortController,setTimeout,clearTimeout,console,
+    fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({video:{hls:null,mp4:'https://media.example.test/IST-DL6067/video.mp4'}})};}});
+  vm.runInContext(extract('const iosDirectVideoSourceCache', 'class IosDirectVideoAdapter'),c);
+  const sources=await c.loadIosDirectVideoSources({id:'1233236785:585d5d53db'});
+  assert.equal(sources.hls,'');assert.equal(sources.mp4,'https://media.example.test/IST-DL6067/video.mp4');
+  assert.equal(calls[0].url,'https://api.example.test/media/1233236785%3A585d5d53db/source.json');
+});
+test('MP4-only iOS player stays direct and keeps its requested position',async()=>{
+  const f=fixture(),created=[];
+  f.context.window={ISTDirectMediaPlayer:true,Vimeo:{Player:function(){throw new Error('Unexpected Vimeo fallback');}}};
+  f.context.loadIosDirectVideoSources=async()=>({hls:'',mp4:'https://media.example.test/IST-DL6067/video.mp4'});
+  f.context.IosDirectVideoAdapter=function(options){created.push(options);this.ready=async()=>{};};
+  vm.runInContext(extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,42,true);
+  assert.equal(result.backend,'direct');assert.equal(created.length,1);
+  assert.equal(created[0].sources.hls,'');assert.equal(created[0].startSeconds,42);assert.equal(created[0].autoplay,true);
+});
+test('actual iOS Vimeo fallback uses the unlisted embed code',async()=>{
+  const f=fixture(),players=[];
+  f.state.watchVideo={id:'1233236785:585d5d53db'};
+  f.frame.style={};f.frame.dataset={};
+  f.context.window={ISTDirectMediaPlayer:true,Vimeo:{Player:function(frame){players.push(frame.src);}}};
+  f.context.loadIosDirectVideoSources=async()=>null;
+  vm.runInContext(extract('function watchVimeoEmbedSrc(', 'const iosDirectVideoSourceCache')+extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,42,true);
+  assert.equal(result.backend,'vimeo');assert.equal(players.length,1);
+  const url=new URL(players[0]);assert.equal(url.pathname,'/video/1233236785');assert.equal(url.searchParams.get('h'),'585d5d53db');assert.equal(url.hash,'#t=42s');
+});
+
 test('speaker filters omit unresolved metadata rather than render blank rows',()=>{
   const context=vm.createContext({state:{metadata:{topics:[]}},allLibraryItems:()=>[{_speakerIds:['missing','known','known']}],speakerLabel:id=>id==='known'?'Rabbi Name':'',uniqueOptions:()=>[]});
   vm.runInContext(extract('function availableFilters(', 'function locationFilterMatches('),context);
