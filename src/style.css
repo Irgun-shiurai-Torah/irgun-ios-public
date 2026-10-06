@@ -2578,3 +2578,11 @@ html, body, #app {
   margin:0 !important;
   overflow:hidden !important;
 }
+
+/* Compact iPhone header; preserve the full system safe area above it. */
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 600px) {
+    .topbar { padding-top:env(safe-area-inset-top, 0px); padding-bottom:4px; }
+    .app-shell.has-sponsor-ribbon .topbar { padding-top:0; }
+  }
+}

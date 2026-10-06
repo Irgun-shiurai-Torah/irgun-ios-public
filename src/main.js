@@ -4748,10 +4748,14 @@ function commentsHtml() {
 }
 
 function watchVimeoEmbedSrc(video, resumeSeconds = 0) {
-  const id = encodeURIComponent(String(video?.vimeoId || video?.id || '').replace(/\D/g, ''));
+  // Unlisted catalog IDs contain a separate privacy code. Its digits must never
+  // be appended to the numeric video ID, and Vimeo requires it in the h query.
+  const match = String(video?.vimeoId || video?.id || '').trim().match(/^(\d+)(?::([a-z0-9]+))?$/i);
+  if (!match) return 'about:blank';
+  const privacy = match[2] ? `h=${encodeURIComponent(match[2])}&` : '';
   const seconds = Math.max(0, Math.floor(Number(resumeSeconds) || 0));
   const hash = seconds > 1 ? `#t=${seconds}s` : '';
-  return `https://player.vimeo.com/video/${id}?playsinline=1&autoplay=1&title=0&byline=0&portrait=0${hash}`;
+  return `https://player.vimeo.com/video/${match[1]}?${privacy}playsinline=1&autoplay=1&title=0&byline=0&portrait=0${hash}`;
 }
 
 const iosDirectVideoSourceCache = new Map();

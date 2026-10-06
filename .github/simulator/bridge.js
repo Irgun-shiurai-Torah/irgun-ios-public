@@ -43,6 +43,7 @@ function simulatorVisible(element) {
 
 window.ISTSimulator = {
   storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
+  reportedExpectedSource: '', reportedSources: null,
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
   async nextStorePage() {
     this.storeReady = false; this.storeError = '';
@@ -109,6 +110,23 @@ window.ISTSimulator = {
   reopenCurrent() {
     if (!state.watchVideo) return;
     openPushDestination(`/watch.html?v=${encodeURIComponent(videoId(state.watchVideo))}`);
+  },
+  async openReportedShiur() {
+    if (simulatorOpening) return;
+    simulatorOpening = true; simulatorError = '';
+    try {
+      // Use the real loaded catalog and production source discovery. Do not
+      // substitute a fixture URL or change the player's source preference.
+      const video = state.videoById.get('1233236785:585d5d53db');
+      if (!video || !/פריזנט/.test(video.title || '') || !/עצות להצלחה/.test(video.title || '') || Number(video.duration) !== 3663)
+        throw new Error('Exact reported IST-DL6067 shiur is unavailable in the live catalog');
+      const sources = await loadIosDirectVideoSources(video);
+      if (!sources?.mp4) throw new Error('Reported shiur has no direct MP4');
+      this.reportedSources = sources;
+      this.reportedExpectedSource = sources.hls || sources.mp4;
+      await openWatch(videoId(video), 0);
+    } catch (error) { simulatorError = String(error.message || error); }
+    finally { simulatorOpening = false; }
   },
   async openSample() {
     if (simulatorOpening) return;
@@ -198,6 +216,10 @@ window.ISTSimulator = {
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: state.watchVimeo?.player?.backend || '',
+      videoSource: video?.currentSrc || video?.src || '',
+      reportedExpectedSource: this.reportedExpectedSource, reportedSources: this.reportedSources,
+      vimeoEmbed: document.getElementById('watchVimeoFrame')?.dataset?.vimeoSrc || '',
+      fallbackBanner: Boolean(document.querySelector('.watch-hls-fallback-note')) || /HLS could not start.*Playing Vimeo/.test(document.body.innerText),
       sampleId: this.selectedSampleId,
       recoveryMP4: Boolean(state.watchVimeo?.player?.backend==='mp4' && state.watchVimeo?.player?.decoderReloads>0),
       playIntent: Boolean(state.watchVimeo?.player?.autoplayWanted),
