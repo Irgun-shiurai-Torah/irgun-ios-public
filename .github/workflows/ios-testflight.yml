@@ -31,13 +31,13 @@ concurrency:
 
 env:
   BUNDLE_ID: org.irgunshiuraitorah.app
-  IOS_MARKETING_VERSION: "1.2.69"
+  IOS_MARKETING_VERSION: "1.2.70"
   IOS_BUILD_OFFSET: "107"
   IOS_PRODUCT_NAME: IrgunShiuraiTorah
 
 jobs:
   source-package:
-    name: Full V1.2.69 Source ZIP
+    name: Full V1.2.70 Source ZIP
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,14 +48,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f Irgun-iOS-1.2.69-FULL.zip
-          zip -qr Irgun-iOS-1.2.69-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.69-FULL.zip"
+          rm -f Irgun-iOS-1.2.70-FULL.zip
+          zip -qr Irgun-iOS-1.2.70-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.70-FULL.zip"
 
       - name: Upload full source package
         uses: actions/upload-artifact@v7
         with:
-          name: Irgun-iOS-1.2.69-FULL
-          path: Irgun-iOS-1.2.69-FULL.zip
+          name: Irgun-iOS-1.2.70-FULL
+          path: Irgun-iOS-1.2.70-FULL.zip
           if-no-files-found: error
           retention-days: 30
 
