@@ -114,6 +114,65 @@ final class PlaybackUITests: XCTestCase {
 
     }
 
+    func testAuthenticatedSessionLoadsAccountCollectionsReadOnly() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let email = env["IST_TEST_EMAIL"], !email.isEmpty,
+              let password = env["IST_TEST_PASSWORD"], !password.isEmpty else {
+            throw XCTSkip("Configure IST_TEST_EMAIL and IST_TEST_PASSWORD repository secrets to run authenticated account tests.")
+        }
+
+        func logoutIfPossible() {
+            if app.state != .runningForeground { app.launch() }
+            try? tapWebButton("Account")
+            let logout = app.webViews.buttons["Logout"].firstMatch
+            if logout.waitForExistence(timeout: 4) { logout.tap() }
+        }
+        defer { logoutIfPossible() }
+
+        try tapWebButton("Account")
+        let emailField = app.webViews.textFields["Email"].firstMatch
+        XCTAssertTrue(emailField.waitForExistence(timeout: 15), "Login email field must be visible")
+        emailField.tap()
+        emailField.typeText(email)
+
+        let passwordField = app.webViews.secureTextFields["Password"].firstMatch
+        XCTAssertTrue(passwordField.waitForExistence(timeout: 10), "Login password field must be visible")
+        passwordField.tap()
+        passwordField.typeText(password)
+
+        let loginButton = app.webViews.buttons["Login"].firstMatch
+        XCTAssertTrue(loginButton.waitForExistence(timeout: 10), "Login button must be visible")
+        loginButton.tap()
+
+        let signedIn = try waitFor("Real account login must succeed", timeout: 45) {
+            $0["signedIn"] as? Bool == true && $0["accountChecking"] as? Bool != true
+        }
+        if let error = signedIn["accountCheckError"] as? String, !error.isEmpty {
+            XCTFail("Authenticated read-only account checks failed: \(error)")
+        }
+        let checks = signedIn["accountChecks"] as? [String: Any] ?? [:]
+        for key in ["me", "likes", "later", "follows", "history", "notifications", "playlists", "purchases"] {
+            XCTAssertEqual(checks[key] as? Bool, true, "Authenticated endpoint failed: \(key)")
+        }
+
+        try tapWebButton("Library")
+        for (label, section) in [("Likes","likes"),("Watch Later","later"),("History","history"),("Playlists","playlists"),("Purchased","purchased"),("Following","following")] {
+            let button = app.webViews.buttons[label].firstMatch
+            XCTAssertTrue(button.waitForExistence(timeout: 10), "Authenticated Library tab must exist: \(label)")
+            button.tap()
+            _ = try waitFor("Authenticated Library tab must open: \(label)") {
+                $0["signedIn"] as? Bool == true && $0["librarySection"] as? String == section
+            }
+        }
+
+        // Prove the bearer token survives a normal app relaunch and /me restores the session.
+        app.terminate()
+        app.launch()
+        _ = try waitFor("Authenticated session must restore after relaunch", timeout: 60) {
+            $0["libraryReady"] as? Bool == true && $0["signedIn"] as? Bool == true
+        }
+    }
+
     func testTabSwipesNavigateBothDirections() throws {
         try tapWebButton("Home")
         func swipe(_ left: Bool, to screen: String) throws {
