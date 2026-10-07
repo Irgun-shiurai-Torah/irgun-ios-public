@@ -1,4 +1,4 @@
-name: iOS Logged-in Account Tests
+name: iOS Login & Account Tests
 
 on:
   workflow_dispatch:
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  playback:
-    name: Playback on ${{ matrix.family }}
+  account:
+    name: Account test on ${{ matrix.family }}
     runs-on: macos-26
     timeout-minutes: 60
     strategy:
@@ -45,9 +45,8 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Install dependencies and add simulator-only observations
+      - name: Build app and add account-test observations
         run: |
-          node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           python3 .github/account-tests/prepare.py web
@@ -104,7 +103,7 @@ jobs:
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
 
-      - name: Run playback UI tests
+      - name: Run logged-in account UI test
         shell: bash
         run: |
           set -euo pipefail
@@ -118,7 +117,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -destination-timeout 120 \
             -derivedDataPath "$RUNNER_TEMP/SimulatorDerivedData" \
-            -resultBundlePath simulator-results/Playback.xcresult \
+            -resultBundlePath simulator-results/Account.xcresult \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:SimulatorUITests/PlaybackUITests/testLoggedInAccountPersistenceAndLogout \
