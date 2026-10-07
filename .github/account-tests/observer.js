@@ -1,4 +1,33 @@
 // Read-only observations appended to disposable debug builds; no credentials or UI setters.
+window.__ISTAccountControlQueries = {
+  account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
+  library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
+  login: '#authForm button[type="submit"]', logout: '[data-logout]',
+  profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
+  open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
+  save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
+  later: '.playlist-picker [data-save]', closePicker: '.playlist-picker-head [data-playlist-picker-close]',
+  closeWatch: '[data-close-watch]', follow: '[data-follow-type="speaker"]',
+  playlists: '[data-library-section="playlists"]', playlistName: '#libraryPlaylistCreateName',
+  createPlaylist: '#libraryPlaylistCreateForm button[type="submit"]',
+  testPlaylist: '[data-playlist-open]', deletePlaylist: '[data-playlist-delete]',
+  history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
+  saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
+};
+if (!window.__ISTAccountClickObserverInstalled) {
+  window.__ISTAccountClickObserverInstalled = true;
+  window.__ISTAccountLastClick = { sequence:0, key:'', at:0 };
+  document.addEventListener('click', event => {
+    const target = event.target instanceof Element ? event.target : null;
+    const match = Object.entries(window.__ISTAccountControlQueries).find(([, query]) => target?.closest?.(query));
+    if (!match) return;
+    window.__ISTAccountLastClick = {
+      sequence:Number(window.__ISTAccountLastClick?.sequence || 0) + 1,
+      key:match[0],
+      at:Date.now()
+    };
+  }, true);
+}
 window.ISTAccountTest = { snapshot() {
   const queries = {
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
@@ -28,9 +57,10 @@ window.ISTAccountTest = { snapshot() {
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
   return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,
+    lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
-    follows:[...state.follows.keys()],history:state.history.map(x=>String(x.id||x.vimeoId||'')),
+    follows:[...state.follows.keys()],history:state.history.map(x=>String(x.rawAudioId||x.videoId||x.id||x.vimeoId||'').replace(/^audio:/,'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),

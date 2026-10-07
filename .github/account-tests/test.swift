@@ -48,11 +48,21 @@
                 report["authBusy"] = s["authBusy"] as? Bool ?? false
                 persistReport()
                 if let point=controls[key] {
+                    let beforeClick = number(s,"lastClickSequence")
                     let web=app.webViews.firstMatch, box=web.frame
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
                     web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
-                    return
+                    // A render can move a control between observation and touch.
+                    // Continue only after the real native tap produced its click.
+                    let clickDeadline = Date().addingTimeInterval(3)
+                    while Date() < clickDeadline {
+                        let observed = account()
+                        if number(observed,"lastClickSequence") > beforeClick,
+                           observed["lastClickKey"] as? String == key { return }
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                    }
+                    continue
                 }
                 let rects = s["controlRects"] as? [String: [String: Any]] ?? [:]
                 if let rect = rects[key], number(rect,"y") < 0 { app.webViews.firstMatch.swipeDown() }
