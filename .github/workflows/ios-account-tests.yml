@@ -136,24 +136,43 @@ jobs:
               Path('account-results/test-summary.txt').write_text('\n'.join(lines))
           PY_SUMMARY
           if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl terminate "$SIMULATOR_UDID" "$BUNDLE_ID" || true
+            xcrun simctl launch "$SIMULATOR_UDID" "$BUNDLE_ID" --irgun-simulator-tests || true
           python3 - <<'PY_ACCOUNT'
-          import json, os
+          import json, os, socket, time
           from pathlib import Path
           from datetime import datetime, timezone
           root=Path.home()/'Library/Developer/CoreSimulator/Devices'/os.environ['SIMULATOR_UDID']/'data/Containers/Data/Application'
           candidates=list(root.glob('*/Documents/irgun-account-result.json'))
+          cleared=False
+          for attempt in range(20):
+              try:
+                  with socket.create_connection(('127.0.0.1',47291),timeout=2) as connection:
+                      data=b''
+                      while b'\n' not in data:
+                          block=connection.recv(65536)
+                          if not block: break
+                          data+=block
+                  observed=json.loads(data)
+                  cleared=observed.get('account',{}).get('authFieldsEmpty') is True
+                  if cleared: break
+              except (OSError,ValueError): pass
+              time.sleep(0.5)
           if len(candidates)==1:
               value=json.loads(candidates[0].read_text())
-              keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared'}
+              keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy'}
               safe={key:value[key] for key in keys if key in value}
+              safe['evidenceCredentialsCleared']=cleared
               if safe.get('status')=='running':
                   safe['status']='failed'
                   safe['finishedAt']=datetime.now(timezone.utc).isoformat()
               Path('account-results/account.json').write_text(json.dumps(safe,indent=2))
           else:
-              Path('account-results/account.json').write_text(json.dumps({'status':'failed','credentialsRecorded':False,'checks':[],'error':'Native account report missing or ambiguous'}))
+              Path('account-results/account.json').write_text(json.dumps({'status':'failed','credentialsRecorded':False,'checks':[],'evidenceCredentialsCleared':cleared,'error':'Native account report missing or ambiguous'}))
           PY_ACCOUNT
-            xcrun simctl io "$SIMULATOR_UDID" screenshot account-results/final-screen.png || true
+            if python3 -c "import json; raise SystemExit(0 if json.load(open('account-results/account.json')).get('evidenceCredentialsCleared') is True else 1)"; then
+              xcrun simctl io "$SIMULATOR_UDID" screenshot account-results/final-screen.png || true
+            fi
             xcrun simctl shutdown "$SIMULATOR_UDID" || true
           fi
       - name: Upload account result summary only

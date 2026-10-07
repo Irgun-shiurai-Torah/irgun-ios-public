@@ -15,9 +15,11 @@ window.ISTAccountTest = { snapshot() {
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
-  const controls = {};
+  const controls = {}, controlRects = {};
   for (const [key, query] of Object.entries(queries)) {
     const candidates = [...document.querySelectorAll(query)];
+    const element = candidates[0];
+    if (element) { const r=element.getBoundingClientRect(); controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height}; }
     const chosen = candidates.find(e => {
       const r=e.getBoundingClientRect(), x=r.left+r.width/2,y=r.top+r.height/2;
       const h=document.elementFromPoint(x,y);
@@ -25,14 +27,14 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,
+  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.id||x.vimeoId||'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
-    authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
+    authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
     videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
 }};
 if(window.ISTSimulator){

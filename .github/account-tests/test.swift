@@ -33,23 +33,52 @@
             try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
         }
         func touch(_ key: String) throws {
+            report["stage"] = "Native touch: " + key; persistReport()
+            let hide = app.buttons["ist-simulator-hide-controls"]
+            if hide.exists && hide.isHittable { hide.tap() }
+            try awaitAccount("Account control rendered: " + key) {
+                let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
+                return rects[key] != nil
+            }
             for _ in 0..<7 {
                 let s=account(), controls=s["controls"] as? [String: [String: Any]] ?? [:]
+                report["lastScreen"] = s["screen"] as? String ?? ""
+                report["lastControlKeys"] = controls.keys.sorted()
+                report["keyboardVisible"] = app.keyboards.firstMatch.exists
+                report["authBusy"] = s["authBusy"] as? Bool ?? false
+                persistReport()
                 if let point=controls[key] {
                     let web=app.webViews.firstMatch, box=web.frame
-                    let x=number(point,"x") / number(s,"width"), y=number(point,"y") / number(s,"height")
                     XCTAssertTrue(box.width>0 && box.height>0)
-                    web.coordinate(withNormalizedOffset:CGVector(dx:x,dy:y)).tap()
+                    // Use the same CSS-point mapping as the native playback suite.
+                    web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
                     return
                 }
-                app.webViews.firstMatch.swipeUp()
+                let rects = s["controlRects"] as? [String: [String: Any]] ?? [:]
+                if let rect = rects[key], number(rect,"y") < 0 { app.webViews.firstMatch.swipeDown() }
+                else { app.webViews.firstMatch.swipeUp() }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }
+        func dismissNativeKeyboard() throws {
+            guard app.keyboards.firstMatch.exists else { return }
+            let done=app.buttons["Done"].firstMatch
+            if done.exists && done.isHittable { done.tap(); return }
+            for label in ["Return", "Go", "Done", "Log In"] {
+                let key=app.keyboards.buttons[label].firstMatch
+                if key.exists && key.isHittable { key.tap(); return }
+            }
+            XCTFail("No native keyboard dismissal control"); throw Failure.timedOut("keyboard dismissal")
+        }
         report["nativeLoginStartedAt"] = timestamp(); persistReport()
         try touch("account")
-        try touch("email"); app.textFields.firstMatch.typeText(email)
-        try touch("password"); app.secureTextFields.firstMatch.typeText(password + "\n")
+        try awaitAccount("Account login form rendered") { $0["authFormPresent"] as? Bool == true }
+        try touch("email"); app.textFields.firstMatch.typeText(email); try dismissNativeKeyboard()
+        try touch("password"); app.secureTextFields.firstMatch.typeText(password); try dismissNativeKeyboard()
+        // A native Return/Go key may submit. Wait for that request instead of
+        // searching for the disabled or already-removed Login button.
+        let settledAfter = Date().timeIntervalSince1970 * 1000
+        try awaitAccount("Native login form settled") { self.number($0,"observedAt") > settledAfter && $0["authBusy"] as? Bool == false }
         if account()["loggedIn"] as? Bool != true { try touch("login") }
         try awaitAccount("Native login and profile") { $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true }
         XCTAssertEqual(account()["isAdmin"] as? Bool, false, "Use a dedicated non-admin account")
