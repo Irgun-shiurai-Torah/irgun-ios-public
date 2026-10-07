@@ -28,6 +28,31 @@ if (!window.__ISTAccountClickObserverInstalled) {
     };
   }, true);
 }
+
+// Observe only allowlisted collection requests in disposable debug builds.
+// Preserve every original call/result and never retain headers, bodies or errors.
+if (!window.__ISTAccountRequestObserverInstalled) {
+  window.__ISTAccountRequestObserverInstalled = true;
+  window.__ISTAccountRequests = [];
+  const originalApiJson = apiJson;
+  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later']);
+  apiJson = async function(path, ...args) {
+    if (!allowed.has(path)) return originalApiJson(path, ...args);
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
+    window.__ISTAccountRequests.push(entry);
+    try {
+      const result = await originalApiJson(path, ...args);
+      entry.ok = true;
+      if (typeof result?.following === 'boolean') entry.following = result.following;
+      if (typeof result?.liked === 'boolean') entry.liked = result.liked;
+      return result;
+    } catch (error) {
+      entry.status = Number(error?.status)||0;
+      throw error;
+    } finally { entry.finishedAt = Date.now(); }
+  };
+}
+
 window.ISTAccountTest = { snapshot() {
   const queries = {
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
@@ -56,7 +81,7 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
-  return {observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],

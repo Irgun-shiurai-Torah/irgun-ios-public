@@ -17,6 +17,7 @@
         persistReport()
         defer {
             report["finishedAt"] = timestamp()
+            report["collectionRequests"] = (snapshot()["account"] as? [String: Any])?["requests"] ?? []
             if report["status"] as? String != "passed" { report["status"] = "failed" }
             // A native process restart clears typed form contents before evidence.
             app.terminate(); app.launch()
@@ -42,6 +43,7 @@
             }
             for _ in 0..<7 {
                 let s=account(), controls=s["controls"] as? [String: [String: Any]] ?? [:]
+                report["collectionRequests"] = s["requests"] ?? []
                 report["lastScreen"] = s["screen"] as? String ?? ""
                 report["lastControlKeys"] = controls.keys.sorted()
                 report["keyboardVisible"] = app.keyboards.firstMatch.exists
@@ -147,7 +149,24 @@
         // Restore the lecture flags. Keep the uniquely named QA playlist for inspection.
         try touch("shiurim"); try touch("open")
         try awaitAccount("Same lecture for cleanup") { $0["watchId"] as? String == id }
-        try touch("like"); try touch("save"); try touch("later"); try closeSavePicker(); try touch("follow")
+        // Restore one flag at a time and verify each actual state transition.
+        // This isolates the failing operation instead of issuing all requests
+        // before a combined assertion.
+        try touch("like")
+        try awaitAccount("Like restored") {
+            values($0,"likes").contains(id) == values(before,"likes").contains(id)
+        }
+        checked("Native Like flag restored")
+        try touch("save"); try touch("later"); try closeSavePicker()
+        try awaitAccount("Watch Later restored") {
+            values($0,"later").contains(id) == values(before,"later").contains(id)
+        }
+        checked("Native Watch Later flag restored")
+        try touch("follow")
+        try awaitAccount("Follow restored") {
+            values($0,"follows").sorted() == values(before,"follows").sorted()
+        }
+        checked("Native Follow flag restored")
         try awaitAccount("Lecture flags restored") { values($0,"likes").contains(id) == values(before,"likes").contains(id) && values($0,"later").contains(id) == values(before,"later").contains(id) && values($0,"follows").sorted() == values(before,"follows").sorted() }
         checked("Lecture flags restored")
         // Relaunch rather than depending on the same top-edge close control,
