@@ -114,6 +114,25 @@ final class PlaybackUITests: XCTestCase {
 
     }
 
+    func testAppleSignInButtonIsVisible() throws {
+        try tapWebButton("Account")
+        let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
+        XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Continue with Apple button must be present")
+        XCTAssertTrue(apple.isHittable, "Continue with Apple button must be visible and tappable")
+        evidence("apple-sign-in-white-outline")
+    }
+
+    func testLauncherIconOnHomeScreen() throws {
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "launcher-icon-home-screen"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.activate()
+        _ = try waitFor("App returns from launcher icon preview") { self.number($0, "observedAt") > Date().timeIntervalSince1970*1000-1500 }
+    }
+
     func testTabSwipesNavigateBothDirections() throws {
         try tapWebButton("Home")
         func swipe(_ left: Bool, to screen: String) throws {
