@@ -116,8 +116,20 @@
         checked("Native speaker follow toggle")
         try awaitAccount("Playing lecture records real history") { $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > 1 && values($0,"history").contains(id) }
         checked("Actual playing lecture history recorded")
-        try touch("closeWatch")
-        try touch("library"); try touch("playlists")
+        // Leave playback through a real process restart so a top-edge player
+        // control cannot be obscured by simulator chrome. This also proves the
+        // authenticated session survives before creating server-side data.
+        app.terminate(); app.launch()
+        try awaitAccount("Signed-in library reloads after playback") {
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true
+        }
+        try touch("library")
+        try awaitAccount("Library screen rendered") {
+            guard $0["screen"] as? String == "library" else { return false }
+            let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
+            return rects["playlists"] != nil
+        }
+        try touch("playlists")
         let playlistName="Irgun-QA-\(Int(Date().timeIntervalSince1970))"
         try touch("playlistName"); app.textFields.firstMatch.typeText(playlistName + "\n")
         func hasPlaylist(_ s:[String:Any]) -> Bool { (s["playlists"] as? [[String:Any]] ?? []).contains { $0["name"] as? String == playlistName } }
@@ -138,7 +150,15 @@
         try touch("like"); try touch("save"); try touch("later"); try closeSavePicker(); try touch("follow")
         try awaitAccount("Lecture flags restored") { values($0,"likes").contains(id) == values(before,"likes").contains(id) && values($0,"later").contains(id) == values(before,"later").contains(id) && values($0,"follows").sorted() == values(before,"follows").sorted() }
         checked("Lecture flags restored")
-        try touch("closeWatch")
+        // Relaunch rather than depending on the same top-edge close control,
+        // then require the restored server state and session to load normally.
+        app.terminate(); app.launch()
+        try awaitAccount("Restored account reloads before logout") {
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
+            values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
+            values($0,"later").contains(id) == values(before,"later").contains(id) &&
+            values($0,"follows").sorted() == values(before,"follows").sorted()
+        }
         try touch("account"); try touch("logout")
         try awaitAccount("Logout clears account state") { $0["loggedIn"] as? Bool == false && values($0,"likes").isEmpty && values($0,"later").isEmpty && ($0["playlists"] as? [[String:Any]] ?? []).isEmpty }
         checked("Logout clears account state")
