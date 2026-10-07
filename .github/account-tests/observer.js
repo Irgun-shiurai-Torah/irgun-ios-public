@@ -35,4 +35,11 @@ window.ISTAccountTest = { snapshot() {
     authError:!!document.querySelector('.auth-card .form-message'),
     videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
 }};
-if(window.ISTSimulator){const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);window.ISTSimulator.snapshot=()=>({...original(),account:window.ISTAccountTest.snapshot()});}
+if(window.ISTSimulator){
+  const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);
+  // SimulatorProbe reads JSON text. Preserve that wire format and every
+  // playback observation when adding the read-only account snapshot.
+  window.ISTSimulator.snapshot=()=>JSON.stringify({
+    ...JSON.parse(original()),account:window.ISTAccountTest.snapshot()
+  });
+}
