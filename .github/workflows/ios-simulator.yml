@@ -19,6 +19,7 @@ on:
       - capacitor.config.json
       - vite.config.js
       - scripts/**
+      - assets/**
   pull_request:
     paths:
       - .github/workflows/ios-simulator.yml
@@ -70,6 +71,7 @@ jobs:
           npm run build
           npx cap add ios
           npx cap sync ios
+          sips -s format png assets/icon-master.jpg --out assets/icon-only.png >/dev/null
           npx @capacitor/assets generate --ios
           python3 scripts/prepare_ios_cloud.py
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
