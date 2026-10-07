@@ -44,7 +44,38 @@ function simulatorVisible(element) {
 window.ISTSimulator = {
   storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
   reportedExpectedSource: '', reportedSources: null,
+  accountChecking: false, accountChecks: null, accountCheckError: '',
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
+  async verifyAccountReads() {
+    if (!state.user || this.accountChecking || this.accountChecks) return;
+    this.accountChecking = true; this.accountCheckError = '';
+    try {
+      const [me, likes, later, follows, history, notifications, playlists, paid] = await Promise.all([
+        apiJson('/me'),
+        apiJson('/my-like-ids'),
+        apiJson('/watch-later'),
+        apiJson('/follows'),
+        apiJson('/history'),
+        apiJson('/notification-settings'),
+        apiJson('/custom-playlists'),
+        apiJson(`/paid-audio?v=${Date.now()}`)
+      ]);
+      this.accountChecks = {
+        me: Boolean(me?.loggedIn && me?.user),
+        likes: Array.isArray(likes?.ids),
+        later: Array.isArray(later?.items),
+        follows: Array.isArray(follows?.items),
+        history: Array.isArray(history?.items),
+        notifications: Boolean(notifications && typeof notifications === 'object'),
+        playlists: Array.isArray(playlists?.items),
+        purchases: Array.isArray(paid?.items)
+      };
+    } catch (error) {
+      this.accountCheckError = String(error?.message || error);
+    } finally {
+      this.accountChecking = false;
+    }
+  },
   async nextStorePage() {
     this.storeReady = false; this.storeError = '';
     const page = this.storePages[++this.storeIndex];
@@ -203,9 +234,14 @@ window.ISTSimulator = {
       };
       video.requestVideoFrameCallback(track);
     }
+    if (state.user && !this.accountChecks && !this.accountChecking && !this.accountCheckError) this.verifyAccountReads();
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen,
+      signedIn: Boolean(state.user && state.token), librarySection: state.librarySection,
+      accountChecking: this.accountChecking, accountChecks: this.accountChecks, accountCheckError: this.accountCheckError,
+      likesCount: state.myLikes.size, watchLaterCount: state.watchLater.size, followsCount: state.follows.size,
+      historyCount: state.history.length, playlistsCount: (state.playlists || []).length,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
       gestures: simulatorGestures, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),
