@@ -1,0 +1,149 @@
+name: iOS Logged-in Account Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/account-tests/**'
+      - '.github/workflows/ios-account-tests.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-account-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playback:
+    name: Playback on ${{ matrix.family }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [iPhone, iPad]
+      max-parallel: 1
+    env:
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      IOS_MARKETING_VERSION: "1.2.71"
+      BUILD_NUMBER: "1"
+      SIMULATOR_VIDEO_ID: ""
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      DEVICE_FAMILY: ${{ matrix.family }}
+
+    steps:
+      - name: Require dedicated account secrets
+        run: |
+          test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || { echo "Add IRGUN_TEST_EMAIL and IRGUN_TEST_PASSWORD repository secrets for a verified non-admin test account."; exit 1; }
+      - uses: actions/checkout@v7
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "~26.6.0"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies and add simulator-only observations
+        run: |
+          node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
+          npm install --no-audit --no-fund
+          python3 .github/simulator/prepare.py web
+          python3 .github/account-tests/prepare.py web
+          npm run build
+          npx cap add ios
+          npx cap sync ios
+          npx @capacitor/assets generate --ios
+          python3 scripts/prepare_ios_cloud.py
+          ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
+          ruby scripts/patch_xcode_project.rb
+          python3 .github/simulator/prepare.py native
+          ruby .github/simulator/configure.rb
+          python3 .github/account-tests/prepare.py scheme
+          bash scripts/assert_no_direct_swiftuicore.sh
+
+      - name: Install CocoaPods dependencies if used
+        run: |
+          if [ -f ios/App/Podfile ]; then
+            cd ios/App
+            pod install --repo-update
+          fi
+
+      - name: Select and boot an installed simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p simulator-results
+          xcodebuild -version > simulator-results/xcode-version.txt
+          xcrun simctl list devices available --json > simulator-results/devices.json
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          devices = json.loads(Path('simulator-results/devices.json').read_text())['devices']
+          candidates = [(runtime, device) for runtime, group in devices.items()
+                        if '.iOS-' in runtime for device in group
+                        if device.get('isAvailable') and device['name'].startswith(os.environ['DEVICE_FAMILY'])]
+          if not candidates:
+              raise SystemExit('No installed simulator for ' + os.environ['DEVICE_FAMILY'])
+          def preferred(item):
+              name=item[1]['name']
+              match=('Pro Max' in name) if os.environ['DEVICE_FAMILY']=='iPhone' else ('Pro' in name and '13' in name)
+              return (tuple(map(int,re.findall(r'\d+',item[0]))),match,tuple(map(int,re.findall(r'\d+',name))))
+          candidates.sort(key=preferred, reverse=True)
+          runtime, device = candidates[0]
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write('SIMULATOR_UDID=' + device['udid'] + '\n')
+          Path('simulator-results/selected-device.json').write_text(json.dumps({'runtime':runtime, **device}, indent=2))
+          print('Selected', device['name'], runtime, device['udid'])
+          PY
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "$SIMULATOR_UDID"
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
+
+      - name: Run playback UI tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER=(-project ios/App/App.xcodeproj)
+          if [ -d ios/App/App.xcworkspace ]; then
+            CONTAINER=(-workspace ios/App/App.xcworkspace)
+          fi
+          xcodebuild "${CONTAINER[@]}" \
+            -scheme SimulatorPlayback \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/SimulatorDerivedData" \
+            -resultBundlePath simulator-results/Playback.xcresult \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:SimulatorUITests/PlaybackUITests/testLoggedInAccountPersistenceAndLogout \
+            test 2>&1 | tee simulator-results/xcodebuild.log
+
+      - name: Save credential-free result summary
+        if: always()
+        run: |
+          mkdir -p account-results
+          python3 - <<'PY_SUMMARY'
+          from pathlib import Path
+          source=Path('simulator-results/xcodebuild.log')
+          if source.exists():
+              lines=[line for line in source.read_text(errors='replace').splitlines() if ("Test Case '-" in line and any(word in line for word in [' passed ', ' failed ', ' skipped '])) or 'Executed ' in line and ' tests,' in line]
+              Path('account-results/test-summary.txt').write_text('\n'.join(lines))
+          PY_SUMMARY
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl io "$SIMULATOR_UDID" screenshot account-results/final-screen.png || true
+            xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          fi
+      - name: Upload account result summary only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: account-${{ matrix.family }}-${{ github.run_id }}
+          path: account-results/
+          if-no-files-found: warn
+          retention-days: 7
