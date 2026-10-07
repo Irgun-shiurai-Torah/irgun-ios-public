@@ -9,8 +9,13 @@ if sys.argv[1]=='web':
  p.write_text(s[:at]+'\n'+(here/'test.swift').read_text()+s[at:])
 elif sys.argv[1]=='scheme':
  p=root/'ios/App/App.xcodeproj/xcshareddata/xcschemes/SimulatorPlayback.xcscheme'
- t=ET.parse(p);a=t.getroot().find('TestAction');v=ET.SubElement(a,'EnvironmentVariables')
+ t=ET.parse(p);a=t.getroot().find('TestAction');assert a is not None
+ # The generated scheme inherits LaunchAction by default, ignoring test-only env.
+ a.set('shouldUseLaunchSchemeArgsEnv','NO')
+ for previous in list(a.findall('EnvironmentVariables')): a.remove(previous)
+ v=ET.SubElement(a,'EnvironmentVariables')
  for k in ['IRGUN_TEST_EMAIL','IRGUN_TEST_PASSWORD']:
   assert os.environ.get(k),f'Missing {k}'
   ET.SubElement(v,'EnvironmentVariable',key=k,value=os.environ[k],isEnabled='YES')
  t.write(p,encoding='utf-8',xml_declaration=True)
+

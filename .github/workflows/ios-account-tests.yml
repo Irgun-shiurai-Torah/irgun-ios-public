@@ -136,6 +136,23 @@ jobs:
               Path('account-results/test-summary.txt').write_text('\n'.join(lines))
           PY_SUMMARY
           if [ -n "${SIMULATOR_UDID:-}" ]; then
+          python3 - <<'PY_ACCOUNT'
+          import json, os
+          from pathlib import Path
+          from datetime import datetime, timezone
+          root=Path.home()/'Library/Developer/CoreSimulator/Devices'/os.environ['SIMULATOR_UDID']/'data/Containers/Data/Application'
+          candidates=list(root.glob('*/Documents/irgun-account-result.json'))
+          if len(candidates)==1:
+              value=json.loads(candidates[0].read_text())
+              keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared'}
+              safe={key:value[key] for key in keys if key in value}
+              if safe.get('status')=='running':
+                  safe['status']='failed'
+                  safe['finishedAt']=datetime.now(timezone.utc).isoformat()
+              Path('account-results/account.json').write_text(json.dumps(safe,indent=2))
+          else:
+              Path('account-results/account.json').write_text(json.dumps({'status':'failed','credentialsRecorded':False,'checks':[],'error':'Native account report missing or ambiguous'}))
+          PY_ACCOUNT
             xcrun simctl io "$SIMULATOR_UDID" screenshot account-results/final-screen.png || true
             xcrun simctl shutdown "$SIMULATOR_UDID" || true
           fi
