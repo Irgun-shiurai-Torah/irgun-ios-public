@@ -766,3 +766,11 @@ test('failed HLS metadata recovers MP4 without resetting position or settings',a
   assert.equal(p.v.currentTime,62);assert.equal(p.v.playbackRate,1.5);assert.equal(p.v.volume,.7);
   assert.equal(p.v.muted,false);assert.equal(p.v.paused,false);
 });
+
+
+test('Apple login uses official white outlined artwork',()=>{
+  const auth=extract('function authHtml()', 'function relatedVideos(');
+  assert.match(auth,/appleid\.cdn-apple\.com\/appleid\/button\?height=56&amp;width=375&amp;color=white&amp;border=true&amp;type=continue/);
+  assert.doesNotMatch(auth,/apple-mark-svg/);
+  assert.doesNotMatch(auth,/<svg[^>]*apple/i);
+});
