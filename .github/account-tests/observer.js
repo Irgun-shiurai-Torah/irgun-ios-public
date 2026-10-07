@@ -69,11 +69,24 @@ window.ISTAccountTest = { snapshot() {
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
-  const controls = {}, controlRects = {};
+  const controls = {}, controlRects = {}, controlScrollers = {};
   for (const [key, query] of Object.entries(queries)) {
     const candidates = [...document.querySelectorAll(query)];
     const element = candidates[0];
-    if (element) { const r=element.getBoundingClientRect(); controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height}; }
+    if (element) {
+      const r=element.getBoundingClientRect();
+      controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height};
+      const scroller=element.closest('.library-tabs-scroll');
+      if(scroller && scroller.scrollWidth>scroller.clientWidth) {
+        const box=scroller.getBoundingClientRect();
+        const left=Math.max(0,box.left),right=Math.min(innerWidth,box.right);
+        const top=Math.max(0,box.top),bottom=Math.min(innerHeight,box.bottom);
+        const hit=document.elementFromPoint((left+right)/2,(top+bottom)/2);
+        if(right-left>60 && bottom-top>10 && hit && scroller.contains(hit)) {
+          controlScrollers[key]={left,right,top,bottom};
+        }
+      }
+    }
     const chosen = candidates.find(e => {
       const r=e.getBoundingClientRect(), x=r.left+r.width/2,y=r.top+r.height/2;
       const h=document.elementFromPoint(x,y);
@@ -81,7 +94,7 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],

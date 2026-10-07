@@ -67,8 +67,22 @@
                     continue
                 }
                 let rects = s["controlRects"] as? [String: [String: Any]] ?? [:]
-                if let rect = rects[key], number(rect,"y") < 0 { app.webViews.firstMatch.swipeDown() }
-                else { app.webViews.firstMatch.swipeUp() }
+                let scrolls = s["controlScrollers"] as? [String: [String: Any]] ?? [:]
+                if let rect = rects[key], let scroll = scrolls[key],
+                   number(rect,"x") < number(scroll,"left") || number(rect,"x") > number(scroll,"right") {
+                    // Swipe the actual horizontally scrolling tab row. Vertical
+                    // page scrolling cannot expose an offscreen Playlists tab.
+                    let left=number(scroll,"left")+15, right=number(scroll,"right")-15
+                    let y=(number(scroll,"top")+number(scroll,"bottom"))/2
+                    let web=app.webViews.firstMatch
+                    let origin=web.coordinate(withNormalizedOffset:.zero)
+                    let startX=number(rect,"x")>right ? right:left
+                    let endX=number(rect,"x")>right ? left:right
+                    origin.withOffset(CGVector(dx:startX,dy:y)).press(forDuration:0.05,
+                        thenDragTo:origin.withOffset(CGVector(dx:endX,dy:y)))
+                } else if let rect = rects[key], number(rect,"y") < 0 {
+                    app.webViews.firstMatch.swipeDown()
+                } else { app.webViews.firstMatch.swipeUp() }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }
