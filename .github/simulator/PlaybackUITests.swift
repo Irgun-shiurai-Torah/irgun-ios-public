@@ -114,6 +114,16 @@ final class PlaybackUITests: XCTestCase {
 
     }
 
+    func testOfficialAppleLoginButtonIsVisible() throws {
+        try tapWebButton("Sign In")
+        let appleButton = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
+        XCTAssertTrue(appleButton.waitForExistence(timeout: 15), "Continue with Apple button must exist on iOS")
+        XCTAssertTrue(appleButton.isHittable, "Continue with Apple button must be visible and tappable")
+        XCTAssertGreaterThanOrEqual(appleButton.frame.height, 44, "Apple button must meet the minimum tap target")
+        XCTAssertGreaterThan(appleButton.frame.width, 200, "Apple button should render at full login-card width")
+        evidence("apple-login-white-outline")
+    }
+
     func testTabSwipesNavigateBothDirections() throws {
         try tapWebButton("Home")
         func swipe(_ left: Bool, to screen: String) throws {
