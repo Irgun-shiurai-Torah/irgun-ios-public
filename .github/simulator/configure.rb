@@ -37,5 +37,10 @@ project.save
 scheme = Xcodeproj::XCScheme.new
 scheme.configure_with_targets(app, tests)
 scheme.test_action.build_configuration = 'Debug'
+test_env = Xcodeproj::XCScheme::EnvironmentVariables.new
+test_env['IST_TEST_EMAIL'] = ENV.fetch('IST_TEST_EMAIL', '')
+test_env['IST_TEST_PASSWORD'] = ENV.fetch('IST_TEST_PASSWORD', '')
+scheme.test_action.environment_variables = test_env
+scheme.test_action.should_use_launch_scheme_args_env = false
 scheme.save_as(path, 'SimulatorPlayback', true)
 puts 'Created SimulatorPlayback scheme and UI test target.'
