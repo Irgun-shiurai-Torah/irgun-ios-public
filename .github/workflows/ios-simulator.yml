@@ -52,6 +52,8 @@ jobs:
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
       DEVICE_FAMILY: ${{ matrix.family }}
+      IST_TEST_EMAIL: ${{ secrets.IST_TEST_EMAIL }}
+      IST_TEST_PASSWORD: ${{ secrets.IST_TEST_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v7
@@ -219,5 +221,5 @@ jobs:
               summary.write('## ' + os.environ['DEVICE_FAMILY'] + ' playback tests\n\n')
               summary.write('Result: **' + os.environ['JOB_STATUS'] + '**. Download the simulator artifact for screenshots, playback JSON, Xcode results and logs.\n\n')
               summary.write('Checks: moving HLS frames, Audio/Video position, native background clock, paused Home, fullscreen, double tap, swipe down, mini/full, deep links, PiP, and 26 clean screenshots. PiP is explicitly skipped if the runtime reports it unavailable.\n\n')
-              summary.write('These tests use the live public library without login. They do not upload to TestFlight. Native background clock samples do not measure physical-device audio output; notification delivery and physical-device behavior still need device testing.\n')
+              summary.write('Public playback checks use the live library. When IST_TEST_EMAIL and IST_TEST_PASSWORD repository secrets are configured, the suite also performs a real read-only login/session check for account collections and purchase visibility, then logs out. They do not upload to TestFlight. Native background clock samples do not measure physical-device audio output; notification delivery and physical-device behavior still need device testing.\n')
           PY
