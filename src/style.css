@@ -2611,26 +2611,26 @@ html, body, #app {
   min-height:52px!important;
   justify-self:center;
   margin:1px auto!important;
-  border:1px solid #252525;
-  border-radius:26px!important;
+  border:1px solid #000;
+  border-radius:12px!important;
   background:#fff;
-  color:#202124;
+  color:#000;
   display:flex;
   align-items:center;
   justify-content:center;
-  gap:11px;
+  gap:9px;
   padding:0 18px;
-  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Arial,sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
   font-size:20px;
-  font-weight:400;
+  font-weight:600;
   line-height:1;
   letter-spacing:0;
   box-shadow:none;
 }
 .auth-social-buttons .google-auth-btn svg{
-  width:23px;
-  height:23px;
-  flex:0 0 23px;
+  width:19px;
+  height:19px;
+  flex:0 0 19px;
 }
 .auth-social-buttons .google-auth-btn span{
   display:block;
