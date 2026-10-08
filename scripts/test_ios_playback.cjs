@@ -768,9 +768,18 @@ test('failed HLS metadata recovers MP4 without resetting position or settings',a
 });
 
 
-test('Apple login uses official white outlined sign-in artwork',()=>{
+test('Apple login uses official white outlined continue artwork',()=>{
   const auth=extract('function authHtml()', 'function relatedVideos(');
-  assert.match(auth,/appleid\.cdn-apple\.com\/appleid\/button\?height=56&amp;width=375&amp;color=white&amp;border=true&amp;type=sign-in/);
+  assert.match(auth,/appleid\.cdn-apple\.com\/appleid\/button\?height=52&amp;width=356&amp;color=white&amp;border=true&amp;type=continue/);
   assert.doesNotMatch(auth,/apple-mark-svg/);
   assert.doesNotMatch(auth,/<svg[^>]*apple/i);
+});
+
+
+test('Apple and Google login pills share dimensions without clipping',()=>{
+  const css=fs.readFileSync(path.join(__dirname, '../src/style.css'), 'utf8');
+  assert.match(css,/\.auth-social-buttons\{[\s\S]*?width:min\(100%,360px\)/);
+  assert.match(css,/\.auth-social-buttons \.social-auth-pill\{[\s\S]*?height:54px/);
+  assert.match(css,/\.auth-social-buttons \.apple-auth-btn\{[\s\S]*?overflow:visible!important/);
+  assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?height:52px!important[\s\S]*?object-fit:contain!important/);
 });
