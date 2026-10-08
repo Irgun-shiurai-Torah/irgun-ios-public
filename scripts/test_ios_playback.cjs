@@ -787,7 +787,7 @@ test('Apple and Google login pills share dimensions without clipping',()=>{
 
 test('Google pill matches Apple visible dimensions and typography',()=>{
   const css=fs.readFileSync(path.join(__dirname, '../src/style.css'), 'utf8');
-  assert.match(css,/\.auth-social-buttons \.google-auth-btn\{[\s\S]*?width:calc\(100% - 4px\)!important[\s\S]*?max-width:356px[\s\S]*?height:52px!important[\s\S]*?border-radius:12px!important[\s\S]*?font-size:20px[\s\S]*?font-weight:600/);
+  assert.match(css,/\.auth-social-buttons \.google-auth-btn\{[\s\S]*?width:calc\(100% - 4px\)!important[\s\S]*?max-width:356px[\s\S]*?height:52px!important[\s\S]*?border-radius:12px!important[\s\S]*?font-size:22px[\s\S]*?font-weight:600/);
   assert.match(css,/\.auth-social-buttons \.google-auth-btn svg\{[\s\S]*?width:19px[\s\S]*?height:19px/);
   assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?max-width:356px[\s\S]*?height:52px!important/);
 });
