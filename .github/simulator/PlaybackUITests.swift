@@ -116,10 +116,10 @@ final class PlaybackUITests: XCTestCase {
 
     func testAppleSignInButtonIsVisible() throws {
         try tapWebButton("Account")
-        let apple = app.webViews.buttons.matching(identifier: "Sign in with Apple").firstMatch
-        XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Sign in with Apple button must be present")
-        XCTAssertTrue(apple.isHittable, "Sign in with Apple button must be visible and tappable")
-        evidence("apple-sign-in-polished")
+        let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
+        XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Continue with Apple button must be present")
+        XCTAssertTrue(apple.isHittable, "Continue with Apple button must be visible and tappable")
+        evidence("apple-google-matched-pills")
     }
 
     func testLauncherIconOnHomeScreen() throws {
