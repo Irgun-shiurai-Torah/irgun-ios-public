@@ -768,9 +768,9 @@ test('failed HLS metadata recovers MP4 without resetting position or settings',a
 });
 
 
-test('Apple login uses official white outlined artwork',()=>{
+test('Apple login uses official white outlined sign-in artwork',()=>{
   const auth=extract('function authHtml()', 'function relatedVideos(');
-  assert.match(auth,/appleid\.cdn-apple\.com\/appleid\/button\?height=56&amp;width=375&amp;color=white&amp;border=true&amp;type=continue/);
+  assert.match(auth,/appleid\.cdn-apple\.com\/appleid\/button\?height=56&amp;width=375&amp;color=white&amp;border=true&amp;type=sign-in/);
   assert.doesNotMatch(auth,/apple-mark-svg/);
   assert.doesNotMatch(auth,/<svg[^>]*apple/i);
 });
