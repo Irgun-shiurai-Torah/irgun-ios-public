@@ -2605,24 +2605,37 @@ html, body, #app {
   border-radius:27px;
 }
 .auth-social-buttons .google-auth-btn{
-  border:1.2px solid #252525;
+  width:calc(100% - 4px)!important;
+  max-width:356px;
+  height:52px!important;
+  min-height:52px!important;
+  justify-self:center;
+  margin:1px auto!important;
+  border:1px solid #252525;
+  border-radius:26px!important;
   background:#fff;
   color:#202124;
   display:flex;
   align-items:center;
   justify-content:center;
-  gap:12px;
+  gap:11px;
   padding:0 18px;
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Arial,sans-serif;
-  font-size:16px;
-  font-weight:500;
+  font-size:20px;
+  font-weight:400;
   line-height:1;
+  letter-spacing:0;
   box-shadow:none;
 }
 .auth-social-buttons .google-auth-btn svg{
-  width:22px;
-  height:22px;
-  flex:0 0 22px;
+  width:23px;
+  height:23px;
+  flex:0 0 23px;
+}
+.auth-social-buttons .google-auth-btn span{
+  display:block;
+  line-height:1;
+  font:inherit;
 }
 .auth-social-buttons .google-auth-btn:active{background:#f7f7f7}
 .auth-social-buttons .google-auth-btn:disabled{opacity:.55;cursor:wait}
