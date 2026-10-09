@@ -303,15 +303,17 @@ test('destroyed direct players cancel retries and reject new playback',async()=>
   const cleared=[];
   const c=vm.createContext({
     window:{}, location:{protocol:'capacitor:',hostname:'localhost'},
-    clearTimeout:timer=>cleared.push(timer), document:{fullscreenElement:null}
+    clearTimeout:timer=>cleared.push(timer),
+    clearInterval:timer=>cleared.push(timer),
+    document:{fullscreenElement:null}
   });
   vm.runInContext(directSource,c);
   const p=Object.create(c.window.ISTDirectMediaPlayer.prototype);
-  Object.assign(p,{destroyed:false,token:7,hlsRetryTimer:11,hlsStableTimer:12,bufferTimer:13,
+  Object.assign(p,{destroyed:false,token:7,hlsRetryTimer:11,hlsStableTimer:12,bufferTimer:13,frameHealthTimer:14,
     v:{pause:()=>{},removeAttribute:()=>{},load:()=>{}}, quality:{}, hls:null});
   p.destroy();
   assert.equal(p.token,8);
-  assert.ok(cleared.includes(11)&&cleared.includes(12)&&cleared.includes(13));
+  assert.ok(cleared.includes(11)&&cleared.includes(12)&&cleared.includes(13)&&cleared.includes(14));
   await assert.rejects(p.play(),/destroyed/);
   await assert.rejects(p.activate({hls:'https://example.test/master.m3u8'},30,true),/destroyed/);
   p.fatal(new Error('delayed media error')); // must not schedule another load
