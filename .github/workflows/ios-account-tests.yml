@@ -160,7 +160,7 @@ jobs:
               time.sleep(0.5)
           if len(candidates)==1:
               value=json.loads(candidates[0].read_text())
-              keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy'}
+              keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy','authFormValid','authEmailValid','authPasswordValid','authEmailLength','authPasswordLength','authSubmitCount','authInvalidFieldKey'}
               safe={key:value[key] for key in keys if key in value}
               # Export only scalar request outcomes from the strict observer allowlist.
               allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
