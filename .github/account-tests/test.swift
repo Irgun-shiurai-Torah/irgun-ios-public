@@ -35,6 +35,10 @@
             return requests.filter { $0["path"] as? String == "/follows/toggle" &&
                 ($0["ok"] as? Bool == true || (number($0, "finishedAt") > 0 && number($0, "status") > 0)) }.count
         }
+        func successfulHistoryWrites(_ s: [String: Any]) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
+        }
         func awaitSuccessfulFollowRequest(after previous: Int) throws {
             try awaitAccount("Follow request returned successfully") { s in
                 let requests = s["requests"] as? [[String: Any]] ?? []
@@ -132,7 +136,9 @@
         try touch("settings")
         try awaitAccount("Settings displayed") { $0["settingsVisible"] as? Bool == true }
         checked("Account settings displayed")
-        try touch("shiurim"); try touch("open")
+        try touch("shiurim")
+        let historyWritesBeforeLecture = successfulHistoryWrites(account())
+        try touch("open")
         try awaitAccount("Lecture opened") { !($0["watchId"] as? String ?? "").isEmpty }
         let id=account()["watchId"] as! String, before=account()
         report["accountMutationsStartedAt"] = timestamp(); persistReport()
@@ -147,7 +153,12 @@
         try awaitSuccessfulFollowRequest(after: followRequestCount)
         try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
         checked("Native speaker follow toggle")
-        try awaitAccount("Playing lecture records real history") { $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > 1 && values($0,"history").contains(id) }
+        try awaitAccount("Playing lecture records real history") {
+            $0["videoPlaying"] as? Bool == true &&
+            self.number($0,"videoTime") > 1 &&
+            values($0,"history").contains(id) &&
+            successfulHistoryWrites($0) > historyWritesBeforeLecture
+        }
         checked("Actual playing lecture history recorded")
         // Leave playback through a real process restart so a top-edge player
         // control cannot be obscured by simulator chrome. This also proves the
