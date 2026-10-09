@@ -35,9 +35,13 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   window.__ISTAccountRequestObserverInstalled = true;
   window.__ISTAccountRequests = [];
   const originalApiJson = apiJson;
-  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later']);
+  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
-    if (!allowed.has(path)) return originalApiJson(path, ...args);
+    // Only log the fact that a history write completed. Never capture the
+    // request body, video identifier, account identity or authentication.
+    if (!allowed.has(path) || (path === '/history' && String(args[0]?.method || 'GET').toUpperCase() !== 'POST')) {
+      return originalApiJson(path, ...args);
+    }
     const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
     window.__ISTAccountRequests.push(entry);
     try {
