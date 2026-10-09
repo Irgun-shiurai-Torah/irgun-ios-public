@@ -6556,10 +6556,26 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => el.addEventListener('click', async () => {
-    await preserveWatchTime();
-    toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-  }));
+  // Follow chips can be recreated while the native player moves between hosts.
+  // A document-level handler survives those DOM replacements and does not
+  // block account actions on an unrelated video time lookup.
+  if (!document.__irgunFollowClickHandlerInstalled) {
+    document.__irgunFollowClickHandlerInstalled = true;
+    const pendingFollows = new Set();
+    document.addEventListener('click', event => {
+      const el = event.target instanceof Element
+        ? event.target.closest('[data-follow-type][data-follow-key]') : null;
+      if (!el) return;
+      const type = el.dataset.followType;
+      const key = el.dataset.followKey;
+      if (!key || (type !== 'speaker' && type !== 'topic')) return;
+      const identity = `${type}:${key}`;
+      if (pendingFollows.has(identity)) return;
+      pendingFollows.add(identity);
+      Promise.resolve(toggleFollow(type, key, el.dataset.followLabel))
+        .finally(() => pendingFollows.delete(identity));
+    }, true);
+  }
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
