@@ -119,12 +119,47 @@
         try awaitAccount("Account login form rendered") { $0["authFormPresent"] as? Bool == true }
         try touch("email"); app.textFields.firstMatch.typeText(email); try dismissNativeKeyboard()
         try touch("password"); app.secureTextFields.firstMatch.typeText(password); try dismissNativeKeyboard()
-        // A native Return/Go key may submit. Wait for that request instead of
-        // searching for the disabled or already-removed Login button.
+        // Return/Go can submit immediately. Give an in-flight request time to
+        // settle before deciding whether the form still needs a native tap.
         let settledAfter = Date().timeIntervalSince1970 * 1000
-        try awaitAccount("Native login form settled") { self.number($0,"observedAt") > settledAfter && $0["authBusy"] as? Bool == false }
-        if account()["loggedIn"] as? Bool != true { try touch("login") }
-        try awaitAccount("Native login and profile") { $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true }
+        try awaitAccount("Native login form settled") {
+            self.number($0, "observedAt") > settledAfter && $0["authBusy"] as? Bool == false
+        }
+        func repairNativeCredential(_ key: String, _ expected: String) throws {
+            try touch(key)
+            let field = key == "email" ? app.textFields.firstMatch : app.secureTextFields.firstMatch
+            // XCUI may drop an initial keystroke in a WebKit input on iPhone.
+            // Rewrite through the real native keyboard, never through JS setters.
+            // Secure input values remain redacted; no credentials enter artifacts.
+            let prior = field.value as? String ?? ""
+            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue,
+                                 count: max(prior.count, expected.count) + 8)
+            field.typeText(deletes)
+            field.typeText(expected)
+            try dismissNativeKeyboard()
+        }
+        // The document can observe a click on Login even when HTML constraint
+        // validation suppressed the submit event. Validate field shapes before
+        // clicking, and repair any dropped native keystrokes once.
+        for _ in 0..<2 {
+            let observed = account()
+            if observed["loggedIn"] as? Bool == true || observed["authFormValid"] as? Bool == true { break }
+            if observed["authFormPresent"] as? Bool != true { break }
+            if observed["authEmailValid"] as? Bool != true { try repairNativeCredential("email", email) }
+            if account()["authPasswordValid"] as? Bool != true { try repairNativeCredential("password", password) }
+            let afterRepair = Date().timeIntervalSince1970 * 1000
+            try awaitAccount("Repaired login form settled") {
+                self.number($0, "observedAt") > afterRepair && $0["authBusy"] as? Bool == false
+            }
+        }
+        if account()["loggedIn"] as? Bool != true {
+            XCTAssertTrue(account()["authFormValid"] as? Bool == true,
+                          "Native login fields failed HTML validation before submit; see redacted validity report")
+            try touch("login")
+        }
+        try awaitAccount("Native login and profile") {
+            $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true
+        }
         XCTAssertEqual(account()["isAdmin"] as? Bool, false, "Use a dedicated non-admin account")
         let authenticatedEmail = (account()["accountEmail"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         XCTAssertTrue(authenticatedEmail == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), "Refuse to mutate an account other than the dedicated approved account")
