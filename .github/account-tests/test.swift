@@ -30,6 +30,20 @@
         }
         func account() -> [String: Any] { snapshot()["account"] as? [String: Any] ?? [:] }
         func values(_ s: [String: Any], _ key: String) -> [String] { s[key] as? [String] ?? [] }
+        func completedFollowRequests(_ s: [String: Any]) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter { $0["path"] as? String == "/follows/toggle" &&
+                ($0["ok"] as? Bool == true || (number($0, "finishedAt") > 0 && number($0, "status") > 0)) }.count
+        }
+        func awaitSuccessfulFollowRequest(after previous: Int) throws {
+            try awaitAccount("Follow request returned successfully") { s in
+                let requests = s["requests"] as? [[String: Any]] ?? []
+                let followRequests = requests.filter { $0["path"] as? String == "/follows/toggle" }
+                // A handled HTTP error must fail the test; a click alone is not enough.
+                return followRequests.count > previous &&
+                    followRequests.last?["ok"] as? Bool == true
+            }
+        }
         func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
             try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
         }
@@ -127,7 +141,10 @@
         checked("Native Like toggle")
         try touch("save"); try touch("later")
         try awaitAccount("Watch Later toggled") { values($0,"later").contains(id) != values(before,"later").contains(id) }
-        try closeSavePicker(); checked("Native Watch Later toggle and dialog closure"); try touch("follow")
+        try closeSavePicker(); checked("Native Watch Later toggle and dialog closure")
+        let followRequestCount = completedFollowRequests(account())
+        try touch("follow")
+        try awaitSuccessfulFollowRequest(after: followRequestCount)
         try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
         checked("Native speaker follow toggle")
         try awaitAccount("Playing lecture records real history") { $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > 1 && values($0,"history").contains(id) }
@@ -176,7 +193,9 @@
             values($0,"later").contains(id) == values(before,"later").contains(id)
         }
         checked("Native Watch Later flag restored")
+        let followRestoreRequestCount = completedFollowRequests(account())
         try touch("follow")
+        try awaitSuccessfulFollowRequest(after: followRestoreRequestCount)
         try awaitAccount("Follow restored") {
             values($0,"follows").sorted() == values(before,"follows").sorted()
         }
