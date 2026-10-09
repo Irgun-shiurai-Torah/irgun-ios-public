@@ -141,21 +141,44 @@
         // The document can observe a click on Login even when HTML constraint
         // validation suppressed the submit event. Validate field shapes before
         // clicking, and repair any dropped native keystrokes once.
-        for _ in 0..<2 {
+        func nativeEmailMatchesApproved() -> Bool {
+            let entered = (app.textFields.firstMatch.value as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return entered == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        func nativePasswordLengthMatches() -> Bool {
+            Int(number(account(), "authPasswordLength")) == password.utf16.count
+        }
+        for _ in 0..<3 {
             let observed = account()
-            if observed["loggedIn"] as? Bool == true || observed["authFormValid"] as? Bool == true { break }
+            if observed["loggedIn"] as? Bool == true { break }
             if observed["authFormPresent"] as? Bool != true { break }
-            if observed["authEmailValid"] as? Bool != true { try repairNativeCredential("email", email) }
-            if account()["authPasswordValid"] as? Bool != true { try repairNativeCredential("password", password) }
+            let emailCorrect = nativeEmailMatchesApproved()
+            let passwordCorrectLength = nativePasswordLengthMatches()
+            if observed["authFormValid"] as? Bool == true && emailCorrect && passwordCorrectLength { break }
+            if observed["authEmailValid"] as? Bool != true || !emailCorrect {
+                try repairNativeCredential("email", email)
+            }
+            if account()["authPasswordValid"] as? Bool != true || !passwordCorrectLength {
+                try repairNativeCredential("password", password)
+            }
             let afterRepair = Date().timeIntervalSince1970 * 1000
             try awaitAccount("Repaired login form settled") {
                 self.number($0, "observedAt") > afterRepair && $0["authBusy"] as? Bool == false
             }
         }
         if account()["loggedIn"] as? Bool != true {
-            XCTAssertTrue(account()["authFormValid"] as? Bool == true,
-                          "Native login fields failed HTML validation before submit; see redacted validity report")
+            let observed = account()
+            XCTAssertTrue(observed["authFormValid"] as? Bool == true && nativeEmailMatchesApproved() && nativePasswordLengthMatches(),
+                          "Native login fields are incomplete or not the approved credentials; see credential-free validity observations")
+            let submitBefore = number(observed, "authSubmitCount")
             try touch("login")
+            // The click observer runs in capture phase even when HTML constraint
+            // validation suppresses submit. Require the real submit event, never
+            // mistake a native tap for a successful login.
+            try awaitAccount("Login form really submitted", { s in
+                s["loggedIn"] as? Bool == true || self.number(s, "authSubmitCount") > submitBefore
+            })
         }
         try awaitAccount("Native login and profile") {
             $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true
