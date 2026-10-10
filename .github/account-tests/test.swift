@@ -35,6 +35,13 @@
             return requests.filter { $0["path"] as? String == "/follows/toggle" &&
                 ($0["ok"] as? Bool == true || (number($0, "finishedAt") > 0 && number($0, "status") > 0)) }.count
         }
+        func successCount(_ s: [String: Any], _ path: String, _ method: String) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter {
+                $0["path"] as? String == path && $0["method"] as? String == method &&
+                $0["ok"] as? Bool == true
+            }.count
+        }
         func successfulHistoryWrites(_ s: [String: Any]) -> Int {
             let requests = s["requests"] as? [[String: Any]] ?? []
             return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
@@ -187,6 +194,11 @@
         let authenticatedEmail = (account()["accountEmail"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         XCTAssertTrue(authenticatedEmail == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), "Refuse to mutate an account other than the dedicated approved account")
         checked("Native email/password login, dedicated identity and profile")
+        let originalName = account()["name"] as? String ?? ""
+        XCTAssertFalse(originalName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(account()["profileNameValue"] as? String, originalName)
+        XCTAssertEqual(account()["profileNameDisplayed"] as? String, originalName)
+        checked("Original account name is correct in the profile")
         func closeSavePicker() throws {
             if account()["playlistPickerOpen"] as? Bool == true { try touch("closePicker") }
             try awaitAccount("Save dialog closed") { $0["playlistPickerOpen"] as? Bool == false }
@@ -218,13 +230,96 @@
             successfulHistoryWrites($0) > historyWritesBeforeLecture
         }
         checked("Actual playing lecture history recorded")
+        XCTAssertEqual(account()["watchHasAudio"] as? Bool, true, "Test lecture must have real audio")
+        let originalVideoTime = number(snapshot(), "videoTime")
+        try touch("modeAudio")
+        let audioState = try waitFor("Video to Audio transfers real playback", timeout: 90) {
+            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == false && $0["pendingSeek"] as? Bool == false &&
+            self.number($0, "audioTime") >= max(0, originalVideoTime - 3)
+        }
+        let audioStart = number(audioState, "audioTime")
+        let audioMoving = try waitFor("Audio advances after Video to Audio") {
+            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            self.number($0, "audioTime") >= audioStart + 1
+        }
+        checked("Video to Audio retains playback and position")
+        let audioEnd = number(audioMoving, "audioTime")
+        try touch("modeVideo")
+        _ = try waitFor("Audio to Video restores one playing video owner", timeout: 90) {
+            $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            $0["audioPlaying"] as? Bool == false && self.number($0, "playerCount") == 1 &&
+            self.number($0, "videoTime") >= max(0, audioEnd - 3)
+        }
+        let videoFramesBefore = number(snapshot(), "frameTime")
+        _ = try waitFor("Actual video frames advance after Audio to Video", timeout: 60) {
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            self.number($0, "frameTime") > videoFramesBefore + 0.5
+        }
+        checked("Audio to Video retains position and advances visible frames")
+        XCTAssertEqual(account()["name"] as? String, originalName)
+
+        let commentMarker = String(Int(Date().timeIntervalSince1970 * 1000))
+        try awaitAccount("Comment form loaded before posting") {
+            $0["commentsLoading"] as? Bool == false && $0["commentsError"] as? Bool == false
+        }
+        try touch("commentText")
+        let nativeComposer = app.webViews.textViews.firstMatch
+        XCTAssertTrue(nativeComposer.waitForExistence(timeout: 10), "Comment composer must exist")
+        nativeComposer.typeText("IST iOS QA \(commentMarker) created")
+        let postBefore = successCount(account(), "/comments", "POST")
+        try touch("commentPost")
+        try awaitAccount("Real server comment POST and visible owned comment") {
+            $0["qaCommentPhase"] as? String == "created" &&
+            $0["commentDraftEmpty"] as? Bool == true &&
+            successCount($0, "/comments", "POST") > postBefore
+        }
+        checked("Comment created and submitted text cleared")
+        try touch("commentEdit")
+        try awaitAccount("Owned comment edit UI opened") {
+            let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
+            return rects["commentEditText"] != nil
+        }
+        let nativeEditor = app.webViews.textViews.matching(
+            NSPredicate(format: "value CONTAINS %@", commentMarker)
+        ).firstMatch
+        XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
+        nativeEditor.typeText(" updated")
+        let editBefore = successCount(account(), "/comments/edit", "PUT")
+        try touch("commentSave")
+        try awaitAccount("Comment edit persisted on server") {
+            $0["qaCommentPhase"] as? String == "edited" &&
+            successCount($0, "/comments/edit", "PUT") > editBefore
+        }
+        checked("Comment edit saved and verified")
+        let deleteBefore = successCount(account(), "/comments/delete", "POST")
+        try touch("commentDelete")
+        let deleteAlert = app.alerts.firstMatch
+        XCTAssertTrue(deleteAlert.waitForExistence(timeout: 8), "Comment deletion confirmation must appear")
+        if deleteAlert.buttons["OK"].exists { deleteAlert.buttons["OK"].tap() }
+        else if deleteAlert.buttons["Delete"].exists { deleteAlert.buttons["Delete"].tap() }
+        else { XCTFail("Native comment confirmation button missing"); throw Failure.timedOut("Delete confirmation") }
+        try awaitAccount("Comment delete succeeded on server") {
+            $0["qaCommentPhase"] as? String == "absent" &&
+            successCount($0, "/comments/delete", "POST") > deleteBefore
+        }
+        checked("Comment deleted successfully")
+        XCTAssertEqual(account()["name"] as? String, originalName)
         // Leave playback through a real process restart so a top-edge player
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
         try awaitAccount("Signed-in library reloads after playback") {
-            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
+            $0["name"] as? String == originalName
         }
+        try touch("account")
+        try awaitAccount("Profile name survives real process restart") {
+            $0["profileNameValue"] as? String == originalName &&
+            $0["profileNameDisplayed"] as? String == originalName
+        }
+        checked("Account name persists after restart")
         try touch("library")
         try awaitAccount("Library screen rendered") {
             guard $0["screen"] as? String == "library" else { return false }
@@ -244,6 +339,7 @@
         XCTAssertEqual(values(account(),"later").contains(id),values(changed,"later").contains(id))
         XCTAssertEqual(values(account(),"follows").sorted(),values(changed,"follows").sorted())
         XCTAssertTrue(values(account(),"history").contains(id),"Playback history must survive relaunch")
+        XCTAssertEqual(account()["name"] as? String, originalName, "Name changed unexpectedly after another restart")
         checked("Session and server-loaded collections persist after native process restart")
         evidence("logged-in-account-restored")
         // Restore the lecture flags. Keep the uniquely named QA playlist for inspection.
