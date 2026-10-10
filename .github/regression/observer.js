@@ -31,10 +31,34 @@
     playlists: '[data-library-section="playlists"]',
     createPlaylist: '#libraryPlaylistCreateForm button[type="submit"]',
     deletePlaylist: '[data-playlist-delete]',
+    invalidateQA: '#ist-qa-invalidate-session',
   };
   let network = {online:false,at:0,error:false};
   let pushActions = 0;
   let pushWatchTarget = false;
+  let serverRevoked = false;
+  // A debug-only control performs a REAL Worker /logout without clearing the
+  // local token. It models an expired/revoked server session; after relaunch the
+  // production /me restoration path must notice the 401 and sign the user out.
+  // It is NOT part of release builds and is never called by production UI.
+  const invalidation = document.createElement('button');
+  invalidation.id='ist-qa-invalidate-session';
+  invalidation.textContent='Invalidate QA session on server';
+  invalidation.style.cssText='position:fixed;right:12px;bottom:92px;z-index:2147483000;padding:10px;background:#fff;border:2px solid #222;border-radius:7px;color:#222';
+  invalidation.addEventListener('click', async () => {
+    try {
+      await apiJson('/logout',{method:'POST'});
+      serverRevoked = true;
+      invalidation.textContent='Server session invalidated';
+    } catch (_) { serverRevoked = false; invalidation.textContent='Revocation failed'; }
+  });
+  const insertInvalidate = () => {
+    if (state.user && state.screen === 'account' && state.accountSection === 'profile') {
+      if (!invalidation.isConnected) document.body.appendChild(invalidation);
+    } else if (invalidation.isConnected) invalidation.remove();
+  };
+  new MutationObserver(insertInvalidate).observe(document.body,{childList:true,subtree:true});
+  insertInvalidate();
   const alive = () => !document.hidden;
   // Different cache-busting URL each time: don't mistake a ServiceWorker/local
   // cache entry or navigator.onLine for actual API connectivity.
@@ -102,7 +126,7 @@
       documentLang:document.documentElement.lang||'',
       bottomNav:buttons,rtlToggleLabel:document.querySelector('[data-language-toggle]')?.textContent?.trim()||'',
       online:network.online,networkCheckedAt:network.at,networkProbeFailed:network.error,
-      pushActions,pushWatchTarget,
+      pushActions,pushWatchTarget,serverRevoked,
       loggedIn:Boolean(state.user),isAdmin:Boolean(state.isAdmin),
       namePresent:readName.length>0,accountName:readName,
       accountEmailMatchesSecret:undefined, // Test runner compares authenticated email privately.
@@ -131,6 +155,8 @@
       videoCount:document.querySelectorAll('#directVideoElement').length,
       activeSpeakerFollows:[...state.follows.keys()].length,
       likedCurrent:videoIdValue?state.myLikes.has(videoIdValue):false,
+      speakerFollowActive:Boolean(document.querySelector('[data-follow-type="speaker"].active')),
+      syncPlaylistNames:state.playlists.filter(p=>String(p.name||'').startsWith('IST-IOS-SYNC-')).map(p=>String(p.name||'')),
       currentId:videoIdValue,
       qaSyncPlaylistPresent:state.playlists.some(p=>String(p.name||'').startsWith('IST-IOS-SYNC-')),
       accountTokenPresent:Boolean(state.token),
