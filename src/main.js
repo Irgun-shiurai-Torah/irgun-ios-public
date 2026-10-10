@@ -8318,21 +8318,30 @@ async function loadComments() {
 }
 
 async function postComment() {
-  if (!state.watchVideo) return;
+  if (!state.watchVideo || state.commentPostBusy) return;
   if (!state.user) return requireLogin('Please sign in to leave a comment.');
+  const id = videoId(state.watchVideo);
   const field = document.getElementById('commentText');
   const text = field ? field.value.trim() : '';
   if (!text) return;
-  await preserveWatchTime();
+  state.commentPostBusy = true;
+  const submit = document.querySelector('#commentForm button[type="submit"]');
+  if (submit) submit.disabled = true;
   try {
+    await preserveWatchTime();
+    if (!state.watchVideo || videoId(state.watchVideo) !== id) return;
     await apiJson('/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: videoId(state.watchVideo), text })
+      body: JSON.stringify({ videoId: id, text })
     });
-    await loadComments();
+    if (field?.isConnected && field.value.trim() === text) field.value = '';
+    if (state.watchVideo && videoId(state.watchVideo) === id) await loadComments();
   } catch (error) {
     alert(error.message || 'Could not post comment.');
+  } finally {
+    state.commentPostBusy = false;
+    if (submit?.isConnected) submit.disabled = false;
   }
 }
 
