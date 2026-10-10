@@ -353,3 +353,210 @@
             try regressionVideoMoving()
         }
     }
+
+    private func regressionHistoryPostCount() -> Int {
+        let all=(snapshot()["account"] as? [String:Any])?["requests"] as? [[String:Any]] ?? []
+        return all.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
+    }
+
+    func testRegressionOfflineDownloadPlaysWithoutNetworkAndSyncsHistory() throws {
+        try regressionLogin()
+        try regressionActivateSample()
+        if regression()["offlineSaved"] as? Bool != true {
+            try regressionTap("offlineSave")
+        }
+        try regressionWait("Native file transfer downloads a real nonempty audio file",timeout:180) {
+            $0["offlineSaved"] as? Bool == true && self.number($0,"offlineBytes")>1024 &&
+            self.number($0,"offlineJobs")==0
+        }
+        // Leave the watch overlay through its actual Back button and launch the
+        // downloaded item from the real Library > Downloads row.
+        try regressionTap("closeWatch")
+        try regressionTap("library")
+        try regressionTap("downloads")
+        try regressionWait("Downloaded real file is listed on Downloads page") {
+            let controls=$0["controls"] as? [String:[String:Any]] ?? [:]
+            return controls["offlinePlay"] != nil
+        }
+        try regressionWait("API works before forced offline state") { $0["online"] as? Bool == true }
+        try regressionNetwork("DOWN")
+        defer { try? regressionNetwork("UP") }
+        try regressionWait("Real API probe fails during simulated network outage",timeout:30) {
+            $0["online"] as? Bool == false && $0["networkProbeFailed"] as? Bool == true
+        }
+        try regressionTap("offlinePlay")
+        let playing=try waitFor("Saved native audio file plays while external network is blocked",timeout:60) {
+            let reg=$0["regression"] as? [String:Any] ?? [:]
+            return reg["offlineCurrent"] as? Bool == true &&
+                reg["playingAudio"] as? Bool == true &&
+                reg["online"] as? Bool == false &&
+                self.number($0,"audioTime")>1
+        }
+        let at=number(playing,"audioTime")
+        _ = try waitFor("Offline audio clock keeps advancing without server access",timeout:45) {
+            let reg=$0["regression"] as? [String:Any] ?? [:]
+            return reg["offlineCurrent"] as? Bool == true &&
+                reg["playingAudio"] as? Bool == true &&
+                self.number($0,"audioTime")>at+3
+        }
+        let historyBefore=regressionHistoryPostCount()
+        try regressionNetwork("UP")
+        try regressionWait("Real API connectivity restored after offline playback",timeout:45) {
+            $0["online"] as? Bool == true
+        }
+        try regressionTap("playFull")
+        try regressionTap("watchVideo")
+        _ = try waitFor("Real playback history gets a successful server write after reconnect",timeout:90) {
+            let requests=($0["account"] as? [String:Any])?["requests"] as? [[String:Any]] ?? []
+            return requests.filter { $0["path"] as? String == "/history" &&
+                $0["ok"] as? Bool == true }.count > historyBefore
+        }
+        _ = try waitFor("Return to video removes competing HTML audio",timeout:80) {
+            $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
+            $0["audioPlaying"] as? Bool == false
+        }
+        try regressionVideoMoving()
+    }
+
+    func testRegressionLoginErrorServerRevocationNameAndRelogin() throws {
+        let env=ProcessInfo.processInfo.environment
+        guard let email=env["IRGUN_TEST_EMAIL"],let pass=env["IRGUN_TEST_PASSWORD"],
+              !email.isEmpty && !pass.isEmpty else {
+            XCTFail("Require secrets for native invalid-password exercise")
+            throw Failure.timedOut("account secrets")
+        }
+        if regression()["loggedIn"] as? Bool == true {
+            try regressionTap("account")
+            try regressionTap("logout")
+            try regressionWait("Start from logged-out native state") {
+                $0["loggedIn"] as? Bool == false
+            }
+        }
+        try regressionTap("account")
+        try regressionWait("Sign-in form is native visible") { $0["loginForm"] as? Bool == true }
+        try regressionEnter("loginEmail",email)
+        try regressionEnter("loginPassword",pass+"not-valid")
+        try regressionTap("loginSubmit")
+        try regressionWait("Wrong password must return visible error and never create a session",timeout:60) {
+            $0["loggedIn"] as? Bool == false &&
+            $0["loginError"] as? Bool == true &&
+            $0["loginBusy"] as? Bool == false
+        }
+        try regressionEnter("loginPassword",pass)
+        try regressionTap("loginSubmit")
+        try regressionWait("Valid login succeeds after bad password",timeout:90) {
+            $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
+        }
+        XCTAssertEqual(
+            String((snapshot()["account"] as? [String:Any])?["accountEmail"] as? String ?? "")
+                .lowercased(),email.lowercased(),"Do not mutate another user's account"
+        )
+        let before=regression()["accountName"] as? String ?? ""
+        XCTAssertFalse(before.isEmpty,"QA account must have a stored name")
+        let temporary="Irgun QA Name \(Int(Date().timeIntervalSince1970))"
+        try regressionEnter("profileName",temporary)
+        try regressionTap("profileSave")
+        try regressionWait("Real profile save must update the current signed-in identity",timeout:60) {
+            $0["accountName"] as? String == temporary
+        }
+        app.terminate();app.launch()
+        try regressionWait("Name edit survives native relaunch and server profile reload",timeout:90) {
+            $0["loggedIn"] as? Bool == true && $0["accountName"] as? String == temporary
+        }
+        try regressionTap("account")
+        try regressionWait("Profile field reflects stored renamed value") {
+            $0["profileName"] as? String == temporary && $0["profileNameShown"] as? String == temporary
+        }
+        try regressionEnter("profileName",before)
+        try regressionTap("profileSave")
+        try regressionWait("Original QA account name restored") { $0["accountName"] as? String == before }
+        app.terminate();app.launch()
+        try regressionWait("Server still stores original restored name",timeout:90) {
+            $0["loggedIn"] as? Bool == true && $0["accountName"] as? String == before
+        }
+        try regressionTap("account")
+        try regressionTap("invalidateQA")
+        try regressionWait("Real Worker logout invalidates the server session") {
+            $0["serverRevoked"] as? Bool == true
+        }
+        // The simulator app deliberately still retains its old token locally.
+        // A cold launch now exercises production /me => 401 => signed-out UI.
+        XCTAssertEqual(regression()["accountTokenPresent"] as? Bool,true)
+        app.terminate();app.launch()
+        try regressionWait("Server-invalidated session clears login and account data",timeout:90) {
+            $0["loggedIn"] as? Bool == false && $0["accountTokenPresent"] as? Bool == false
+        }
+        try regressionLogin()
+        try regressionWait("Account name survives revoked-session reauthentication") {
+            $0["accountName"] as? String == before
+        }
+        try regressionTap("logout")
+        try regressionWait("Normal logout clears authenticated state") {
+            $0["loggedIn"] as? Bool == false && $0["accountTokenPresent"] as? Bool == false
+        }
+        try regressionLogin()
+        try regressionWait("Signing in again after logout restores correct saved name") {
+            $0["loggedIn"] as? Bool == true && $0["accountName"] as? String == before
+        }
+    }
+
+    // Cross-device job executes writer on a fresh iPhone simulator and reader
+    // on an independently installed iPad using the same dedicated account.
+    // The observer reads actual server-loaded collections from each device.
+    private func regressionSyncName() throws -> String {
+        guard let marker=ProcessInfo.processInfo.environment["IRGUN_SYNC_MARKER"],
+              !marker.isEmpty else {
+            XCTFail("Shared deterministic QA sync marker missing")
+            throw Failure.timedOut("sync marker")
+        }
+        return "IST-IOS-SYNC-"+marker
+    }
+
+    func testRegressionCrossDeviceWriterOnIPhone() throws {
+        let name=try regressionSyncName()
+        try regressionLogin()
+        try regressionTap("shiurim")
+        try regressionTap("open")
+        try regressionWait("Writer opens real server lecture and account UI") {
+            !String($0["currentId"] as? String ?? "").isEmpty
+        }
+        // Force known state ON, but do not toggle when already ON.
+        if regression()["likedCurrent"] as? Bool != true {
+            try regressionTap("like")
+            try regressionWait("Writer like saved") { $0["likedCurrent"] as? Bool == true }
+        }
+        if regression()["speakerFollowActive"] as? Bool != true {
+            try regressionTap("follow")
+            try regressionWait("Writer speaker follow saved") {
+                $0["speakerFollowActive"] as? Bool == true
+            }
+        }
+        try regressionTap("closeWatch")
+        try regressionTap("library")
+        try regressionTap("playlists")
+        if !(regression()["syncPlaylistNames"] as? [String] ?? []).contains(name) {
+            try regressionTap("playlistName")
+            let field=app.textFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout:8))
+            field.typeText(name+"\n")
+        }
+        try regressionWait("Writer created playlist stored in authenticated account",timeout:90) {
+            ($0["syncPlaylistNames"] as? [String] ?? []).contains(name)
+        }
+        XCTAssertEqual(regression()["loggedIn"] as? Bool,true)
+    }
+
+    func testRegressionCrossDeviceReaderOnIPad() throws {
+        let name=try regressionSyncName()
+        try regressionLogin()
+        try regressionWait("Independent iPad session fetched iPhone-created playlist") {
+            ($0["syncPlaylistNames"] as? [String] ?? []).contains(name)
+        }
+        try regressionTap("shiurim")
+        try regressionTap("open")
+        try regressionWait("Independent iPad sees like and speaker follow written on iPhone") {
+            $0["likedCurrent"] as? Bool == true &&
+            $0["speakerFollowActive"] as? Bool == true
+        }
+        XCTAssertEqual(regression()["isAdmin"] as? Bool,false)
+    }
