@@ -30,6 +30,24 @@
         }
         func account() -> [String: Any] { snapshot()["account"] as? [String: Any] ?? [:] }
         func values(_ s: [String: Any], _ key: String) -> [String] { s[key] as? [String] ?? [] }
+        func completedFollowRequests(_ s: [String: Any]) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter { $0["path"] as? String == "/follows/toggle" &&
+                ($0["ok"] as? Bool == true || (number($0, "finishedAt") > 0 && number($0, "status") > 0)) }.count
+        }
+        func successfulHistoryWrites(_ s: [String: Any]) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
+        }
+        func awaitSuccessfulFollowRequest(after previous: Int) throws {
+            try awaitAccount("Follow request returned successfully") { s in
+                let requests = s["requests"] as? [[String: Any]] ?? []
+                let followRequests = requests.filter { $0["path"] as? String == "/follows/toggle" }
+                // A handled HTTP error must fail the test; a click alone is not enough.
+                return followRequests.count > previous &&
+                    followRequests.last?["ok"] as? Bool == true
+            }
+        }
         func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
             try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
         }
@@ -101,12 +119,70 @@
         try awaitAccount("Account login form rendered") { $0["authFormPresent"] as? Bool == true }
         try touch("email"); app.textFields.firstMatch.typeText(email); try dismissNativeKeyboard()
         try touch("password"); app.secureTextFields.firstMatch.typeText(password); try dismissNativeKeyboard()
-        // A native Return/Go key may submit. Wait for that request instead of
-        // searching for the disabled or already-removed Login button.
+        // Return/Go can submit immediately. Give an in-flight request time to
+        // settle before deciding whether the form still needs a native tap.
         let settledAfter = Date().timeIntervalSince1970 * 1000
-        try awaitAccount("Native login form settled") { self.number($0,"observedAt") > settledAfter && $0["authBusy"] as? Bool == false }
-        if account()["loggedIn"] as? Bool != true { try touch("login") }
-        try awaitAccount("Native login and profile") { $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true }
+        try awaitAccount("Native login form settled") {
+            self.number($0, "observedAt") > settledAfter && $0["authBusy"] as? Bool == false
+        }
+        func repairNativeCredential(_ key: String, _ expected: String) throws {
+            try touch(key)
+            let field = key == "email" ? app.textFields.firstMatch : app.secureTextFields.firstMatch
+            // XCUI may drop an initial keystroke in a WebKit input on iPhone.
+            // Rewrite through the real native keyboard, never through JS setters.
+            // Secure input values remain redacted; no credentials enter artifacts.
+            let prior = field.value as? String ?? ""
+            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue,
+                                 count: max(prior.count, expected.count) + 8)
+            field.typeText(deletes)
+            field.typeText(expected)
+            try dismissNativeKeyboard()
+        }
+        // The document can observe a click on Login even when HTML constraint
+        // validation suppressed the submit event. Validate field shapes before
+        // clicking, and repair any dropped native keystrokes once.
+        func nativeEmailMatchesApproved() -> Bool {
+            let entered = (app.textFields.firstMatch.value as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return entered == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        func nativePasswordLengthMatches() -> Bool {
+            Int(number(account(), "authPasswordLength")) == password.utf16.count
+        }
+        for _ in 0..<3 {
+            let observed = account()
+            if observed["loggedIn"] as? Bool == true { break }
+            if observed["authFormPresent"] as? Bool != true { break }
+            let emailCorrect = nativeEmailMatchesApproved()
+            let passwordCorrectLength = nativePasswordLengthMatches()
+            if observed["authFormValid"] as? Bool == true && emailCorrect && passwordCorrectLength { break }
+            if observed["authEmailValid"] as? Bool != true || !emailCorrect {
+                try repairNativeCredential("email", email)
+            }
+            if account()["authPasswordValid"] as? Bool != true || !passwordCorrectLength {
+                try repairNativeCredential("password", password)
+            }
+            let afterRepair = Date().timeIntervalSince1970 * 1000
+            try awaitAccount("Repaired login form settled") {
+                self.number($0, "observedAt") > afterRepair && $0["authBusy"] as? Bool == false
+            }
+        }
+        if account()["loggedIn"] as? Bool != true {
+            let observed = account()
+            XCTAssertTrue(observed["authFormValid"] as? Bool == true && nativeEmailMatchesApproved() && nativePasswordLengthMatches(),
+                          "Native login fields are incomplete or not the approved credentials; see credential-free validity observations")
+            let submitBefore = number(observed, "authSubmitCount")
+            try touch("login")
+            // The click observer runs in capture phase even when HTML constraint
+            // validation suppresses submit. Require the real submit event, never
+            // mistake a native tap for a successful login.
+            try awaitAccount("Login form really submitted", { s in
+                s["loggedIn"] as? Bool == true || self.number(s, "authSubmitCount") > submitBefore
+            })
+        }
+        try awaitAccount("Native login and profile") {
+            $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true
+        }
         XCTAssertEqual(account()["isAdmin"] as? Bool, false, "Use a dedicated non-admin account")
         let authenticatedEmail = (account()["accountEmail"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         XCTAssertTrue(authenticatedEmail == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), "Refuse to mutate an account other than the dedicated approved account")
@@ -118,7 +194,9 @@
         try touch("settings")
         try awaitAccount("Settings displayed") { $0["settingsVisible"] as? Bool == true }
         checked("Account settings displayed")
-        try touch("shiurim"); try touch("open")
+        try touch("shiurim")
+        let historyWritesBeforeLecture = successfulHistoryWrites(account())
+        try touch("open")
         try awaitAccount("Lecture opened") { !($0["watchId"] as? String ?? "").isEmpty }
         let id=account()["watchId"] as! String, before=account()
         report["accountMutationsStartedAt"] = timestamp(); persistReport()
@@ -127,10 +205,18 @@
         checked("Native Like toggle")
         try touch("save"); try touch("later")
         try awaitAccount("Watch Later toggled") { values($0,"later").contains(id) != values(before,"later").contains(id) }
-        try closeSavePicker(); checked("Native Watch Later toggle and dialog closure"); try touch("follow")
+        try closeSavePicker(); checked("Native Watch Later toggle and dialog closure")
+        let followRequestCount = completedFollowRequests(account())
+        try touch("follow")
+        try awaitSuccessfulFollowRequest(after: followRequestCount)
         try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
         checked("Native speaker follow toggle")
-        try awaitAccount("Playing lecture records real history") { $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > 1 && values($0,"history").contains(id) }
+        try awaitAccount("Playing lecture records real history") {
+            $0["videoPlaying"] as? Bool == true &&
+            self.number($0,"videoTime") > 1 &&
+            values($0,"history").contains(id) &&
+            successfulHistoryWrites($0) > historyWritesBeforeLecture
+        }
         checked("Actual playing lecture history recorded")
         // Leave playback through a real process restart so a top-edge player
         // control cannot be obscured by simulator chrome. This also proves the
@@ -176,7 +262,9 @@
             values($0,"later").contains(id) == values(before,"later").contains(id)
         }
         checked("Native Watch Later flag restored")
+        let followRestoreRequestCount = completedFollowRequests(account())
         try touch("follow")
+        try awaitSuccessfulFollowRequest(after: followRestoreRequestCount)
         try awaitAccount("Follow restored") {
             values($0,"follows").sorted() == values(before,"follows").sorted()
         }

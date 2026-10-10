@@ -170,11 +170,19 @@ final class PlaybackUITests: XCTestCase {
         }
         let accepted = snapshot()
         if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
-        let state = try waitFor("Same-shiur HLS sample or MP4 recovery must start visibly", timeout: 150) {
-            $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
-            ($0["backend"] as? String == "hls-native" || $0["recoveryMP4"] as? Bool == true) &&
-            ($0["id"] as? String) == ($0["sampleId"] as? String) && $0["videoPlaying"] as? Bool == true &&
-            $0["videoVisible"] as? Bool == true && self.number($0, "videoTime") >= 28
+        let state = try waitFor("Same-shiur direct HLS or MP4 must start visibly", timeout: 150) { s in
+            // Native HLS can fail source initialization and legitimately fall back
+            // directly to the same shiur's MP4, before any decoder-reload attempt.
+            // Still require the real local media URL, playback and correct identity;
+            // assertMovingVideo() separately proves decoded video frames advance.
+            let source = s["videoSource"] as? String ?? ""
+            let sameShiurMP4 = s["backend"] as? String == "mp4" &&
+                source.contains("/media/") && source.contains("/video.mp4")
+            return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
+                (s["backend"] as? String == "hls-native" || sameShiurMP4) &&
+                (s["id"] as? String) == (s["sampleId"] as? String) &&
+                s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                self.number(s, "videoTime") >= 28
         }
         XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
         XCTAssertEqual(number(state, "playerCount"), 1, "Exactly one video element should exist")

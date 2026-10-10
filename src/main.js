@@ -2716,7 +2716,9 @@ function updateLocalHistoryPosition(id, mediaType, progress, duration, completed
   const key = historyLogicalKey(id, mediaType);
   if (!key) return;
   const index = (state.history || []).findIndex(row => historyLogicalKey(row) === key);
-  if (index < 0) return;
+  // New lectures do not yet exist in the in-memory history list. The caller
+  // must reload the server's saved row after the first successful write.
+  if (index < 0) return false;
   const existing = state.history[index];
   const safeProgress = Math.max(0, Math.floor(Number(progress) || 0));
   state.history[index] = {
@@ -2729,6 +2731,7 @@ function updateLocalHistoryPosition(id, mediaType, progress, duration, completed
   };
   state.history = normalizeHistoryRows(state.history);
   refreshHistoryTypeIndex();
+  return true;
 }
 
 function queueHistoryWrite(key, task) {
@@ -2829,7 +2832,7 @@ function saveHistory(id, mediaType, progress, duration, completed = false, optio
   const presentationChanged = Boolean(key.startsWith('shiur:') && previousType && previousType !== normalizedType);
   const shouldReconcile = Boolean(options.reconcile || presentationChanged);
   state.playbackPositions.set(key, completed ? 0 : safeProgress);
-  updateLocalHistoryPosition(id, normalizedType, safeProgress, safeDuration, completed);
+  const existingHistoryRow = updateLocalHistoryPosition(id, normalizedType, safeProgress, safeDuration, completed);
   state.historyLastMediaType.set(key, normalizedType);
 
   return queueHistoryWrite(key, async () => {
@@ -2845,6 +2848,10 @@ function saveHistory(id, mediaType, progress, duration, completed = false, optio
           completed: Boolean(completed)
         })
       });
+      // A first watch has no local history row to update. Fetch the actual
+      // server-created row so Library > History and simulator account tests
+      // reflect persisted watch history rather than a stale in-memory list.
+      if (!existingHistoryRow && state.user) await reloadHistory();
       // Reconcile automatically whenever the presentation changes (Video <->
       // Audio), not only when the switch came from the watch-page buttons. This
       // also covers Listen-from-Home, History, background handoff, and deep links.
@@ -6556,10 +6563,26 @@ function bind() {
     toggleWatchLater(el.dataset.save);
   }));
 
-  document.querySelectorAll('[data-follow-type]').forEach(el => el.addEventListener('click', async () => {
-    await preserveWatchTime();
-    toggleFollow(el.dataset.followType, el.dataset.followKey, el.dataset.followLabel);
-  }));
+  // Follow chips can be recreated while the native player moves between hosts.
+  // A document-level handler survives those DOM replacements and does not
+  // block account actions on an unrelated video time lookup.
+  if (!document.__irgunFollowClickHandlerInstalled) {
+    document.__irgunFollowClickHandlerInstalled = true;
+    const pendingFollows = new Set();
+    document.addEventListener('click', event => {
+      const el = event.target instanceof Element
+        ? event.target.closest('[data-follow-type][data-follow-key]') : null;
+      if (!el) return;
+      const type = el.dataset.followType;
+      const key = el.dataset.followKey;
+      if (!key || (type !== 'speaker' && type !== 'topic')) return;
+      const identity = `${type}:${key}`;
+      if (pendingFollows.has(identity)) return;
+      pendingFollows.add(identity);
+      Promise.resolve(toggleFollow(type, key, el.dataset.followLabel))
+        .finally(() => pendingFollows.delete(identity));
+    }, true);
+  }
 
   document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
   document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
