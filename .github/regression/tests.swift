@@ -80,8 +80,14 @@
         try regressionTap("account")
         try regressionWait("Actual email/password form appears") { $0["loginForm"] as? Bool == true }
         try regressionEnter("loginEmail",email)
+        let submittedBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         try regressionEnter("loginPassword",password)
-        if regression()["loggedIn"] as? Bool != true { try regressionTap("loginSubmit") }
+        // WebKit's native Go/Return may have submitted already. A second
+        // login tap must NOT duplicate the in-flight POST or race a render.
+        let submittedAfter = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
+        if submittedAfter <= submittedBefore && regression()["loggedIn"] as? Bool != true {
+            try regressionTap("loginSubmit")
+        }
         try regressionWait("Server accepted dedicated QA account",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
         }
@@ -447,15 +453,22 @@
         try regressionTap("account")
         try regressionWait("Sign-in form is native visible") { $0["loginForm"] as? Bool == true }
         try regressionEnter("loginEmail",email)
+        let invalidSubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         try regressionEnter("loginPassword",pass+"not-valid")
-        try regressionTap("loginSubmit")
+        if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= invalidSubmitBefore {
+            try regressionTap("loginSubmit")
+        }
         try regressionWait("Wrong password must return visible error and never create a session",timeout:60) {
             $0["loggedIn"] as? Bool == false &&
             $0["loginError"] as? Bool == true &&
             $0["loginBusy"] as? Bool == false
         }
+        let retrySubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         try regressionEnter("loginPassword",pass)
-        try regressionTap("loginSubmit")
+        if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= retrySubmitBefore &&
+           regression()["loggedIn"] as? Bool != true {
+            try regressionTap("loginSubmit")
+        }
         try regressionWait("Valid login succeeds after bad password",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
         }
