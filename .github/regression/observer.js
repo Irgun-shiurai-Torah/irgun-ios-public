@@ -20,6 +20,8 @@
     offlineSave: '.watch-actions [data-save-offline-kind="video"]',
     downloads: '[data-library-section="downloads"]',
     offlinePlay: '[data-offline-play]',
+    closeWatch: '[data-close-watch]',
+    watchFromAudio: '[data-player-watch]',
     playFull: '[data-open-player]',
     audioSpeed15: '[data-speed-choice="1.5"]',
     videoSpeed: '#dmSpeed',
