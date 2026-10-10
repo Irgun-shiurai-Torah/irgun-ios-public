@@ -3,6 +3,10 @@ window.__ISTAccountControlQueries = {
   account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
   library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
   login: '#authForm button[type="submit"]', logout: '[data-logout]',
+  modeAudio: '[data-watch-mode="audio"]', modeVideo: '[data-watch-mode="video"]',
+  commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
+  commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
+  commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
   profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
   open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
   save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -34,6 +38,13 @@ if (!window.__ISTAccountClickObserverInstalled) {
   window.__ISTAccountLastInvalidField = '';
   document.addEventListener('submit', event => {
     if (event.target?.id === 'authForm') window.__ISTAccountLoginSubmissions++;
+    // Identify only a disposable QA comment entered via native UI.
+    if (event.target?.id === 'commentForm') {
+      const match = /^IST iOS QA (\d{12,16}) created$/.exec(
+        String(document.getElementById('commentText')?.value || '').trim()
+      );
+      if (match) window.__ISTAccountQaCommentToken = match[1];
+    }
   }, true);
   document.addEventListener('invalid', event => {
     if (event.target?.closest?.('#authForm')) {
@@ -50,12 +61,16 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   const originalApiJson = apiJson;
   const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
-    // Only log the fact that a history write completed. Never capture the
-    // request body, video identifier, account identity or authentication.
-    if (!allowed.has(path) || (path === '/history' && String(args[0]?.method || 'GET').toUpperCase() !== 'POST')) {
+    const method = String(args[0]?.method || 'GET').toUpperCase();
+    const isComment = path === '/comments' || path.startsWith('/comments?') ||
+      path === '/comments/delete' || /^\/comments\/[^/?]+$/.test(path);
+    // Never record URLs with comment or media IDs, bodies, account data or tokens.
+    if ((!allowed.has(path) && !isComment) || (path === '/history' && method !== 'POST')) {
       return originalApiJson(path, ...args);
     }
-    const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
+    const safePath = !isComment ? path : path === '/comments/delete' ? '/comments/delete'
+      : path.startsWith('/comments/') ? '/comments/edit' : '/comments';
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path:safePath,method,startedAt:Date.now(),finishedAt:0,ok:false};
     window.__ISTAccountRequests.push(entry);
     try {
       const result = await originalApiJson(path, ...args);
@@ -75,6 +90,10 @@ window.ISTAccountTest = { snapshot() {
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
+  modeAudio: '[data-watch-mode="audio"]', modeVideo: '[data-watch-mode="video"]',
+  commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
+  commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
+  commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
     open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
     save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -87,8 +106,34 @@ window.ISTAccountTest = { snapshot() {
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
+  const qaToken = String(window.__ISTAccountQaCommentToken || '');
+  let qaComment = null, qaCommentPhase = 'absent';
+  if (qaToken && state.user) {
+    for (const comment of state.watchComments) {
+      if (String(comment.user_id) !== String(state.user.id)) continue;
+      const match = /^IST iOS QA (\d{12,16}) (created|created updated)$/.exec(String(comment.text || ''));
+      if (match && match[1] === qaToken) {
+        qaComment = comment;
+        qaCommentPhase = match[2] === 'created' ? 'created' : 'edited';
+        break;
+      }
+    }
+  }
   for (const [key, query] of Object.entries(queries)) {
-    const candidates = [...document.querySelectorAll(query)];
+    let candidates = [...document.querySelectorAll(query)];
+    if (key === 'open') {
+      const playable = candidates.filter(el => state.videoById?.get(String(el.dataset.watch || ''))?.hasAudio === true);
+      if (playable.length) candidates = playable;
+    }
+    if (['commentEdit','commentSave','commentDelete','commentEditText'].includes(key)) {
+      if (!qaComment) candidates = [];
+      else if (key === 'commentEditText') {
+        candidates = candidates.filter(el => el.id === 'editCommentText-' + String(qaComment.id));
+      } else {
+        const attr = {commentEdit:'editComment',commentSave:'saveComment',commentDelete:'deleteComment'}[key];
+        candidates = candidates.filter(el => String(el.dataset[attr] || '') === String(qaComment.id));
+      }
+    }
     const element = candidates[0];
     if (element) {
       const r=element.getBoundingClientRect();
@@ -118,6 +163,12 @@ window.ISTAccountTest = { snapshot() {
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.rawAudioId||x.videoId||x.id||x.vimeoId||'').replace(/^audio:/,'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
+    watchHasAudio:Boolean(state.watchVideo?.hasAudio),
+    qaCommentPhase,qaCommentVisible:Boolean(qaComment),
+    commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
+    commentDraftEmpty:!document.getElementById('commentText')?.value,
+    profileNameValue:document.getElementById('profileName')?.value || '',
+    profileNameDisplayed:document.querySelector('.profile-line span')?.textContent?.trim() || '',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
     authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),
     authEmailValid:!!document.querySelector('#authEmail')?.validity.valid,
