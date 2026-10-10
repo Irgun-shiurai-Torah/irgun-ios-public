@@ -277,6 +277,18 @@
                        "User-selected speed should survive app relaunch")
         XCTAssertEqual(number(regression(),"videoSpeedChoice"),1.5,accuracy:0.02)
         try regressionVideoMoving()
+        try tapWebButton("Audio")
+        _ = try waitFor("Audio inherits chosen 1.5x speed and keeps playing",timeout:60) {
+            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            abs(self.number($0,"speed")-1.5)<0.02
+        }
+        try tapWebButton("Video")
+        _ = try waitFor("Video restores chosen speed after switching back",timeout:90) {
+            $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
+            $0["audioPlaying"] as? Bool == false &&
+            abs(self.number($0,"speed")-1.5)<0.02
+        }
+        try regressionVideoMoving()
         try regressionTap("videoSpeed")
         let reset=app.pickerWheels.firstMatch
         XCTAssertTrue(reset.waitForExistence(timeout:10))
