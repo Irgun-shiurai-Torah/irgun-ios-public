@@ -1,0 +1,180 @@
+name: iOS Extended Regression Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/regression/**'
+      - '.github/workflows/ios-extended-regressions.yml'
+      - '.github/simulator/**'
+      - '.github/account-tests/**'
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-extended-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  device:
+    name: Extended ${{ matrix.family }} tests
+    runs-on: macos-26
+    timeout-minutes: 105
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        family: [iPhone, iPad]
+    env:
+      DEVICE_FAMILY: ${{ matrix.family }}
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      IOS_MARKETING_VERSION: '1.2.71'
+      BUILD_NUMBER: '1'
+      SIMULATOR_VIDEO_ID: ''
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_SYNC_MARKER: '${{ github.run_id }}${{ github.run_attempt }}'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '~26.6.0'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Build real app and inject test-only observations
+        run: bash .github/regression/setup.sh
+      - name: Select and boot real simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/regression/select_simulator.py "$DEVICE_FAMILY"
+          if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+      - name: Start packet-filter network outage gate
+        run: |
+          mkdir -p simulator-results
+          python3 -u .github/regression/network_gate.py > simulator-results/network-gate.log 2>&1 &
+          echo $! > simulator-results/network-gate.pid
+          python3 - <<'PY'
+          import socket,time
+          for _ in range(70):
+              try:
+                  with socket.create_connection(('127.0.0.1',47311),timeout=.4):
+                      print('Real PF network gate ready')
+                      break
+              except OSError:time.sleep(.25)
+          else:raise SystemExit('Packet-filter network gate did not start')
+          PY
+      - name: Run true UI controls, network, offline and account edge cases
+        shell: bash
+        run: |
+          if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
+          bash .github/regression/run_ui.sh core "$UDID"
+      - name: Send simulator push through SpringBoard and require native tap
+        if: always()
+        shell: bash
+        run: |
+          if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
+          bash .github/regression/run_ui.sh push "$UDID"
+      - name: Always restore PF and save XCTest summaries
+        if: always()
+        run: |
+          mkdir -p simulator-results
+          python3 - <<'PY'
+          import socket
+          try:
+              with socket.create_connection(('127.0.0.1',47311),timeout=3) as s:
+                  s.sendall(b'UP\n')
+                  print(s.recv(100).decode(errors='replace'))
+          except OSError as e:print('network gate cleanup:',str(e))
+          PY
+          if [ -f simulator-results/network-gate.pid ]; then
+            kill "$(cat simulator-results/network-gate.pid)" 2>/dev/null || true
+          fi
+          for result in Regression Push; do
+            if [ -d "simulator-results/$result.xcresult" ]; then
+              xcrun xcresulttool get test-results summary --path "simulator-results/$result.xcresult" > "simulator-results/$result-summary.json" || true
+            fi
+          done
+          if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
+          if [ -n "$UDID" ]; then xcrun simctl shutdown "$UDID" || true; fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: extended-${{ matrix.family }}-${{ github.run_id }}
+          path: |
+            simulator-results/*summary.json
+            simulator-results/*xcodebuild.log
+            simulator-results/network-gate.log
+            simulator-results/push-sender.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  cross-device:
+    name: iPhone account mutation to independently signed-in iPad
+    if: always()
+    needs: device
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      IOS_MARKETING_VERSION: '1.2.71'
+      BUILD_NUMBER: '1'
+      SIMULATOR_VIDEO_ID: ''
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_SYNC_MARKER: '${{ github.run_id }}${{ github.run_attempt }}'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '~26.6.0'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Build real app with authenticated regression observers
+        run: bash .github/regression/setup.sh
+      - name: Sign in on iPhone and write real Like, Follow and playlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/regression/select_simulator.py iPhone
+          python3 .github/regression/select_simulator.py iPad
+          xcrun simctl boot "$IPHONE_UDID"
+          xcrun simctl bootstatus "$IPHONE_UDID" -b
+          bash .github/regression/run_ui.sh writer "$IPHONE_UDID"
+          xcrun simctl shutdown "$IPHONE_UDID"
+      - name: Sign in separately on iPad and verify server-loaded changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "$IPAD_UDID"
+          xcrun simctl bootstatus "$IPAD_UDID" -b
+          bash .github/regression/run_ui.sh reader "$IPAD_UDID"
+      - name: Collect cross-device XCTest evidence
+        if: always()
+        run: |
+          mkdir -p simulator-results
+          for result in CrossDeviceWriter CrossDeviceReader; do
+            if [ -d "simulator-results/$result.xcresult" ]; then
+              xcrun xcresulttool get test-results summary --path "simulator-results/$result.xcresult" > "simulator-results/$result-summary.json" || true
+            fi
+          done
+          for UDID in "${IPHONE_UDID:-}" "${IPAD_UDID:-}"; do
+            if [ -n "$UDID" ]; then xcrun simctl shutdown "$UDID" || true; fi
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: cross-device-${{ github.run_id }}
+          path: |
+            simulator-results/*summary.json
+            simulator-results/*xcodebuild.log
+          retention-days: 7
+          if-no-files-found: warn
