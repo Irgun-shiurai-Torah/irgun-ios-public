@@ -8,9 +8,56 @@ const SPEEDS=[.75,1,1.25,1.5,1.75,2];
 const fmt=s=>{s=Math.max(0,Math.floor(Number(s)||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`:`${m}:${String(x).padStart(2,'0')}`};
 function loadHls(api){if(window.Hls)return Promise.resolve(window.Hls);if(hlsPromise)return hlsPromise;hlsPromise=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=`${api}/media-player/hls.js`;s.async=true;const t=setTimeout(()=>{s.remove();hlsPromise=null;reject(new Error('HLS library timed out'))},12000);s.onload=()=>{clearTimeout(t);window.Hls?resolve(window.Hls):reject(new Error('HLS library unavailable'))};s.onerror=()=>{clearTimeout(t);hlsPromise=null;reject(new Error('HLS library failed to load'))};document.head.appendChild(s)});return hlsPromise}
 class Player{
- constructor(o={}){this.c=o.container;this.iframe=o.iframe;this.api=String(o.apiBase||'').replace(/\/$/,'');this.cb=o;this.hls=null;this.backend='none';this.url='';this.sources={};this.loading=false;this.token=0;this.autoplayWanted=false;this.destroyed=false;this.hlsFatalRetries=0;this.hlsRetryTimer=null;this.hlsStableTimer=null;this.bufferTimer=null;this.lastProgressPosition=0;this.nativeVariants=[];this.build();if(o.poster)this.v.poster=String(o.poster)}
+ constructor(o={}){this.c=o.container;this.iframe=o.iframe;this.api=String(o.apiBase||'').replace(/\/$/,'');this.cb=o;this.hls=null;this.backend='none';this.url='';this.sources={};this.loading=false;this.token=0;this.autoplayWanted=false;this.destroyed=false;this.hlsFatalRetries=0;this.hlsRetryTimer=null;this.hlsStableTimer=null;this.bufferTimer=null;this.lastProgressPosition=0;this.nativeVariants=[];this.build();if(o.poster)this.v.poster=String(o.poster);this.startFrameHealthMonitor()}
  build(){const r=document.createElement('div');r.id='directMediaPlayer';r.className='direct-media-player';r.hidden=true;r.innerHTML=`<video id="directVideoElement" class="direct-media-video" playsinline webkit-playsinline="true" preload="metadata"></video><div id="dmLoading" class="direct-media-loading" hidden><span class="direct-media-spinner"></span><span>Loading video...</span></div><div id="dmError" class="direct-media-error" hidden><span id="dmErrorText"></span><button id="dmRetry" type="button">Try Again</button></div><div class="direct-media-controls"><button id="dmPlay" class="direct-media-icon-button" type="button"><i class="fa-solid fa-play"></i></button><span id="dmNow" class="direct-media-time">0:00</span><input id="dmSeek" class="direct-media-seek" type="range" min="0" max="1000" value="0"><span id="dmDur" class="direct-media-time">0:00</span><button id="dmMute" class="direct-media-icon-button" type="button"><i class="fa-solid fa-volume-high"></i></button><input id="dmVol" class="direct-media-volume" type="range" min="0" max="1" step=".05" value="1"><select id="dmSpeed" class="direct-media-select">${SPEEDS.map(x=>`<option value="${x}"${x===1?' selected':''}>${x}x</option>`).join('')}</select><select id="dmQuality" class="direct-media-select" hidden><option value="-1">Auto</option></select><button id="dmPip" class="direct-media-icon-button" type="button" aria-label="Picture in Picture" title="Picture in Picture"><i class="fa-solid fa-window-restore"></i></button><button id="dmFull" class="direct-media-icon-button" type="button" aria-label="Fullscreen" title="Fullscreen"><i class="fa-solid fa-expand"></i></button></div>`;this.c.appendChild(r);this.r=r;this.v=r.querySelector('video');this.load=r.querySelector('#dmLoading');this.err=r.querySelector('#dmError');this.errText=r.querySelector('#dmErrorText');this.playBtn=r.querySelector('#dmPlay');this.seek=r.querySelector('#dmSeek');this.now=r.querySelector('#dmNow');this.dur=r.querySelector('#dmDur');this.vol=r.querySelector('#dmVol');this.mute=r.querySelector('#dmMute');this.speed=r.querySelector('#dmSpeed');this.v.defaultPlaybackRate=1;this.v.playbackRate=1;this.speed.value='1';this.quality=r.querySelector('#dmQuality');this.pipBtn=r.querySelector('#dmPip');this.bind()}
- bind(){const v=this.v;this.playBtn.onclick=()=>v.paused?this.playFromControl().catch(()=>{}):this.pause();this.bindVideoGestures();v.onplay=()=>{this.loading=false;this.load.hidden=true;this.err.hidden=true;this.icons();if(this.backend.startsWith('hls')){clearTimeout(this.hlsStableTimer);this.hlsStableTimer=setTimeout(()=>{this.hlsFatalRetries=0},5000)}this.cb.onPlay?.(this.state())};v.onpause=()=>{clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true;this.icons();if(!this.loading&&!v.ended)this.cb.onPause?.(this.state())};v.ontimeupdate=()=>{const position=this.current();if(Math.abs(position-this.lastProgressPosition)>.05){clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true}this.lastProgressPosition=position;this.timeline();this.cb.onTimeUpdate?.(this.state())};v.ondurationchange=()=>this.timeline();v.onended=()=>this.cb.onEnded?.(this.state());v.onwaiting=v.onstalled=()=>{clearTimeout(this.bufferTimer);const at=this.current();this.bufferTimer=setTimeout(()=>{if(!this.loading&&!v.paused&&!v.ended&&v.readyState<3&&this.current()<=at+.05)this.load.hidden=false},800)};v.onplaying=v.oncanplay=()=>{clearTimeout(this.bufferTimer);this.load.hidden=true};this.bindMediaError(v);const seekFromPointer=e=>{const d=this.duration();if(!d)return;const rect=this.seek.getBoundingClientRect();if(!rect.width)return;const clientX=Number(e.clientX);if(!Number.isFinite(clientX))return;const x=Math.max(0,Math.min(rect.width,clientX-rect.left));const ratio=x/rect.width;this.seek.value=String(Math.round(ratio*1000));this.now.textContent=fmt(d*ratio);void this.seekTo(d*ratio)};this.seek.onpointerdown=e=>{if(e.pointerType!=="touch"&&typeof e.button==="number"&&e.button!==0)return;seekFromPointer(e)};this.seek.onclick=seekFromPointer;this.seek.oninput=()=>{const d=this.duration();this.now.textContent=fmt(d*Number(this.seek.value)/1000)};this.seek.onchange=()=>this.seekTo(this.duration()*Number(this.seek.value)/1000);this.mute.onclick=()=>v.muted=!v.muted;this.vol.oninput=()=>{v.volume=Number(this.vol.value);if(v.volume)v.muted=false};v.onvolumechange=()=>this.volumeUI();this.speed.onchange=()=>this.setPlaybackRate(Number(this.speed.value));this.quality.onchange=()=>{if(this.hls)this.hls.currentLevel=Number(this.quality.value);else if(this.backend==='hls-native')this.selectNativeQuality(this.quality.value).catch(e=>this.notify(e))};rpip(this.pipBtn,v,active=>this.cb.onPipIntent?.(active));this.bindFullscreen(this.r.querySelector('#dmFull'));this.r.querySelector('#dmRetry').onclick=()=>this.activate(this.sources,this.current(),!v.paused,true).catch(e=>this.notify(e));this.icons();this.volumeUI()}
+ bind(){const v=this.v;this.playBtn.onclick=()=>v.paused?this.playFromControl().catch(()=>{}):this.pause();this.bindVideoGestures();v.onplay=()=>{this.loading=false;this.load.hidden=true;this.err.hidden=true;this.icons();if(this.backend.startsWith('hls')){clearTimeout(this.hlsStableTimer);this.hlsStableTimer=setTimeout(()=>{this.hlsFatalRetries=0},5000)}this.cb.onPlay?.(this.state())};v.onpause=()=>{clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true;this.icons();if(!this.loading&&!v.ended)this.cb.onPause?.(this.state())};v.ontimeupdate=()=>{const position=this.current();if(Math.abs(position-this.lastProgressPosition)>.05){clearTimeout(this.bufferTimer);if(!this.loading)this.load.hidden=true}this.lastProgressPosition=position;this.timeline();this.cb.onTimeUpdate?.(this.state())};v.ondurationchange=()=>this.timeline();v.onended=()=>this.cb.onEnded?.(this.state());v.onwaiting=v.onstalled=()=>{clearTimeout(this.bufferTimer);const at=this.current();this.bufferTimer=setTimeout(()=>{if(!this.loading&&!v.paused&&!v.ended&&v.readyState<3&&this.current()<=at+.05)this.load.hidden=false},800)};v.onplaying=v.oncanplay=()=>{clearTimeout(this.bufferTimer);this.load.hidden=true};this.bindMediaError(v);const seekFromPointer=e=>{const d=this.duration();if(!d)return;const rect=this.seek.getBoundingClientRect();if(!rect.width)return;const clientX=Number(e.clientX);if(!Number.isFinite(clientX))return;const x=Math.max(0,Math.min(rect.width,clientX-rect.left));const ratio=x/rect.width;this.seek.value=String(Math.round(ratio*1000));this.now.textContent=fmt(d*ratio);void this.seekTo(d*ratio)};this.seek.onpointerdown=e=>{if(e.pointerType!=="touch"&&typeof e.button==="number"&&e.button!==0)return;seekFromPointer(e)};this.seek.onclick=seekFromPointer;this.seek.oninput=()=>{const d=this.duration();this.now.textContent=fmt(d*Number(this.seek.value)/1000)};this.seek.onchange=()=>this.seekTo(this.duration()*Number(this.seek.value)/1000);this.mute.onclick=()=>v.muted=!v.muted;this.vol.oninput=()=>{v.volume=Number(this.vol.value);if(v.volume)v.muted=false};v.onvolumechange=()=>this.volumeUI();this.speed.onchange=()=>this.setPlaybackRate(Number(this.speed.value));this.quality.onchange=()=>{if(this.hls)this.hls.currentLevel=Number(this.quality.value);else if(this.backend==='hls-native')this.selectNativeQuality(this.quality.value).catch(e=>this.notify(e))};rpip(this.pipBtn,v,active=>this.cb.onPipIntent?.(active));this.bindFullscreen(this.r.querySelector('#dmFull'));this.r.querySelector('#dmRetry').onclick=()=>this.activate(this.sources,this.current(),!v.paused,true).catch(e=>this.notify(e));this.icons();this.volumeUI();this.observeVideoFrames(v)}
+ // Observe actual presented frames, not just currentTime. WKWebView can keep
+ // advancing the media clock while iOS displays a frozen video frame.
+ observeVideoFrames(video){
+  if(!video||this.frameObservedVideo===video)return;
+  this.frameObservedVideo=video;
+  this.lastPresentedFrameAt=Date.now();
+  this.frameHealthPreviousTime=null;
+  this.frameHealthPreviousAt=0;
+  if(typeof video.requestVideoFrameCallback!=='function')return;
+  const onFrame=(_now,meta)=>{
+   if(this.destroyed||this.v!==video)return;
+   this.lastPresentedFrameAt=Date.now();
+   this.lastFrameMediaTime=Number(meta?.mediaTime)||0;
+   try{video.requestVideoFrameCallback(onFrame)}catch(_){}
+  };
+  try{video.requestVideoFrameCallback(onFrame)}catch(_){}
+ }
+ startFrameHealthMonitor(){
+  // Restrict this recovery to native iOS WKWebView, not web or Android.
+  if(!['capacitor:','ionic:'].includes(String(location.protocol||'').toLowerCase()))return;
+  if(!this.frameHealthTimer)this.frameHealthTimer=setInterval(()=>this.checkVisualFrameHealth(),2000);
+ }
+ checkVisualFrameHealth(){
+  const v=this.v,now=Date.now();
+  if(this.destroyed||!v||typeof v.requestVideoFrameCallback!=='function'||
+     document.hidden||!this.autoplayWanted||this.explicitlyPaused||
+     v.paused||v.ended||v.seeking||v.readyState<2||this.loading||
+     this.visualPlaybackPromise||this.decoderReloadPromise||
+     v.webkitPresentationMode==='picture-in-picture'){
+   this.frameHealthPreviousTime=null;this.frameHealthPreviousAt=0;return;
+  }
+  if(this.frameObservedVideo!==v){this.observeVideoFrames(v);return}
+  const position=this.current();
+  if(now-(this.lastPresentedFrameAt||now)<6500){
+   this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;return;
+  }
+  // Only recover when playback clock continues without a decoded frame.
+  // Buffering and an intentionally paused or backgrounded player are untouched.
+  if(this.frameHealthPreviousTime==null){
+   this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;return;
+  }
+  if(position-this.frameHealthPreviousTime<2)return;
+  if(now-(this.lastVisualRecoveryAt||0)<12000)return;
+  this.lastVisualRecoveryAt=now;
+  this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;
+  void this.ensureVisualPlayback(true).catch(e=>console.warn('Frozen iOS video frame recovery failed',e));
+ }
  bindMediaError(v){
   v.onerror=()=>{
    const token=this.token,error=v.error;
@@ -209,7 +256,7 @@ class Player{
    if(playing)await this.play();
   }finally{if(token===this.token){this.loading=false;this.load.hidden=true}}
  }
- destroy(){if(this.destroyed)return;this.destroyed=true;clearTimeout(this.videoTapTimer);clearTimeout(this.seekFeedbackTimer);for(const timer of this.fullscreenRecoveryTimers||[])clearTimeout(timer);this.exitFullscreen(false);if(this.fullscreenListener)document.removeEventListener('fullscreenchange',this.fullscreenListener);++this.token;clearTimeout(this.hlsRetryTimer);clearTimeout(this.hlsStableTimer);this.clear()}
+ destroy(){if(this.destroyed)return;this.destroyed=true;clearInterval(this.frameHealthTimer);clearTimeout(this.videoTapTimer);clearTimeout(this.seekFeedbackTimer);for(const timer of this.fullscreenRecoveryTimers||[])clearTimeout(timer);this.exitFullscreen(false);if(this.fullscreenListener)document.removeEventListener('fullscreenchange',this.fullscreenListener);++this.token;clearTimeout(this.hlsRetryTimer);clearTimeout(this.hlsStableTimer);this.clear()}
  fatal(e){
   if(this.destroyed)return;
   if(this.backend.startsWith('hls')&&this.sources.hls&&this.hlsFatalRetries<2){
@@ -407,6 +454,69 @@ class Player{
  }
  pause(stop=true){if(stop){this.explicitlyPaused=true;this.autoplayWanted=false;this.v.autoplay=false;this.v.removeAttribute?.('autoplay')}this.v.pause();if(stop&&this.hls?.stopLoad)try{this.hls.stopLoad()}catch(_){}} setPlaybackRate(x){x=SPEEDS.includes(Number(x))?Number(x):1;this.v.playbackRate=x;this.speed.value=String(x)} show(){this.r.hidden=false;if(this.iframe)this.iframe.style.display='none'} showVimeo(){this.pause(true);this.r.hidden=true;if(this.iframe)this.iframe.style.display='block'}
 }
-function rpip(btn,v,onIntent){if(!btn)return;const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};const supported=standard()||webkit();btn.hidden=!supported;if(!supported)return;const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';const update=()=>{const on=active();btn.classList.toggle('active',on);btn.setAttribute('aria-label',on?'Exit Picture in Picture':'Picture in Picture');btn.title=on?'Exit Picture in Picture':'Picture in Picture';btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`};btn.onclick=async()=>{const opening=!active();onIntent?.(opening);try{if(document.pictureInPictureElement===v&&document.exitPictureInPicture){await document.exitPictureInPicture()}else if(standard()){await v.requestPictureInPicture()}else if(webkit()){v.webkitSetPresentationMode(active()?'inline':'picture-in-picture')}}catch(e){onIntent?.(false);console.warn('Picture-in-Picture failed',e)}update()};v.addEventListener('enterpictureinpicture',update);v.addEventListener('leavepictureinpicture',update);v.addEventListener('webkitpresentationmodechanged',update);update()}
+function rpip(btn,v,onIntent){
+ if(!btn)return;
+ const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');
+ const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};
+ const supported=standard()||webkit();
+ btn.hidden=!supported;
+ if(!supported)return;
+ const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';
+ // Diagnostic state is available to disposable simulator observations, but it
+ // never contains user or media content.
+ const diagnostic=btn.__irgunPipDiagnostic={clicks:0,route:'',error:'',lastEvent:'',requested:false};
+ const update=()=>{
+  const on=active();
+  diagnostic.active=on;
+  btn.classList.toggle('active',on);
+  btn.setAttribute('aria-label',on?'Exit Picture in Picture':'Picture in Picture');
+  btn.title=on?'Exit Picture in Picture':'Picture in Picture';
+  btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`;
+ };
+ btn.onclick=async()=>{
+  const opening=!active();
+  diagnostic.clicks+=1;
+  diagnostic.requested=opening;
+  diagnostic.error='';
+  onIntent?.(opening);
+  try {
+   if(!opening){
+    if(document.pictureInPictureElement===v&&document.exitPictureInPicture){
+     diagnostic.route='standard-exit';
+     await document.exitPictureInPicture();
+    }else if(webkit()){
+     diagnostic.route='webkit-exit';
+     v.webkitSetPresentationMode('inline');
+    }
+   }else if(webkit()){
+    // WKWebView on iOS provides WebKit's presentation-mode API. Prefer it to
+    // the standard API: the latter can exist while native PiP is unavailable.
+    diagnostic.route='webkit';
+    try{
+     v.webkitSetPresentationMode('picture-in-picture');
+    }catch(error){
+     if(!standard())throw error;
+     diagnostic.route='webkit-to-standard';
+     await v.requestPictureInPicture();
+    }
+   }else if(standard()){
+    diagnostic.route='standard';
+    await v.requestPictureInPicture();
+   }else throw new Error('Picture-in-Picture is unavailable');
+  }catch(error){
+   diagnostic.error=String(error?.name||'Error')+': '+String(error?.message||error||'Unknown failure');
+   onIntent?.(false);
+   console.warn('Picture-in-Picture failed',error);
+  }
+  update();
+ };
+ for(const type of ['enterpictureinpicture','leavepictureinpicture','webkitpresentationmodechanged']){
+  v.addEventListener(type,()=>{
+   diagnostic.lastEvent=type;
+   update();
+  });
+ }
+ update();
+}
 window.ISTDirectMediaPlayer=Player;
 })();

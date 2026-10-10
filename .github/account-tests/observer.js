@@ -27,6 +27,19 @@ if (!window.__ISTAccountClickObserverInstalled) {
       at:Date.now()
     };
   }, true);
+  // The click listener can observe a Login tap even if HTML constraint
+  // validation prevents the form's submit event. Count submissions and
+  // invalid fields without collecting email addresses or passwords.
+  window.__ISTAccountLoginSubmissions = 0;
+  window.__ISTAccountLastInvalidField = '';
+  document.addEventListener('submit', event => {
+    if (event.target?.id === 'authForm') window.__ISTAccountLoginSubmissions++;
+  }, true);
+  document.addEventListener('invalid', event => {
+    if (event.target?.closest?.('#authForm')) {
+      window.__ISTAccountLastInvalidField = String(event.target.id || '');
+    }
+  }, true);
 }
 
 // Observe only allowlisted collection requests in disposable debug builds.
@@ -35,9 +48,13 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   window.__ISTAccountRequestObserverInstalled = true;
   window.__ISTAccountRequests = [];
   const originalApiJson = apiJson;
-  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later']);
+  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
-    if (!allowed.has(path)) return originalApiJson(path, ...args);
+    // Only log the fact that a history write completed. Never capture the
+    // request body, video identifier, account identity or authentication.
+    if (!allowed.has(path) || (path === '/history' && String(args[0]?.method || 'GET').toUpperCase() !== 'POST')) {
+      return originalApiJson(path, ...args);
+    }
     const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
     window.__ISTAccountRequests.push(entry);
     try {
@@ -102,7 +119,15 @@ window.ISTAccountTest = { snapshot() {
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
-    authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
+    authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),
+    authEmailValid:!!document.querySelector('#authEmail')?.validity.valid,
+    authPasswordValid:!!document.querySelector('#authPassword')?.validity.valid,
+    authFormValid:[...document.querySelectorAll('#authForm input')].length>=2 && [...document.querySelectorAll('#authForm input')].every(input=>input.validity.valid),
+    authEmailLength:document.querySelector('#authEmail')?.value.length||0,
+    authPasswordLength:document.querySelector('#authPassword')?.value.length||0,
+    authSubmitCount:window.__ISTAccountLoginSubmissions||0,
+    authInvalidFieldKey:window.__ISTAccountLastInvalidField||'',
+    playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
     videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
 }};
 if(window.ISTSimulator){

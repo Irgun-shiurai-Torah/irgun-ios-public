@@ -12,7 +12,7 @@ const simulatorGestures = [];
 const simulatorWarnings = [];
 const simulatorOriginalWarn = console.warn.bind(console);
 console.warn = (...args) => {
-  if (/video|HLS|decoder|native background|Vimeo/i.test(String(args[0]||''))) {
+  if (/video|HLS|decoder|native background|Vimeo|picture.in.picture|PiP/i.test(String(args[0]||''))) {
     simulatorWarnings.push({at:Date.now(),message:String(args[0]||''),error:args.find(x=>x instanceof Error)?.message||''});
     if(simulatorWarnings.length>12)simulatorWarnings.shift();
   }
@@ -240,9 +240,15 @@ window.ISTSimulator = {
       pendingSeek: Boolean(state.pendingAudioSeek), minimized: Boolean(state.watchMinimized),
       expandX: expandBox ? expandBox.left + expandBox.width / 2 : 0,
       expandY: expandBox ? expandBox.top + expandBox.height / 2 : 0,
-      pip: Boolean(state.watchPictureInPicture || video?.webkitPresentationMode === 'picture-in-picture'),
+      pip: Boolean(state.watchPictureInPicture || document.pictureInPictureElement === video || video?.webkitPresentationMode === 'picture-in-picture'),
       pipSupported: Boolean(video && ((document.pictureInPictureEnabled && video.requestPictureInPicture) ||
         video.webkitSupportsPresentationMode?.('picture-in-picture'))),
+      pipDiagnostic: (() => {
+        const info=document.getElementById('dmPip')?.__irgunPipDiagnostic;
+        return info ? {clicks:info.clicks,route:info.route,error:info.error,
+          lastEvent:info.lastEvent,active:info.active,requested:info.requested,
+          webkitMode:String(video?.webkitPresentationMode||'')} : null;
+      })(),
       speed: Number(video?.playbackRate || audio.playbackRate), hidden: document.hidden
     });
   }
