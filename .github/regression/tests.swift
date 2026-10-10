@@ -405,7 +405,7 @@
             $0["online"] as? Bool == true
         }
         try regressionTap("playFull")
-        try regressionTap("watchVideo")
+        try regressionTap("watchFromAudio")
         _ = try waitFor("Real playback history gets a successful server write after reconnect",timeout:90) {
             let requests=($0["account"] as? [String:Any])?["requests"] as? [[String:Any]] ?? []
             return requests.filter { $0["path"] as? String == "/history" &&
