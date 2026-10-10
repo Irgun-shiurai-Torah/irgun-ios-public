@@ -454,6 +454,69 @@ class Player{
  }
  pause(stop=true){if(stop){this.explicitlyPaused=true;this.autoplayWanted=false;this.v.autoplay=false;this.v.removeAttribute?.('autoplay')}this.v.pause();if(stop&&this.hls?.stopLoad)try{this.hls.stopLoad()}catch(_){}} setPlaybackRate(x){x=SPEEDS.includes(Number(x))?Number(x):1;this.v.playbackRate=x;this.speed.value=String(x)} show(){this.r.hidden=false;if(this.iframe)this.iframe.style.display='none'} showVimeo(){this.pause(true);this.r.hidden=true;if(this.iframe)this.iframe.style.display='block'}
 }
-function rpip(btn,v,onIntent){if(!btn)return;const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};const supported=standard()||webkit();btn.hidden=!supported;if(!supported)return;const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';const update=()=>{const on=active();btn.classList.toggle('active',on);btn.setAttribute('aria-label',on?'Exit Picture in Picture':'Picture in Picture');btn.title=on?'Exit Picture in Picture':'Picture in Picture';btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`};btn.onclick=async()=>{const opening=!active();onIntent?.(opening);try{if(document.pictureInPictureElement===v&&document.exitPictureInPicture){await document.exitPictureInPicture()}else if(standard()){await v.requestPictureInPicture()}else if(webkit()){v.webkitSetPresentationMode(active()?'inline':'picture-in-picture')}}catch(e){onIntent?.(false);console.warn('Picture-in-Picture failed',e)}update()};v.addEventListener('enterpictureinpicture',update);v.addEventListener('leavepictureinpicture',update);v.addEventListener('webkitpresentationmodechanged',update);update()}
+function rpip(btn,v,onIntent){
+ if(!btn)return;
+ const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');
+ const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};
+ const supported=standard()||webkit();
+ btn.hidden=!supported;
+ if(!supported)return;
+ const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';
+ // Diagnostic state is available to disposable simulator observations, but it
+ // never contains user or media content.
+ const diagnostic=btn.__irgunPipDiagnostic={clicks:0,route:'',error:'',lastEvent:'',requested:false};
+ const update=()=>{
+  const on=active();
+  diagnostic.active=on;
+  btn.classList.toggle('active',on);
+  btn.setAttribute('aria-label',on?'Exit Picture in Picture':'Picture in Picture');
+  btn.title=on?'Exit Picture in Picture':'Picture in Picture';
+  btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`;
+ };
+ btn.onclick=async()=>{
+  const opening=!active();
+  diagnostic.clicks+=1;
+  diagnostic.requested=opening;
+  diagnostic.error='';
+  onIntent?.(opening);
+  try {
+   if(!opening){
+    if(document.pictureInPictureElement===v&&document.exitPictureInPicture){
+     diagnostic.route='standard-exit';
+     await document.exitPictureInPicture();
+    }else if(webkit()){
+     diagnostic.route='webkit-exit';
+     v.webkitSetPresentationMode('inline');
+    }
+   }else if(webkit()){
+    // WKWebView on iOS provides WebKit's presentation-mode API. Prefer it to
+    // the standard API: the latter can exist while native PiP is unavailable.
+    diagnostic.route='webkit';
+    try{
+     v.webkitSetPresentationMode('picture-in-picture');
+    }catch(error){
+     if(!standard())throw error;
+     diagnostic.route='webkit-to-standard';
+     await v.requestPictureInPicture();
+    }
+   }else if(standard()){
+    diagnostic.route='standard';
+    await v.requestPictureInPicture();
+   }else throw new Error('Picture-in-Picture is unavailable');
+  }catch(error){
+   diagnostic.error=String(error?.name||'Error')+': '+String(error?.message||error||'Unknown failure');
+   onIntent?.(false);
+   console.warn('Picture-in-Picture failed',error);
+  }
+  update();
+ };
+ for(const type of ['enterpictureinpicture','leavepictureinpicture','webkitpresentationmodechanged']){
+  v.addEventListener(type,()=>{
+   diagnostic.lastEvent=type;
+   update();
+  });
+ }
+ update();
+}
 window.ISTDirectMediaPlayer=Player;
 })();
