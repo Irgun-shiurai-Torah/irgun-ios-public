@@ -163,7 +163,7 @@ jobs:
               keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy','authFormValid','authEmailValid','authPasswordValid','authEmailLength','authPasswordLength','authSubmitCount','authInvalidFieldKey'}
               safe={key:value[key] for key in keys if key in value}
               # Export only scalar request outcomes from the strict observer allowlist.
-              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
+              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history','/comments','/comments/edit','/comments/delete'}
               requests=[]
               for item in value.get('collectionRequests',[]):
                   if not isinstance(item,dict) or item.get('path') not in allowed_paths: continue
@@ -173,6 +173,8 @@ jobs:
                       if isinstance(number,(int,float)) and not isinstance(number,bool): clean[key]=number
                   for key in ['ok','following','liked']:
                       if isinstance(item.get(key),bool): clean[key]=item[key]
+                  method=item.get('method')
+                  if method in {'GET','POST','PUT','DELETE'}: clean['method']=method
                   requests.append(clean)
               safe['collectionRequests']=requests
               safe['evidenceCredentialsCleared']=cleared
