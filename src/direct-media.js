@@ -48,23 +48,35 @@ class Player{
   const v=this.v,now=Date.now();
   if(this.destroyed||!v||typeof v.requestVideoFrameCallback!=='function'||
      document.hidden||!this.autoplayWanted||this.explicitlyPaused||
-     v.paused||v.ended||v.seeking||v.readyState<2||this.loading||
+     v.paused||v.ended||this.loading||
      this.visualPlaybackPromise||this.decoderReloadPromise||
      v.webkitPresentationMode==='picture-in-picture'){
-   this.frameHealthPreviousTime=null;this.frameHealthPreviousAt=0;return;
+   this.frameHealthPreviousTime=null;this.frameHealthPreviousAt=0;this.stalledSeekSince=0;return;
   }
   if(this.frameObservedVideo!==v){this.observeVideoFrames(v);return}
+  // A WKWebView double-tap seek may leave both the media clock and video
+  // frames frozen while "seeking" stays true. Do not ignore that indefinitely.
+  if(v.seeking){
+   if(!this.stalledSeekSince)this.stalledSeekSince=now;
+   if(now-this.stalledSeekSince<12000||now-(this.lastVisualRecoveryAt||0)<15000)return;
+   this.lastVisualRecoveryAt=now;this.stalledSeekSince=now;
+   void this.ensureVisualPlayback(true).catch(e=>console.warn('Stalled iOS seek recovery failed',e));
+   return;
+  }
+  this.stalledSeekSince=0;
+  // Legitimate network buffering should not trigger a decoder rebuild.
+  if(v.readyState<2){this.frameHealthPreviousTime=null;this.frameHealthPreviousAt=0;return}
   const position=this.current();
   if(now-(this.lastPresentedFrameAt||now)<6500){
    this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;return;
   }
-  // Only recover when playback clock continues without a decoded frame.
-  // Buffering and an intentionally paused or backgrounded player are untouched.
+  // Both a moving clock with frozen frames AND a clock frozen since a seek
+  // require recovery. A normal pause/background return remains excluded above.
   if(this.frameHealthPreviousTime==null){
    this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;return;
   }
-  if(position-this.frameHealthPreviousTime<2)return;
-  if(now-(this.lastVisualRecoveryAt||0)<12000)return;
+  if(position-this.frameHealthPreviousTime<2&&now-this.frameHealthPreviousAt<10000)return;
+  if(now-(this.lastVisualRecoveryAt||0)<15000)return;
   this.lastVisualRecoveryAt=now;
   this.frameHealthPreviousTime=position;this.frameHealthPreviousAt=now;
   void this.ensureVisualPlayback(true).catch(e=>console.warn('Frozen iOS video frame recovery failed',e));
