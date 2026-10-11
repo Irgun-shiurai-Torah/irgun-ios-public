@@ -277,17 +277,32 @@
         try regressionVideoMoving()
     }
 
+    // iOS 26 WebKit can present <select> either as a traditional picker wheel
+    // or as a native popover list. Both paths tap the actual native option.
+    // We then assert the real HTMLVideoElement playbackRate, never a stub.
+    private func chooseRealVideoSpeed(_ label: String) throws {
+        try regressionTap("videoSpeed")
+        let wheel = app.pickerWheels.firstMatch
+        if wheel.waitForExistence(timeout: 3) {
+            wheel.adjust(toPickerWheelValue: label)
+        } else {
+            let option = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", label)).firstMatch
+            guard option.waitForExistence(timeout: 12) && option.isHittable else {
+                evidence("missing-native-speed-option-" + label)
+                XCTFail("Native iOS speed menu does not expose the real " + label + " option")
+                throw Failure.timedOut("Native speed choice " + label)
+            }
+            option.tap()
+        }
+        regressionKeyboardDone()
+    }
+
     func testRegressionSpeedDefaultAndOnePointFiveAfterReopen() throws {
         try regressionActivateSample()
         XCTAssertEqual(number(snapshot(),"speed"),1,accuracy:0.01,
                        "Fresh simulator playback must start at 1x")
-        // Selecting this actual native <select> through XCTest is not a
-        // JavaScript setter. WebKit should display the iOS picker.
-        try regressionTap("videoSpeed")
-        let picker=app.pickerWheels.firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout:10),"iOS speed select must open picker")
-        picker.adjust(toPickerWheelValue:"1.5x")
-        regressionKeyboardDone()
+        try chooseRealVideoSpeed("1.5x")
         try regressionWait("Native speed selection updates real video playback rate") {
             abs(self.number($0,"videoRate")-1.5)<0.02
         }
@@ -313,11 +328,7 @@
             abs(self.number($0,"speed")-1.5)<0.02
         }
         try regressionVideoMoving()
-        try regressionTap("videoSpeed")
-        let reset=app.pickerWheels.firstMatch
-        XCTAssertTrue(reset.waitForExistence(timeout:10))
-        reset.adjust(toPickerWheelValue:"1x")
-        regressionKeyboardDone()
+        try chooseRealVideoSpeed("1x")
         try regressionWait("Speed restored to 1x after QA") {
             abs(self.number($0,"videoRate")-1)<0.02
         }
