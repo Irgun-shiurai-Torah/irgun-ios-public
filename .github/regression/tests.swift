@@ -474,6 +474,13 @@
             $0["loginError"] as? Bool == true &&
             $0["loginBusy"] as? Bool == false
         }
+        // The wrong-password response must retain a valid email field so the
+        // user can correct only their password through the real native form.
+        let errorForm = snapshot()["account"] as? [String:Any] ?? [:]
+        XCTAssertEqual(number(errorForm,"authEmailLength"),Double(email.count),
+                       "Wrong-password error must preserve the email address")
+        XCTAssertEqual(errorForm["authEmailValid"] as? Bool,true,
+                       "Email address must remain a valid native email input")
         let retrySubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         try regressionEnter("loginPassword",pass)
         if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= retrySubmitBefore &&
