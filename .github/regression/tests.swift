@@ -163,12 +163,30 @@
     }
 
     func testRegressionNotificationTapRestoresInlinePlayer() throws {
+        // An xcrun simctl push is accepted even if the user has never granted
+        // alerts. First exercise the actual native iOS permission dialogue.
+        // The test-only button requests OS authorization; XCTest performs the
+        // tap, and an independent native notification-settings query confirms it.
+        let enable = app.buttons["ist-simulator-enable-push"]
+        XCTAssertTrue(enable.waitForExistence(timeout: 12),
+                      "Native push permission control must be in the simulator build")
+        enable.tap()
+        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
+        let systemAllow=springboard.alerts.buttons["Allow"].firstMatch
+        let appAllow=app.alerts.buttons["Allow"].firstMatch
+        if systemAllow.waitForExistence(timeout: 8) {
+            systemAllow.tap()
+        } else if appAllow.exists {
+            appAllow.tap()
+        }
+        _ = try waitFor("Real iOS notification authorization is granted",timeout:30) {
+            $0["nativePushAuthorized"] as? Bool == true
+        }
         try regressionActivateSample()
         // workflow sends a REAL xcrun simctl push via SpringBoard while Home
         // is in the foreground; no direct app.activate() shortcut is allowed.
         let initial=regression()["pushActions"] as? Int ?? 0
         XCUIDevice.shared.press(.home)
-        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
         let notification=springboard.descendants(matching:.any)
             .matching(NSPredicate(format:"label CONTAINS %@", "Irgun QA Playback")).firstMatch
         XCTAssertTrue(notification.waitForExistence(timeout:65),
