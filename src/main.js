@@ -2648,21 +2648,53 @@ function requireLogin(message) {
   render();
 }
 
+const pendingFollowToggles = new Set();
 async function toggleFollow(type, key, label) {
   if (!state.user) return requireLogin('Sign in to follow speakers and topics.');
+  const identity = `${type}:${key}`;
+  // A second click must not undo the first request while the iOS WebView
+  // waits for the server. This is a toggle operation, not an idempotent POST.
+  if (pendingFollowToggles.has(identity)) return;
+  pendingFollowToggles.add(identity);
+  const userId = state.user.id;
+  const request = new AbortController();
+  const timeout = setTimeout(() => request.abort(), 25000);
   try {
     const result = await apiJson('/follows/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
+      body: JSON.stringify({ type, key, labelEn: label, labelHe: label }),
+      signal: request.signal
     });
-    const identity = `${type}:${key}`;
+    if (!state.user || state.user.id !== userId) return;
     if (result.following) state.follows.set(identity, result.item || { type, key, labelEn: label, labelHe: label });
     else state.follows.delete(identity);
     if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
     else refreshInteractiveUi();
   } catch (error) {
-    alert(error.message || 'Could not update follow.');
+    if (!state.user || state.user.id !== userId) return;
+    if (request.signal.aborted) {
+      // A timed-out toggle may nevertheless have committed. Read the actual
+      // server state; NEVER blindly retry and accidentally toggle it back.
+      const readback = new AbortController();
+      const readbackTimer = setTimeout(() => readback.abort(), 10000);
+      try {
+        const data = await apiJson('/follows', { signal: readback.signal });
+        if (state.user && state.user.id === userId && Array.isArray(data.items)) {
+          const found = data.items.find(item => `${item.type}:${item.key}` === identity);
+          if (found) state.follows.set(identity, found);
+          else state.follows.delete(identity);
+          refreshInteractiveUi();
+        }
+      } catch (_) { /* Still report timeout; do not claim the request worked. */ }
+      finally { clearTimeout(readbackTimer); }
+      alert('The Follow request timed out. Please check your Following list before trying again.');
+    } else {
+      alert(error.message || 'Could not update follow.');
+    }
+  } finally {
+    clearTimeout(timeout);
+    pendingFollowToggles.delete(identity);
   }
 }
 
