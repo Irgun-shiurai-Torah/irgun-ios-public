@@ -124,6 +124,27 @@ final class PlaybackUITests: XCTestCase {
 
     func testAppleSignInButtonIsVisible() throws {
         try tapWebButton("Account")
+        _ = try waitFor("Real account page must render before checking Apple sign-in", timeout: 60) {
+            $0["screen"] as? String == "account" &&
+            ($0["authFormVisible"] as? Bool == true || $0["profileFormVisible"] as? Bool == true)
+        }
+        // Other real logged-in tests can leave the test simulator authenticated.
+        // Apple sign-in legitimately appears only on the logged-out form.
+        // Use the actual visible Logout button; never spoof an unauthenticated state.
+        if snapshot()["profileFormVisible"] as? Bool == true {
+            XCTAssertEqual(snapshot()["accountLogoutVisible"] as? Bool, true,
+                           "Authenticated account must provide an actual Logout button")
+            try tapWebButton("Logout")
+            _ = try waitFor("Native Logout exposes the real login form", timeout: 60) {
+                $0["screen"] as? String == "account" &&
+                $0["authFormVisible"] as? Bool == true &&
+                $0["profileFormVisible"] as? Bool == false
+            }
+        }
+        _ = try waitFor("Official Apple login button must be rendered in the real sign-in form", timeout: 45) {
+            $0["authFormVisible"] as? Bool == true &&
+            $0["appleLoginButtonVisible"] as? Bool == true
+        }
         let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
         XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Continue with Apple button must be present")
         XCTAssertTrue(apple.isHittable, "Continue with Apple button must be visible and tappable")
