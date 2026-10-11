@@ -16,6 +16,7 @@ concurrency:
   # name-edit scenarios using the same dedicated non-admin QA account.
   group: irgun-ios-exclusive-qa-account
   cancel-in-progress: false
+  queue: max
 
 jobs:
   account:
