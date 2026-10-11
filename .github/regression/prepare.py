@@ -12,11 +12,25 @@ if sys.argv[1]=='web':
     p=root/'src/main.js'
     p.write_text(p.read_text()+'\n'+(source/'observer.js').read_text())
 elif sys.argv[1]=='native':
-    p=root/'.github/simulator/PlaybackUITests.swift'
+    # Simulator prepare.py already copied its XCTest file into the generated
+    # Xcode project. Change that actual, compiled target, NOT the source copy.
+    p=root/'ios/App/SimulatorUITests/PlaybackUITests.swift'
+    assert p.is_file(), 'Generated native XCTest file missing'
     s=p.read_text()
+    methods=(source/'tests.swift').read_text()
     at=s.rfind('\n}')
-    assert at>=0,"Regression tests need native SimulatorPlayback class"
-    p.write_text(s[:at]+'\n'+(source/'tests.swift').read_text()+s[at:])
+    assert at>=0 and 'class PlaybackUITests' in s, 'Unexpected XCTest class layout'
+    assert 'func testRegression' not in s, 'Regression methods already injected'
+    count=methods.count('func testRegression')
+    assert count==11, f'Expected 11 real regression methods, got {count}'
+    p.write_text(s[:at]+'\n'+methods+s[at:])
+    compiled=p.read_text()
+    for method in ('testRegressionBackgroundAudioAndReopenControls',
+                   'testRegressionNotificationTapRestoresInlinePlayer',
+                   'testRegressionCrossDeviceWriterOnIPhone',
+                   'testRegressionCrossDeviceReaderOnIPad'):
+        assert compiled.count('func '+method+'(')==1, 'Not in native XCTest target: '+method
+    print('Injected',count,'regression XCTest methods into generated native target')
 
 else:
     p=root/'ios/App/App.xcodeproj/xcshareddata/xcschemes/SimulatorPlayback.xcscheme'
