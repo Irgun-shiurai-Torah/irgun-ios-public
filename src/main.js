@@ -2344,6 +2344,10 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  // Preserve the address through the busy/error render so a wrong password can
+  // be corrected without losing the email or retyping it on mobile.
+  // Passwords are never copied into state or persisted.
+  state.authDraftEmail = String(email || '').trim();
   state.authBusy = true;
   state.authMessage = '';
   render();
@@ -2376,6 +2380,7 @@ async function login(email, password) {
     state.recurringLoaded = false;
     state.recurringDonations = [];
     state.authMessage = '';
+    state.authDraftEmail = '';
     state.authMode = 'login';
     state.authVerifyEmail = '';
     state.authVerifyPassword = '';
@@ -4702,7 +4707,7 @@ function authHtml() {
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
       <form id="authForm" class="form-stack">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
-        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" value="${esc(state.authDraftEmail || '')}" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
         <button class="form-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Please wait...' : (registerMode ? 'Create Account' : 'Login')}</button>
       </form>
