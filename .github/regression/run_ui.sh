@@ -41,7 +41,15 @@ case "$group" in
     ;;
 esac
 selected=()
+test_file="ios/App/SimulatorUITests/PlaybackUITests.swift"
+test -s "$test_file" || { echo "XCTest compilation source is missing"; exit 1; }
 for method in "${methods[@]}"; do
+  # The *compiled* file must contain each real test. A typo in -only-testing
+  # would otherwise make xcodebuild report success with zero executions.
+  grep -Fq "func $method(" "$test_file" || {
+    echo "Required method not injected into real Xcode project: $method"
+    exit 1
+  }
   selected+=("-only-testing:SimulatorUITests/PlaybackUITests/$method")
 done
 xcodebuild "${CONTAINER[@]}" \
@@ -51,4 +59,18 @@ xcodebuild "${CONTAINER[@]}" \
   -resultBundlePath "simulator-results/$result.xcresult" \
   -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
   "${selected[@]}" test 2>&1 | tee "simulator-results/$result-xcodebuild.log"
+python3 - "simulator-results/$result-xcodebuild.log" "${methods[@]}" <<'PY'
+import re,sys
+from pathlib import Path
+log=Path(sys.argv[1]).read_text(errors='replace')
+methods=sys.argv[2:]
+for name in methods:
+    label=r"Test Case '-\\[SimulatorUITests\\.PlaybackUITests "+re.escape(name)+r"\\]' passed \\("
+    if not re.search(label,log):
+        print("FAIL: required native XCTest did not execute and pass: "+name)
+        raise SystemExit(1)
+if "Executed 0 tests" in log:
+    raise SystemExit("FAIL: the simulator ran zero tests")
+print("PASS: all",len(methods),"requested real XCTest methods executed and passed")
+PY
 if [ "$group" = push ]; then wait "$sender"; fi
