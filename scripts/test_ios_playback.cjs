@@ -793,3 +793,45 @@ test('Google pill matches Apple visible dimensions and typography',()=>{
   assert.match(css,/\.auth-social-buttons \.google-auth-btn svg\{[\s\S]*?width:19px[\s\S]*?height:19px/);
   assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?max-width:356px[\s\S]*?height:52px!important/);
 });
+
+function nativeSeekFixture() {
+  let retry,clock=1000,position=10;
+  const assignments=[],listeners=new Map();
+  const p=Object.create(directPrototype({Date:{now:()=>clock},
+    setInterval:callback=>{retry=callback;return 1;},clearInterval:()=>{},
+    setTimeout:()=>2,clearTimeout:()=>{}}));
+  const v={seeking:false,readyState:1,playbackRate:1,
+    get currentTime(){return position;},
+    set currentTime(value){assignments.push(value);position=value;this.seeking=true;},
+    addEventListener:(name,callback)=>listeners.set(name,callback),
+    removeEventListener:(name)=>listeners.delete(name)};
+  Object.assign(p,{v,token:1,timeline:()=>{},duration:()=>120});
+  return {p,v,assignments,retry:()=>retry(),move:(value,time)=>{position=value;clock=time;},
+    finish:()=>{v.seeking=false;v.readyState=4;listeners.get('timeupdate')();}};
+}
+
+test('native seek retries do not restart a seek that is already in flight',async()=>{
+  const f=nativeSeekFixture(),pending=f.p.seekTo(60);
+  f.move(45,1500);f.retry();f.retry();
+  assert.deepEqual(f.assignments,[60]);
+  f.move(60,2000);f.finish();
+  assert.equal(await pending,60);
+});
+
+test('seek confirmation accepts advancing playback without rewinding to the target',async()=>{
+  const f=nativeSeekFixture(),pending=f.p.seekTo(60);
+  f.move(62,4000);f.finish();
+  assert.deepEqual(f.assignments,[60]);
+  assert.equal(await pending,62);
+});
+
+test('video layer restoration does not introduce another native seek',async()=>{
+  let seeks=0;
+  const p=Object.create(directPrototype());
+  const v={paused:false,readyState:4,webkitPresentationMode:'inline',style:{},
+    set currentTime(_value){seeks++;},setAttribute:()=>{},getBoundingClientRect:()=>({})};
+  Object.assign(p,{v,autoplayWanted:true,current:()=>60,duration:()=>120,wakeVideoLayer:()=>{}});
+  assert.equal(await p.relatchInlineVideoLayer(),true);
+  assert.equal(seeks,0);
+});
+

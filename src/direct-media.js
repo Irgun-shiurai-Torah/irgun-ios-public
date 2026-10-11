@@ -326,13 +326,23 @@ class Player{
   // WKWebView can accept a currentTime assignment before native HLS is seekable,
   // then reset it to zero as the first segment arrives. Confirm the actual clock.
   return new Promise(resolve=>{
-   let done=false,timer=null;
+   let done=false,timer=null,assigned=false,assignedAt=0;
    const finish=()=>{if(done)return;done=true;clearTimeout(timer);clearInterval(retry);for(const event of events)v.removeEventListener(event,attempt);this.timeline();resolve(this.current())};
    const attempt=()=>{
     if(done)return;
     if(token!==this.token||sequence!==this.seekSequence){finish();return}
     const target=this.duration()?Math.min(n,Math.max(0,this.duration()-.25)):n;
-    if(Math.abs(this.current()-target)<=1){if(!v.seeking&&v.readyState>=2)finish();return}
+    const position=this.current();
+    const advance=assigned?Math.max(0,(Date.now()-assignedAt)/1000)*Math.max(.25,Number(v.playbackRate)||1):0;
+    // Once a native seek is in flight, another currentTime assignment can
+    // restart it and leave WebKit permanently seeking with frozen frames.
+    // Accept ordinary playback progress after the assigned target instead
+    // of repeatedly rewinding that progress back to the original timestamp.
+    if(position>=target-1&&position<=target+advance+1){
+     if(!v.seeking&&v.readyState>=2)finish();return;
+    }
+    if(assigned&&v.seeking)return;
+    assigned=true;assignedAt=Date.now();
     try{v.currentTime=target}catch(_){}
     if(Math.abs(this.current()-target)<=1&&!v.seeking&&v.readyState>=2)finish();
    };
@@ -367,7 +377,7 @@ class Player{
   const hasDecodeCounter=Number.isFinite(beforeFrames)&&Number.isFinite(afterFrames);
   return Boolean(!v.paused&&v.readyState>=2&&(decoded||(!hasDecodeCounter&&this.current()>beforeTime+.15)));
  }
- async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}const target=d>0?Math.min(Math.max(0,at+.02),Math.max(0,d-.15)):Math.max(0,at+.02);try{if(v.readyState>=1)v.currentTime=target}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(target)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}}this.wakeVideoLayer();return !v.paused}
+ async relatchInlineVideoLayer(){const v=this.v;if(!v)return false;const at=this.current(),d=this.duration();try{v.playsInline=true;v.setAttribute('playsinline','');v.setAttribute('webkit-playsinline','true');if(typeof v.webkitSetPresentationMode==='function'&&v.webkitPresentationMode!=='picture-in-picture')v.webkitSetPresentationMode('inline')}catch(_){}try{v.style.display='block';v.style.visibility='visible';v.style.opacity='1';v.style.willChange='transform,opacity';v.style.webkitBackfaceVisibility='hidden';v.style.backfaceVisibility='hidden';v.style.webkitTransform='translate3d(0,0,.001px)';v.style.transform='translate3d(0,0,.001px)';void v.offsetWidth;try{v.getBoundingClientRect()}catch(_){}}catch(_){}if(this.hls?.startLoad)try{this.hls.startLoad(at)}catch(_){}if(v.paused&&this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}await new Promise(resolve=>requestAnimationFrame(resolve));try{v.style.webkitTransform='translate3d(0,0,0)';v.style.transform='translate3d(0,0,0)'}catch(_){}if(this.destroyed||!this.autoplayWanted)return false;if(v.paused){await new Promise(resolve=>setTimeout(resolve,80));if(this.autoplayWanted&&!this.destroyed)try{await this.playForRecovery()}catch(_){}}this.wakeVideoLayer();return !v.paused}
  async play(){if(this.destroyed)throw new Error('Video player destroyed');this.explicitlyPaused=false;this.autoplayWanted=true;this.show();this.wakeVideoLayer();if(this.hls?.startLoad)try{this.hls.startLoad(this.current())}catch(_){}const v=this.v,token=this.token;await v.play();if(this.destroyed||this.v!==v||this.token!==token||!this.autoplayWanted)return false;this.wakeVideoLayer();return true}
  async playForRecovery(timeout=2200){
   if(this.destroyed||!this.autoplayWanted)return false;
@@ -476,7 +486,9 @@ class Player{
    (this.customFullscreen?document.body:this.c).appendChild(this.r);
    await new Promise(resolve=>requestAnimationFrame(resolve));
    if(this.destroyed||!this.autoplayWanted)return false;
-   try{if(at>0)this.v.currentTime=at}catch(_){}
+   // Reparenting should retain the live clock. Seek only if WebKit actually
+   // lost it; an unnecessary assignment restarts the decoder's active seek.
+   if(at>0&&this.current()<at-1)try{await this.seekTo(at)}catch(_){}
    try{await this.playForRecovery()}catch(_){}
    frameSeen=await this.waitForVisualFrame();
    if(this.destroyed||!this.autoplayWanted)return false;
