@@ -28,6 +28,19 @@
             let rects=snap["rects"] as? [String:[String:Any]] ?? [:]
             if rects[key] == nil {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            } else if ["playlists","downloads"].contains(key),
+                      let tabs = snap["libraryTabsRect"] as? [String:Any],
+                      number(tabs,"w") > 80, number(tabs,"h") > 12 {
+                // Actual Playlists and Downloads buttons are in a horizontal
+                // tab strip. Move it by real screen gesture, not JS scrolling.
+                let left = number(tabs,"x") + number(tabs,"w") * 0.18
+                let right = number(tabs,"x") + number(tabs,"w") * 0.82
+                let y = number(tabs,"y") + number(tabs,"h") / 2
+                let web = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                web.withOffset(CGVector(dx:right,dy:y)).press(
+                    forDuration:0.10,
+                    thenDragTo:web.withOffset(CGVector(dx:left,dy:y)))
+                RunLoop.current.run(until:Date().addingTimeInterval(0.3))
             } else if number(rects[key] ?? [:],"y") < 0 {
                 app.webViews.firstMatch.swipeDown()
             } else {
@@ -147,7 +160,30 @@
     }
 
     private func regressionActivateSample() throws {
-        try openSample()
+        // The simulator-only diagnostics panel is hidden during native
+        // keyboard interactions. Opening a sample using an invisible XCTest
+        // button is not a real tap. Prefer the normal Watch UI in that case.
+        let diagnostic = app.buttons["ist-simulator-open"]
+        if diagnostic.exists && diagnostic.isHittable {
+            try openSample()
+        } else {
+            try regressionTap("shiurim")
+            try regressionWait("Visible playable lecture card before Watch action", timeout: 60) {
+                let controls = $0["controls"] as? [String:[String:Any]] ?? [:]
+                return controls["open"] != nil
+            }
+            try regressionTap("open")
+            _ = try waitFor("Real Watch control starts direct HLS or same-shiur MP4", timeout: 120) { s in
+                let source = s["videoSource"] as? String ?? ""
+                let sameMP4 = s["backend"] as? String == "mp4" &&
+                    source.contains("/media/") && source.contains("/video.mp4")
+                return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
+                    (s["backend"] as? String == "hls-native" || sameMP4) &&
+                    !String(s["id"] as? String ?? "").isEmpty &&
+                    s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                    self.number(s,"playerCount") == 1
+            }
+        }
         try regressionVideoMoving()
         try regressionWait("Video lecture must support its audio counterpart") {
             $0["hasAudio"] as? Bool == true
