@@ -80,6 +80,10 @@
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
                     web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    // JavaScript confirm blocks the observer's snapshot until
+                    // XCTest responds. Do not retry the destructive tap while
+                    // its real confirmation is waiting on screen.
+                    if key == "commentDelete" { return }
                     // A render can move a control between observation and touch.
                     // Continue only after the real native tap produced its click.
                     let clickDeadline = Date().addingTimeInterval(3)
@@ -296,6 +300,10 @@
         ).firstMatch
         XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
         nativeEditor.typeText(" updated")
+        try dismissNativeKeyboard()
+        _ = try waitFor("Native comment-edit keyboard closes before Save") { _ in
+            !self.app.keyboards.firstMatch.exists
+        }
         let editBefore = successCount(account(), "/comments/edit", "PUT")
         try touch("commentSave")
         try awaitAccount("Comment edit persisted on server") {
@@ -307,9 +315,17 @@
         try touch("commentDelete")
         let deleteAlert = app.alerts.firstMatch
         XCTAssertTrue(deleteAlert.waitForExistence(timeout: 8), "Comment deletion confirmation must appear")
-        if deleteAlert.buttons["OK"].exists { deleteAlert.buttons["OK"].tap() }
-        else if deleteAlert.buttons["Delete"].exists { deleteAlert.buttons["Delete"].tap() }
-        else { XCTFail("Native comment confirmation button missing"); throw Failure.timedOut("Delete confirmation") }
+        XCTAssertTrue(deleteAlert.staticTexts.matching(
+            NSPredicate(format:"label CONTAINS[c] %@","delete this comment")
+        ).firstMatch.exists,"Only the requested QA comment deletion may be confirmed")
+        let confirm = deleteAlert.buttons.matching(
+            NSPredicate(format:"label IN %@",["OK","Ok","Delete"])
+        ).firstMatch
+        guard confirm.exists && confirm.isHittable else {
+            XCTFail("Native comment confirmation button missing")
+            throw Failure.timedOut("Delete confirmation")
+        }
+        confirm.tap()
         try awaitAccount("Comment delete succeeded on server") {
             $0["qaCommentPhase"] as? String == "absent" &&
             successCount($0, "/comments/delete", "POST") > deleteBefore
