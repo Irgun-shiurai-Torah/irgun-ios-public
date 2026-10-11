@@ -53,7 +53,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/regression/select_simulator.py "$DEVICE_FAMILY"
-          if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
+          # $GITHUB_ENV is only imported into *subsequent* steps. Read the
+          # selected device directly here before attempting simctl boot.
+          UDID="$(python3 -c 'import json,os; print(json.load(open("simulator-results/"+os.environ["DEVICE_FAMILY"]+".json"))["udid"])')"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
       - name: Start packet-filter network outage gate
@@ -146,6 +148,7 @@ jobs:
           set -euo pipefail
           python3 .github/regression/select_simulator.py iPhone
           python3 .github/regression/select_simulator.py iPad
+          IPHONE_UDID="$(python3 -c 'import json; print(json.load(open("simulator-results/iPhone.json"))["udid"])')"
           xcrun simctl boot "$IPHONE_UDID"
           xcrun simctl bootstatus "$IPHONE_UDID" -b
           bash .github/regression/run_ui.sh writer "$IPHONE_UDID"
