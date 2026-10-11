@@ -115,7 +115,7 @@
             } else if case .failed=state { done.signal() }
         }
         connection.start(queue:queue)
-        let success=done.wait(timeout:.now()+15)==.success
+        let success = done.wait(timeout: .now() + 15) == .success
         connection.cancel()
         lock.lock();let received=answer;lock.unlock()
         XCTAssertTrue(success && received.hasPrefix("OK:"+command),
@@ -344,10 +344,21 @@
         }
         XCTAssertGreaterThan(number(snapshot(),"videoTime"),start+90,
                              "Video must sustain playback beyond a brief startup")
-        XCUIDevice.shared.press(.lock)
+        // XCUITest provides no public .lock button (only Home, volume, etc.).
+        // Use the simulator-only XCUIDevice lock selector, verify it genuinely
+        // backgrounds the app, and fail if this Xcode runtime lacks it.
+        let lockSelector = NSSelectorFromString("pressLockButton")
+        guard XCUIDevice.shared.responds(to: lockSelector) else {
+            XCTFail("Native simulator lock API unavailable; real lock test cannot run")
+            throw Failure.timedOut("Simulator lock button")
+        }
+        XCUIDevice.shared.perform(lockSelector)
+        let springboard = XCUIApplication(bundleIdentifier:"com.apple.springboard")
+        _ = try waitFor("The device must leave the app after genuine screen lock", timeout: 15) { _ in
+            self.app.state != .runningForeground
+        }
         Thread.sleep(forTimeInterval:12)
-        XCUIDevice.shared.press(.lock)
-        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
+        XCUIDevice.shared.perform(lockSelector)
         springboard.swipeUp()
         app.activate()
         _ = try waitFor("Player survives real lock/unlock",timeout:70) {
