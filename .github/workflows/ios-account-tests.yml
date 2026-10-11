@@ -6,7 +6,10 @@ on:
     paths:
       - '.github/account-tests/**'
       - '.github/workflows/ios-account-tests.yml'
+      - '.github/regression/**'
+      - '.github/workflows/ios-extended-regressions.yml'
       - 'src/main.js'
+      - 'src/direct-media.js'
 
 permissions:
   contents: read
@@ -198,3 +201,15 @@ jobs:
           path: account-results/
           if-no-files-found: warn
           retention-days: 7
+
+  extended-regressions:
+    # Existing account tests run on both devices first. The reusable workflow
+    # then runs its own iPhone/iPad/core/push and independent cross-device jobs,
+    # all using the same QA account, without concurrent mutations.
+    name: Extended iOS regression after logged-in account checks
+    needs: [account]
+    if: ${{ always() && !cancelled() }}
+    uses: ./.github/workflows/ios-extended-regressions.yml
+    with:
+      managed_by_account: true
+    secrets: inherit
