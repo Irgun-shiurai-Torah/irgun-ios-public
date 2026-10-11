@@ -268,14 +268,24 @@
         let nativeComposer = app.webViews.textViews.firstMatch
         XCTAssertTrue(nativeComposer.waitForExistence(timeout: 10), "Comment composer must exist")
         nativeComposer.typeText("IST iOS QA \(commentMarker) created")
+        // Prove native typing reached the actual comment form before allowing
+        // a server mutation; typing into some other WKWebView textarea would
+        // otherwise post an unrelated user's draft by accident.
+        try awaitAccount("Native keyboard entered the exact disposable QA comment") {
+            $0["qaDraftValid"] as? Bool == true
+        }
         let postBefore = successCount(account(), "/comments", "POST")
         try touch("commentPost")
-        try awaitAccount("Real server comment POST and visible owned comment") {
-            $0["qaCommentPhase"] as? String == "created" &&
-            $0["commentDraftEmpty"] as? Bool == true &&
-            successCount($0, "/comments", "POST") > postBefore
+        try awaitAccount("QA comment POST accepted by the actual server") {
+            successCount($0, "/comments", "POST") > postBefore &&
+            $0["commentDraftEmpty"] as? Bool == true
         }
-        checked("Comment created and submitted text cleared")
+        try awaitAccount("The server returned the posted QA comment and correctly identified its owner") {
+            $0["qaCommentReturned"] as? Bool == true &&
+            $0["qaCommentReturnedOwned"] as? Bool == true &&
+            $0["qaCommentPhase"] as? String == "created"
+        }
+        checked("Comment POST persisted, visible to its owner and submitted draft cleared")
         try touch("commentEdit")
         try awaitAccount("Owned comment edit UI opened") {
             let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
