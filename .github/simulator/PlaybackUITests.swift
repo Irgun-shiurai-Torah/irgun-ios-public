@@ -91,13 +91,21 @@ final class PlaybackUITests: XCTestCase {
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
         if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
-            let state = try waitFor("Visible player button: \(label)") {
+            var hitTestedButton: [String: Any]? = nil
+            _ = try waitFor("Visible player button: \(label)") {
                 let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
-                return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
-                    buttons.values.contains { $0["label"] as? String == label && $0["hittable"] as? Bool == true }
+                guard self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500,
+                    let match = buttons.values.first(where: {
+                        $0["label"] as? String == label && $0["hittable"] as? Bool == true
+                    }) else { return false }
+                hitTestedButton = match
+                return true
             }
-            let buttons = state["playerButtons"] as? [String: [String: Any]] ?? [:]
-            let button = buttons.values.first { $0["label"] as? String == label }!
+            guard let button = hitTestedButton else {
+                evidence("button-disappeared-\(label)")
+                XCTFail("Real player control disappeared while tapping \(label)")
+                throw Failure.timedOut("Player control lost")
+            }
             app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx:number(button,"x"),dy:number(button,"y"))).tap()
             return
@@ -158,7 +166,9 @@ final class PlaybackUITests: XCTestCase {
 
     private func openSample() throws {
         let button = app.buttons["ist-simulator-open"]
-        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        // The real native diagnostic button is temporarily hidden during
+        // account keyboard input; require it to return before pressing it.
+        XCTAssertTrue(button.waitForExistence(timeout: 26), "Real test shiur button did not return after input")
         button.tap()
         // Native overlay taps can be missed during the first launch animation.
         // Retry once only if JS has not accepted or failed the open request.

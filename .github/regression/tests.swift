@@ -281,6 +281,20 @@
     // or as a native popover list. Both paths tap the actual native option.
     // We then assert the real HTMLVideoElement playbackRate, never a stub.
     private func chooseRealVideoSpeed(_ label: String) throws {
+        // Native iOS WebKit hides some <select> options from accessibility.
+        // If present, use the app's REAL accessible speed buttons, then
+        // independently assert video.playbackRate in the subsequent test.
+        let controls = regression()["controls"] as? [String:[String:Any]] ?? [:]
+        if controls["videoSpeedToggle"] != nil {
+            try regressionTap("videoSpeedToggle")
+            let key = label == "1.5x" ? "videoSpeed15" : "videoSpeed10"
+            try regressionWait("Real speed choice is visible and hit-tested", timeout: 15) {
+                let choices = $0["controls"] as? [String:[String:Any]] ?? [:]
+                return choices[key] != nil
+            }
+            try regressionTap(key)
+            return
+        }
         try regressionTap("videoSpeed")
         let wheel = app.pickerWheels.firstMatch
         if wheel.waitForExistence(timeout: 3) {
