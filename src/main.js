@@ -8336,7 +8336,23 @@ async function postComment() {
       body: JSON.stringify({ videoId: id, text })
     });
     if (field?.isConnected && field.value.trim() === text) field.value = '';
-    if (state.watchVideo && videoId(state.watchVideo) === id) await loadComments();
+    if (state.watchVideo && videoId(state.watchVideo) === id) {
+      await loadComments();
+      // A successful write can be momentarily absent from a subsequent
+      // read (for example when served by a read replica). Refresh only from
+      // the actual server; never fabricate the comment in client state.
+      // Keep the current lecture and account checks to avoid updating a
+      // different shiur while the user navigates.
+      for (const delay of [350, 700, 1200]) {
+        const returned = state.watchComments.some(comment =>
+          String(comment.text || '').trim() === text &&
+          String(comment.user_id) === String(state.user?.id)
+        );
+        if (returned || !state.watchVideo || videoId(state.watchVideo) !== id || !state.user) break;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        if (state.watchVideo && videoId(state.watchVideo) === id && state.user) await loadComments();
+      }
+    }
   } catch (error) {
     alert(error.message || 'Could not post comment.');
   } finally {
