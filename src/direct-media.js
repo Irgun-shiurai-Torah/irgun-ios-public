@@ -46,6 +46,20 @@ class Player{
  }
  checkVisualFrameHealth(){
   const v=this.v,now=Date.now();
+  // iOS can unexpectedly pause a video while the player still has explicit
+  // Play intent (for example after seek or WebKit audio-focus changes).
+  // Recover only when the app is visible and the user has NOT pressed Pause.
+  if(!this.destroyed&&v&&v.paused&&!v.ended&&!document.hidden&&
+     !this.loading&&!this.explicitlyPaused&&this.autoplayWanted&&
+     !this.visualPlaybackPromise&&!this.decoderReloadPromise){
+   if(!this.unintendedPauseSince)this.unintendedPauseSince=now;
+   if(now-this.unintendedPauseSince>6000&&now-(this.lastUnintendedResumeAt||0)>12000){
+    this.lastUnintendedResumeAt=now;this.unintendedPauseSince=now;
+    void this.ensureVisualPlayback(false).catch(e=>console.warn('Unintended iOS pause recovery failed',e));
+   }
+   return;
+  }
+  this.unintendedPauseSince=0;
   if(this.destroyed||!v||typeof v.requestVideoFrameCallback!=='function'||
      document.hidden||!this.autoplayWanted||this.explicitlyPaused||
      v.paused||v.ended||this.loading||
