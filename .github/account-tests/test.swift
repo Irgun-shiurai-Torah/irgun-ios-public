@@ -60,6 +60,13 @@
         }
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
+            if key == "modeAudio" || key == "modeVideo" {
+                // The public simulator suite already verifies these native
+                // accessibility buttons. Their native coordinates account for
+                // WebKit's viewport shift after email/password keyboard input.
+                try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
+                return
+            }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
             try awaitAccount("Account control rendered: " + key) {
@@ -300,7 +307,7 @@
         ).firstMatch
         XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
         nativeEditor.typeText(" updated")
-        try dismissNativeKeyboard()
+        try touch("commentKeyboardDone")
         _ = try waitFor("Native comment-edit keyboard closes before Save") { _ in
             !self.app.keyboards.firstMatch.exists
         }

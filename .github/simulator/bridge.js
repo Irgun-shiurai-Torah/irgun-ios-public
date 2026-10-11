@@ -182,6 +182,13 @@ window.ISTSimulator = {
       return [id,{label:el?.getAttribute('aria-label')||'',x,y,
         hittable:simulatorVisible(el)&&Boolean(el?.contains(document.elementFromPoint(x,y)))}];
     }));
+    const accountButton = document.querySelector('.bottom-nav [data-nav="account"]');
+    const accountBounds = accountButton?.getBoundingClientRect();
+    const accountX = accountBounds ? accountBounds.left + accountBounds.width / 2 : 0;
+    const accountY = accountBounds ? accountBounds.top + accountBounds.height / 2 : 0;
+    playerButtons.accountNav = {label:'Account',x:accountX,y:accountY,
+      hittable:simulatorVisible(accountButton) &&
+        Boolean(accountButton?.contains(document.elementFromPoint(accountX,accountY)))};
     if (video !== simulatorFrameVideo) {
       simulatorFrameVideo = video;
       simulatorFrames = 0;
@@ -253,3 +260,4 @@ window.ISTSimulator = {
     });
   }
 };
+

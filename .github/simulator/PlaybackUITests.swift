@@ -90,14 +90,21 @@ final class PlaybackUITests: XCTestCase {
         if hide.exists && hide.isHittable { hide.tap() }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
-        if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
-            let state = try waitFor("Visible player button: \(label)") {
+        if ["Account", "Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
+            var hitTestedButton: [String:Any]? = nil
+            _ = try waitFor("Visible player button: \(label)") {
                 let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
-                return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
-                    buttons.values.contains { $0["label"] as? String == label && $0["hittable"] as? Bool == true }
+                guard self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500,
+                    let match = buttons.values.first(where: {
+                        $0["label"] as? String == label && $0["hittable"] as? Bool == true
+                    }) else { return false }
+                hitTestedButton = match
+                return true
             }
-            let buttons = state["playerButtons"] as? [String: [String: Any]] ?? [:]
-            let button = buttons.values.first { $0["label"] as? String == label }!
+            guard let button = hitTestedButton else {
+                XCTFail("Real hit-tested button disappeared: \(label)")
+                throw Failure.timedOut(label)
+            }
             app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx:number(button,"x"),dy:number(button,"y"))).tap()
             return
@@ -452,3 +459,4 @@ final class PlaybackUITests: XCTestCase {
         evidence("pip-reopen")
     }
 }
+

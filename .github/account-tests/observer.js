@@ -7,6 +7,7 @@ window.__ISTAccountControlQueries = {
   commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
   commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
   commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
+  commentKeyboardDone: '[data-comment-keyboard-done]',
   profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
   open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
   save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -102,6 +103,7 @@ window.ISTAccountTest = { snapshot() {
   commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
   commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
   commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
+  commentKeyboardDone: '[data-comment-keyboard-done]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
     open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
     save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -147,12 +149,12 @@ window.ISTAccountTest = { snapshot() {
       const playable = candidates.filter(el => state.videoById?.get(String(el.dataset.watch || ''))?.hasAudio === true);
       if (playable.length) candidates = playable;
     }
-    if (['commentEdit','commentSave','commentDelete','commentEditText'].includes(key)) {
+    if (['commentEdit','commentSave','commentDelete','commentEditText','commentKeyboardDone'].includes(key)) {
       if (!qaComment) candidates = [];
       else if (key === 'commentEditText') {
         candidates = candidates.filter(el => el.id === 'editCommentText-' + String(qaComment.id));
       } else {
-        const attr = {commentEdit:'editComment',commentSave:'saveComment',commentDelete:'deleteComment'}[key];
+        const attr = {commentEdit:'editComment',commentSave:'saveComment',commentDelete:'deleteComment',commentKeyboardDone:'commentKeyboardDone'}[key];
         candidates = candidates.filter(el => String(el.dataset[attr] || '') === String(qaComment.id));
       }
     }

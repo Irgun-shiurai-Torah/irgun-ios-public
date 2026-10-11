@@ -4756,7 +4756,7 @@ function commentsHtml() {
     return `<article class="comment-card">
       <div class="comment-head"><strong>${esc(comment.author || 'Anonymous')}</strong><span>${esc(fmtDate(comment.created))}</span></div>
       ${editing
-        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
+        ? `<div class="comment-edit-box"><div class="comment-actions"><button type="button" data-comment-keyboard-done="${esc(comment.id)}">${currentLanguage() === 'he' ? 'סיום הקלדה' : 'Done typing'}</button></div><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
         : `<p>${esc(comment.text || '')}</p>${owner ? `<div class="comment-actions"><button data-edit-comment="${esc(comment.id)}">Edit</button><button data-delete-comment="${esc(comment.id)}">Delete</button></div>` : ''}`}
     </article>`;
   }).join('');
@@ -6732,6 +6732,14 @@ function refreshCommentsUi() {
 }
 
 function bindCommentButtons() {
+  document.querySelectorAll('[data-comment-keyboard-done]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => {
+      const field = document.getElementById(`editCommentText-${el.dataset.commentKeyboardDone}`);
+      if (field) field.blur();
+    });
+  });
   document.querySelectorAll('[data-retry-comments]').forEach(el => {
     if (el.dataset.bound) return;
     el.dataset.bound = '1';

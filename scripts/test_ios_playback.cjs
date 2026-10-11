@@ -835,3 +835,31 @@ test('video layer restoration does not introduce another native seek',async()=>{
   assert.equal(seeks,0);
 });
 
+test('comment keyboard control is available only while editing the signed-in user comment',()=>{
+  for(const language of ['en','he']) {
+    const state={watchCommentsLoading:false,watchCommentsError:'',user:{id:7},editingCommentId:'42',
+      watchComments:[{id:42,user_id:7,text:'QA draft'},{id:43,user_id:8,text:'Other user'}]};
+    const c=vm.createContext({state,esc:value=>String(value||''),fmtDate:()=>'',currentLanguage:()=>language});
+    vm.runInContext(extract('function commentsHtml(', 'function watchVimeoEmbedSrc('),c);
+    const html=c.commentsHtml();
+    assert.match(html,/data-comment-keyboard-done="42"/);
+    assert.doesNotMatch(html,/data-comment-keyboard-done="43"/);
+    assert.ok(html.includes(language==='he'?'סיום הקלדה':'Done typing'));
+  }
+});
+
+test('Done typing closes comment focus without cancelling the edit or changing its draft',()=>{
+  let clicked,blurred=0;
+  const field={value:'QA edited draft',blur:()=>blurred++};
+  const button={dataset:{commentKeyboardDone:'42'},addEventListener:(_event,handler)=>{clicked=handler;}};
+  const state={editingCommentId:'42'};
+  const document={querySelectorAll:q=>q==='[data-comment-keyboard-done]'?[button]:[],
+    getElementById:id=>{assert.equal(id,'editCommentText-42');return field;}};
+  const c=vm.createContext({document,state});
+  vm.runInContext(extract('function bindCommentButtons(', 'function readScheduleFilesCache('),c);
+  c.bindCommentButtons();clicked();
+  assert.equal(blurred,1);
+  assert.equal(field.value,'QA edited draft');
+  assert.equal(state.editingCommentId,'42');
+});
+
