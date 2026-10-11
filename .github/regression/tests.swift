@@ -159,34 +159,42 @@
         XCTAssertEqual(s["audioPlaying"] as? Bool,false,"HTML audio must not play simultaneously")
     }
 
+    private func regressionOpenThroughActualLibrary() throws {
+        // Exercise the SAME visible Shiurim > Watch path a user follows.
+        // Do not rely on a hidden simulator diagnostic button or invoke JS.
+        try regressionTap("shiurim")
+        try regressionWait("Visible playable lecture card before Watch action", timeout: 60) {
+            let controls = $0["controls"] as? [String:[String:Any]] ?? [:]
+            return controls["open"] != nil
+        }
+        try regressionTap("open")
+        _ = try waitFor("Real Watch control starts direct HLS or same-shiur MP4", timeout: 120) { s in
+            let source = s["videoSource"] as? String ?? ""
+            let sameMP4 = s["backend"] as? String == "mp4" &&
+                source.contains("/media/") && source.contains("/video.mp4")
+            return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
+                (s["backend"] as? String == "hls-native" || sameMP4) &&
+                !String(s["id"] as? String ?? "").isEmpty &&
+                s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                self.number(s,"playerCount") == 1
+        }
+        try regressionVideoMoving()
+        try regressionWait("Native Watch button picked audio-capable video") {
+            $0["hasAudio"] as? Bool == true
+        }
+    }
+
     private func regressionActivateSample() throws {
-        // The simulator-only diagnostics panel is hidden during native
-        // keyboard interactions. Opening a sample using an invisible XCTest
-        // button is not a real tap. Prefer the normal Watch UI in that case.
+        // Debug controls may intentionally be hidden during native form entry.
         let diagnostic = app.buttons["ist-simulator-open"]
         if diagnostic.exists && diagnostic.isHittable {
             try openSample()
+            try regressionVideoMoving()
+            try regressionWait("Video lecture must support its audio counterpart") {
+                $0["hasAudio"] as? Bool == true
+            }
         } else {
-            try regressionTap("shiurim")
-            try regressionWait("Visible playable lecture card before Watch action", timeout: 60) {
-                let controls = $0["controls"] as? [String:[String:Any]] ?? [:]
-                return controls["open"] != nil
-            }
-            try regressionTap("open")
-            _ = try waitFor("Real Watch control starts direct HLS or same-shiur MP4", timeout: 120) { s in
-                let source = s["videoSource"] as? String ?? ""
-                let sameMP4 = s["backend"] as? String == "mp4" &&
-                    source.contains("/media/") && source.contains("/video.mp4")
-                return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
-                    (s["backend"] as? String == "hls-native" || sameMP4) &&
-                    !String(s["id"] as? String ?? "").isEmpty &&
-                    s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
-                    self.number(s,"playerCount") == 1
-            }
-        }
-        try regressionVideoMoving()
-        try regressionWait("Video lecture must support its audio counterpart") {
-            $0["hasAudio"] as? Bool == true
+            try regressionOpenThroughActualLibrary()
         }
     }
 
@@ -384,7 +392,9 @@
         try regressionWait("Session restored after player speed change",timeout:90) {
             $0["online"] as? Bool == true
         }
-        try regressionActivateSample()
+        // Real user navigation after a cold process relaunch, not the
+        // test-only debug overlay; verify live decoder and 1.5x rate.
+        try regressionOpenThroughActualLibrary()
         XCTAssertEqual(number(snapshot(),"speed"),1.5,accuracy:0.02,
                        "User-selected speed should survive app relaunch")
         XCTAssertEqual(number(regression(),"videoSpeedChoice"),1.5,accuracy:0.02)
@@ -492,7 +502,9 @@
 
     func testRegressionOfflineDownloadPlaysWithoutNetworkAndSyncsHistory() throws {
         try regressionLogin()
-        try regressionActivateSample()
+        // After real email/password entry the debug overlay may be hidden.
+        // Navigate to the video using actual Shiurim and Watch controls.
+        try regressionOpenThroughActualLibrary()
         if regression()["offlineSaved"] as? Bool != true {
             try regressionTap("offlineSave")
         }
