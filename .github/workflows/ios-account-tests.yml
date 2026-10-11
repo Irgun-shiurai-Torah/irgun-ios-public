@@ -125,6 +125,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:SimulatorUITests/PlaybackUITests/testLoggedInAccountPersistenceAndLogout \
             test 2>&1 | tee simulator-results/xcodebuild.log
+          python3 - <<'PY_EXECUTED'
+          from pathlib import Path
+          log = Path('simulator-results/xcodebuild.log').read_text(errors='replace')
+          expected = "Test Case '-[SimulatorUITests.PlaybackUITests testLoggedInAccountPersistenceAndLogout]' passed ("
+          if expected not in log or 'Executed 0 tests' in log:
+              raise SystemExit('Required native account/comments XCTest did not execute and pass')
+          PY_EXECUTED
 
       - name: Save credential-free result summary
         if: always()
@@ -200,3 +207,4 @@ jobs:
           path: account-results/
           if-no-files-found: warn
           retention-days: 7
+

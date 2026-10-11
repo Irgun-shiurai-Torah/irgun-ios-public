@@ -1691,6 +1691,12 @@ function audioUrl(id) {
 function currentLanguage() {
   return window.IST_I18N && window.IST_I18N.getLanguage && window.IST_I18N.getLanguage() === 'he' ? 'he' : 'en';
 }
+window.addEventListener('irgun-playback-speed-changed', event => {
+  const rate = Number(event?.detail?.rate);
+  if (![0.75,1,1.25,1.5,1.75,2].includes(rate)) return;
+  state.playbackSpeed = rate;
+  audio.playbackRate = rate;
+});
 
 function paidProductTitle(item, fallback = 'Paid Shiur') {
   const en = String(item?.titleEn || item?.title || item?.titleHe || '').trim();
@@ -8576,3 +8582,4 @@ window.addEventListener('focus', () => {
 window.addEventListener('pageshow', repairIosViewportAfterResume);
 window.addEventListener('orientationchange', repairIosViewportAfterResume);
 setTimeout(() => handlePendingPushOpen(), 1200);
+

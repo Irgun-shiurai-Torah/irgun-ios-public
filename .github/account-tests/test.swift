@@ -330,6 +330,23 @@
             $0["profileNameDisplayed"] as? String == originalName
         }
         checked("Account name persists after restart")
+        let commentReadsBefore = successCount(account(), "/comments", "GET")
+        try touch("shiurim"); try touch("open")
+        try awaitAccount("Deleted QA comment stays absent after restart and fresh server read") {
+            $0["watchId"] as? String == id &&
+            $0["qaCommentMarker"] as? String == commentMarker &&
+            $0["commentsLoading"] as? Bool == false &&
+            $0["commentsError"] as? Bool == false &&
+            successCount($0, "/comments", "GET") > commentReadsBefore &&
+            $0["qaCommentReturned"] as? Bool == false &&
+            $0["qaCommentPhase"] as? String == "absent"
+        }
+        checked("Comment stays deleted after native restart and fresh server GET")
+        app.terminate(); app.launch()
+        try awaitAccount("Account restores after independent deleted-comment verification") {
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
+            $0["name"] as? String == originalName
+        }
         try touch("library")
         try awaitAccount("Library screen rendered") {
             guard $0["screen"] as? String == "library" else { return false }
@@ -391,3 +408,4 @@
         checked("Logout clears account state")
         report["accountMutationsFinishedAt"] = timestamp(); report["status"] = "passed"; persistReport()
     }
+

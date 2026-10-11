@@ -43,7 +43,15 @@ if (!window.__ISTAccountClickObserverInstalled) {
       const match = /^IST iOS QA (\d{12,16}) created$/.exec(
         String(document.getElementById('commentText')?.value || '').trim()
       );
-      if (match) window.__ISTAccountQaCommentToken = match[1];
+      if (match && state.user && state.watchVideo) {
+        // Retain only the disposable marker and its scope in this debug build.
+        // A real process restart must reload comments from the server while
+        // still identifying exactly the comment this test created.
+        const marker = { token:match[1], userId:String(state.user.id),
+          videoId:String(videoId(state.watchVideo)) };
+        window.__ISTAccountQaCommentMarker = marker;
+        try { localStorage.setItem('istIOSQACommentMarker', JSON.stringify(marker)); } catch (_) {}
+      }
     }
   }, true);
   document.addEventListener('invalid', event => {
@@ -106,7 +114,15 @@ window.ISTAccountTest = { snapshot() {
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
-  const qaToken = String(window.__ISTAccountQaCommentToken || '');
+  let qaMarker = window.__ISTAccountQaCommentMarker;
+  if (!qaMarker) {
+    try { qaMarker = JSON.parse(localStorage.getItem('istIOSQACommentMarker') || 'null'); } catch (_) {}
+  }
+  const markerInScope = qaMarker && state.user && state.watchVideo &&
+    String(qaMarker.userId) === String(state.user.id) &&
+    String(qaMarker.videoId) === String(videoId(state.watchVideo));
+  const qaToken = markerInScope && /^\d{12,16}$/.test(String(qaMarker.token))
+    ? String(qaMarker.token) : '';
   const qaDraftValid = /^IST iOS QA \d{12,16} created$/.test(
     String(document.getElementById('commentText')?.value || '').trim()
   );
@@ -171,6 +187,7 @@ window.ISTAccountTest = { snapshot() {
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     watchHasAudio:Boolean(state.watchVideo?.hasAudio),
     qaCommentPhase,qaCommentVisible:Boolean(qaComment),qaDraftValid,
+    qaCommentMarker:qaToken,
     qaCommentReturned,qaCommentReturnedOwned,
     commentCount:state.watchComments.length,
     commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
@@ -197,3 +214,4 @@ if(window.ISTSimulator){
     ...JSON.parse(original()),account:window.ISTAccountTest.snapshot()
   });
 }
+
