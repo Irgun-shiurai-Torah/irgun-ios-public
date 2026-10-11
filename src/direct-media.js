@@ -469,9 +469,15 @@ function rpip(btn,v,onIntent){
  if(!btn)return;
  const standard=()=>Boolean(document.pictureInPictureEnabled&&typeof v.requestPictureInPicture==='function');
  const webkit=()=>{try{return typeof v.webkitSetPresentationMode==='function'&&typeof v.webkitSupportsPresentationMode==='function'&&v.webkitSupportsPresentationMode('picture-in-picture')}catch(_){return false}};
- const supported=standard()||webkit();
- btn.hidden=!supported;
- if(!supported)return;
+ // iPhone WKWebView may not expose PiP until actual video metadata exists.
+ // Recheck real WebKit capabilities instead of permanently hiding PiP while
+ // the video element has no source. A truly unsupported device still fails
+ // the native PiP assertion rather than pretending that PiP is available.
+ const refreshSupport=()=>{const supported=standard()||webkit();btn.hidden=!supported;return supported};
+ refreshSupport();
+ for(const eventName of ['loadedmetadata','loadeddata','canplay','playing']){
+  v.addEventListener(eventName,refreshSupport);
+ }
  const active=()=>document.pictureInPictureElement===v||v.webkitPresentationMode==='picture-in-picture';
  // Diagnostic state is available to disposable simulator observations, but it
  // never contains user or media content.
@@ -485,6 +491,7 @@ function rpip(btn,v,onIntent){
   btn.innerHTML=`<i class="fa-solid fa-${on?'arrow-right-from-bracket':'window-restore'}"></i>`;
  };
  btn.onclick=async()=>{
+  if(!refreshSupport())return;
   const opening=!active();
   diagnostic.clicks+=1;
   diagnostic.requested=opening;
