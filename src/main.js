@@ -516,9 +516,16 @@ async function saveOffline(kind, id) {
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
     const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+    const downloadedBytes = Number(stat?.size) || 0;
+    // The server can return an HTML error page or short HLS manifest with HTTP
+    // 200. A few KB saved as .mp3 is not a usable hour-long offline lecture.
+    // Never show "Saved offline" until a real nontrivial file exists locally.
+    if (downloadedBytes < 32768) {
+      throw new Error('Offline audio download is incomplete or is not a media file.');
+    }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:Number(stat?.size) || Number(state.offlineJobs.get(key)?.total) || 0,
+      uri:fileInfo.uri, path, bytes:downloadedBytes,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -527,6 +534,8 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    // Do not leave a misleading "downloaded" stub behind on the device.
+    try { await Filesystem.deleteFile({ directory:Directory.Data, path }); } catch (_) {}
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);
