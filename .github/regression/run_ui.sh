@@ -65,7 +65,7 @@ from pathlib import Path
 log=Path(sys.argv[1]).read_text(errors='replace')
 methods=sys.argv[2:]
 for name in methods:
-    label=r"Test Case '-\\[SimulatorUITests\\.PlaybackUITests "+re.escape(name)+r"\\]' passed \\("
+    label="Test Case '-[SimulatorUITests.PlaybackUITests "+name+"]' passed ("
     if not re.search(label,log):
         print("FAIL: required native XCTest did not execute and pass: "+name)
         raise SystemExit(1)
