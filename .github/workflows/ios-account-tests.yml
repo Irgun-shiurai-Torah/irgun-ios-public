@@ -12,8 +12,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-account-${{ github.ref }}
-  cancel-in-progress: true
+  # Never run account mutations beside iOS extended regression logout and
+  # name-edit scenarios using the same dedicated non-admin QA account.
+  group: irgun-ios-exclusive-qa-account
+  cancel-in-progress: false
 
 jobs:
   account:
