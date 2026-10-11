@@ -60,13 +60,13 @@ xcodebuild "${CONTAINER[@]}" \
   -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
   "${selected[@]}" test 2>&1 | tee "simulator-results/$result-xcodebuild.log"
 python3 - "simulator-results/$result-xcodebuild.log" "${methods[@]}" <<'PY'
-import re,sys
+import sys
 from pathlib import Path
 log=Path(sys.argv[1]).read_text(errors='replace')
 methods=sys.argv[2:]
 for name in methods:
     label="Test Case '-[SimulatorUITests.PlaybackUITests "+name+"]' passed ("
-    if not re.search(label,log):
+    if label not in log:
         print("FAIL: required native XCTest did not execute and pass: "+name)
         raise SystemExit(1)
 if "Executed 0 tests" in log:
