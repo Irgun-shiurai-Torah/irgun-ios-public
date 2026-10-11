@@ -22,6 +22,7 @@ concurrency:
   # Manually launched suites still share the global QA-account exclusion.
   group: ${{ inputs.managed_by_account && format('irgun-ios-reusable-{0}', github.run_id) || 'irgun-ios-exclusive-qa-account' }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   device:
@@ -185,3 +186,4 @@ jobs:
             simulator-results/*xcodebuild.log
           retention-days: 7
           if-no-files-found: warn
+

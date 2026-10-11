@@ -220,6 +220,36 @@
         try regressionVideoMoving()
     }
 
+    private func regressionArmPush(target: String, previousActions: Int) throws {
+        XCTAssertFalse(target.isEmpty,"Notification must target the currently playing real shiur")
+        let payload = try JSONSerialization.data(withJSONObject:
+            ["id":target,"previousActions":previousActions]) + Data([10])
+        let connection = NWConnection(host:"127.0.0.1",port:47312,using:.tcp)
+        let done = DispatchSemaphore(value:0)
+        let lock = NSLock()
+        var acknowledged = false
+        connection.stateUpdateHandler = { state in
+            if case .ready = state {
+                connection.send(content:payload,completion:.contentProcessed { _ in
+                    connection.receive(minimumIncompleteLength:1,maximumLength:32) { data,_,_,_ in
+                        lock.lock()
+                        acknowledged = String(data:data ?? Data(),encoding:.utf8)?.hasPrefix("READY") == true
+                        lock.unlock()
+                        done.signal()
+                    }
+                })
+            } else if case .failed = state { done.signal() }
+        }
+        connection.start(queue:DispatchQueue(label:"org.irgun.regression.push-ready"))
+        let received = done.wait(timeout:.now()+15) == .success
+        connection.cancel()
+        lock.lock(); let ready = acknowledged; lock.unlock()
+        guard received && ready else {
+            XCTFail("Real host APNs sender did not acknowledge the backgrounded notification test")
+            throw Failure.timedOut("Push sender readiness")
+        }
+    }
+
     func testRegressionNotificationTapRestoresInlinePlayer() throws {
         // An xcrun simctl push is accepted even if the user has never granted
         // alerts. First exercise the actual native iOS permission dialogue.
@@ -244,10 +274,15 @@
         // workflow sends a REAL xcrun simctl push via SpringBoard while Home
         // is in the foreground; no direct app.activate() shortcut is allowed.
         let initial=regression()["pushActions"] as? Int ?? 0
+        let target = snapshot()["id"] as? String ?? ""
+        let position = number(snapshot(),"videoTime")
         XCUIDevice.shared.press(.home)
+        XCTAssertNotEqual(app.state, .runningForeground,
+                          "Push delivery must wait until the app is actually backgrounded")
+        try regressionArmPush(target: target, previousActions: initial)
         let notification=springboard.descendants(matching:.any)
             .matching(NSPredicate(format:"label CONTAINS %@", "Irgun QA Playback")).firstMatch
-        XCTAssertTrue(notification.waitForExistence(timeout:65),
+        XCTAssertTrue(notification.waitForExistence(timeout:120),
                       "Simulator notification must really appear in SpringBoard")
         XCTAssertTrue(notification.isHittable,"Simulated push must be tappable")
         notification.tap()
@@ -258,7 +293,8 @@
         _ = try waitFor("Notification reopening restores inline player controls",timeout:75) {
             $0["mode"] as? String == "video" && $0["pip"] as? Bool == false &&
             $0["videoVisible"] as? Bool == true && $0["controlsVisible"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true && self.number($0,"playerCount")==1
+            $0["videoPlaying"] as? Bool == true && self.number($0,"playerCount")==1 &&
+            $0["id"] as? String == target && self.number($0,"videoTime") >= max(0,position-3)
         }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause works after notification launch") {
@@ -290,8 +326,11 @@
             $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true
         }
         XCTAssertEqual(number(snapshot(),"playerCount"),1)
-        XCTAssertTrue(snapshot()["pipSupported"] as? Bool == true,
-                      "PiP unsupported on chosen simulator; this scenario cannot be marked passed")
+        let capability = snapshot()
+        let nativeSupported = capability["nativePiPSupported"] as? Bool ?? false
+        let webViewAllowed = capability["nativeWebViewPiPAllowed"] as? Bool ?? false
+        XCTAssertTrue(capability["pipSupported"] as? Bool == true,
+                      "Real PiP is unavailable: native support=\(nativeSupported), WKWebView allowed=\(webViewAllowed); this scenario remains failed")
         try tapWebButton("Picture in Picture")
         _ = try waitFor("PiP genuinely enters",timeout:40) { $0["pip"] as? Bool == true }
         XCUIDevice.shared.press(.home)
@@ -399,12 +438,12 @@
                        "User-selected speed should survive app relaunch")
         XCTAssertEqual(number(regression(),"videoSpeedChoice"),1.5,accuracy:0.02)
         try regressionVideoMoving()
-        try tapWebButton("Audio")
+        try regressionTap("watchAudio")
         _ = try waitFor("Audio inherits chosen 1.5x speed and keeps playing",timeout:60) {
             $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
             abs(self.number($0,"speed")-1.5)<0.02
         }
-        try tapWebButton("Video")
+        try regressionTap("watchVideo")
         _ = try waitFor("Video restores chosen speed after switching back",timeout:90) {
             $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
             $0["audioPlaying"] as? Bool == false &&
@@ -479,13 +518,13 @@
         try regressionVideoMoving()
         for _ in 0..<3 {
             let previous=number(snapshot(),"videoTime")
-            try tapWebButton("Audio")
+            try regressionTap("watchAudio")
             let audio=try waitFor("Long-session mode switch gives active audio",timeout:70) {
                 $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
                 self.number($0,"audioTime")>=max(0,previous-3)
             }
             let audioTime=number(audio,"audioTime")
-            try tapWebButton("Video")
+            try regressionTap("watchVideo")
             _ = try waitFor("Long-session return yields video only",timeout:90) {
                 $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
                 $0["audioPlaying"] as? Bool == false && self.number($0,"playerCount")==1 &&
@@ -717,3 +756,4 @@
         }
         XCTAssertEqual(regression()["isAdmin"] as? Bool,false)
     }
+

@@ -4,6 +4,7 @@ import WebKit
 import Capacitor
 import Network
 import UserNotifications
+import AVKit
 
 // Compiled into CI simulator builds only; never copied by the release workflow.
 final class SimulatorProbe {
@@ -13,6 +14,7 @@ final class SimulatorProbe {
     private var status: UILabel?
     private var timer: Timer?
     private var polling = false
+    private var controlsHidden = false
     private var nativePushAuthorized = false
     private var listener: NWListener?
     private let observationQueue = DispatchQueue(label: "org.irgun.simulator.observations")
@@ -134,15 +136,20 @@ final class SimulatorProbe {
     @objc private func nextStorePage() { webView?.evaluateJavaScript("window.ISTSimulator?.nextStorePage()", completionHandler: nil) }
     @objc private func cleanCapture() {
         panel?.isHidden = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self = self, !self.controlsHidden else { return }
+            self.panel?.isHidden = false
+        }
     }
     @objc private func hideForAppControls() {
         // Fullscreen, PiP, mini and long-video XCTest steps can take more than
         // twelve seconds. Reappearing over the real Back/Mini button at y≈90
         // intercepted native taps despite the WebKit DOM reporting a hit.
         // The next real XCTest process launch reinstalls diagnostics normally.
+        controlsHidden = true
         panel?.isHidden = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 180) { [weak self] in self?.panel?.isHidden = false }
+        // Keep it hidden for this entire test process. A delayed reveal from
+        // an earlier tap could cover a newer mode-switch tap minutes later.
     }
 
     private func poll() {
@@ -160,6 +167,9 @@ final class SimulatorProbe {
                var state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
                 state["nativePushAuthorized"] = self.nativePushAuthorized
+                state["nativePiPSupported"] = AVPictureInPictureController.isPictureInPictureSupported()
+                state["nativeWebViewPiPAllowed"] = webView.configuration.allowsPictureInPictureMediaPlayback
+                state["nativeWebViewInlineAllowed"] = webView.configuration.allowsInlineMediaPlayback
                 if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) {
                     self.status?.accessibilityValue = value
                     self.observationLock.lock()
@@ -171,3 +181,4 @@ final class SimulatorProbe {
     }
 }
 #endif
+

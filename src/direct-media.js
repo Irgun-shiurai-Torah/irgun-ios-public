@@ -14,6 +14,9 @@ class Player{
   const toggle=this.r.querySelector('#dmSpeedToggle'),menu=this.r.querySelector('#dmSpeedMenu');
   this.speedToggle=toggle;this.speedMenu=menu;
   if(!toggle||!menu||String(window.Capacitor?.getPlatform?.()||'')!=='ios')return;
+  // The phone controls clip overflow. Place the menu in the video root so
+  // every speed option stays visible and tappable above the controls.
+  this.r.appendChild(menu);
   this.speed.hidden=true;toggle.hidden=false;menu.hidden=true;menu.style.display='none';
   toggle.textContent=String(this.v.playbackRate||1)+'x';
   toggle.onclick=()=>{const opening=menu.hidden;menu.hidden=!opening;menu.style.display=opening?'grid':'none';toggle.setAttribute('aria-expanded',String(opening))};
@@ -564,3 +567,4 @@ function rpip(btn,v,onIntent){
 }
 window.ISTDirectMediaPlayer=Player;
 })();
+
