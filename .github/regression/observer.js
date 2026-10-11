@@ -124,9 +124,13 @@
         x:r.left,w:r.width,within:r.left>=-1&&r.right<=innerWidth+1};
     });
     const readName=String(state.user?.name||'');
+    const tabs=document.querySelector('.library-tabs-scroll');
+    const bounds=tabs?.getBoundingClientRect();
+    const libraryTabsRect=bounds?{x:bounds.left,y:bounds.top,w:bounds.width,h:bounds.height}:null;
     const videoSpeed=document.getElementById('dmSpeed');
     return JSON.stringify({...base,regression:{
-      controls:selectors,rects:hitRects,
+      controls:selectors,rects:hitRects,libraryTabsRect,
+      libraryTabsScrollLeft:Number(tabs?.scrollLeft)||0,
       language:currentLanguage(),documentDir:document.documentElement.dir,
       documentLang:document.documentElement.lang||'',
       bottomNav:buttons,rtlToggleLabel:document.querySelector('[data-language-toggle]')?.textContent?.trim()||'',
