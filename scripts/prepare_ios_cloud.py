@@ -118,7 +118,7 @@ def install_media_bridge_controller():
     if not storyboard.exists():
         die(f'Capacitor iOS storyboard is missing: {storyboard}')
     content = storyboard.read_text()
-    tags = re.findall(r'<viewController\\b[^>]*\\bcustomClass="CAPBridgeViewController"[^>]*>', content)
+    tags = re.findall(r'<viewController\b[^>]*\bcustomClass="CAPBridgeViewController"[^>]*>', content)
     if len(tags) != 1:
         die(f'Expected exactly one CAPBridgeViewController storyboard scene, found {len(tags)}')
     native_product_name = (os.environ.get('IOS_PRODUCT_NAME') or 'IrgunShiuraiTorah').strip()
