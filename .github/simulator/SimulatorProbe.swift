@@ -137,8 +137,12 @@ final class SimulatorProbe {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
     }
     @objc private func hideForAppControls() {
+        // Fullscreen, PiP, mini and long-video XCTest steps can take more than
+        // twelve seconds. Reappearing over the real Back/Mini button at y≈90
+        // intercepted native taps despite the WebKit DOM reporting a hit.
+        // The next real XCTest process launch reinstalls diagnostics normally.
         panel?.isHidden = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.panel?.isHidden = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 180) { [weak self] in self?.panel?.isHidden = false }
     }
 
     private func poll() {
