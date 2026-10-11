@@ -1,24 +1,26 @@
 name: iOS Extended Regression Tests
 
 on:
+  # Standalone debug invocation remains available. Pull requests run this suite
+  # from the account workflow as a reusable job, AFTER the ordinary account
+  # assertions complete. One QA account is never mutated by both concurrently.
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/regression/**'
-      - '.github/workflows/ios-extended-regressions.yml'
-      - '.github/simulator/**'
-      - '.github/account-tests/**'
-      - 'src/**'
-      - 'public/**'
-      - 'scripts/**'
+  workflow_call:
+    inputs:
+      managed_by_account:
+        description: 'True when called by the authenticated account workflow'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  # Serialize against the ordinary logged-in account workflow as they use
-  # the same non-admin QA account, including session-revocation scenarios.
-  group: irgun-ios-exclusive-qa-account
+  # Reusable workflows must NOT use the caller's concurrency group or the
+  # outer account workflow would deadlock while awaiting this job.
+  # Manually launched suites still share the global QA-account exclusion.
+  group: ${{ inputs.managed_by_account && format('irgun-ios-reusable-{0}', github.run_id) || 'irgun-ios-exclusive-qa-account' }}
   cancel-in-progress: false
 
 jobs:
