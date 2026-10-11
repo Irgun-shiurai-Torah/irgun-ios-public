@@ -7382,7 +7382,15 @@ async function restoreNativeBackgroundVideo() {
   try {
     const native = await IrgunBackgroundAudio.getState();
     if (!current() || native.id !== id) return;
-    if (!state.nativeBackgroundPending && !native.active) return;
+    if (!state.nativeBackgroundPending && !native.active) {
+      // An iOS lock may suspend the WebView before didEnterBackground starts
+      // AVPlayer. Restore inline playback only if native intended Play and
+      // the user did not explicitly Pause from media/lock-screen controls.
+      if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+        scheduleInlineVideoRecovery(player);
+      }
+      return;
+    }
     // Native Home playback can start even when iOS suspends the WebView before
     // its background event runs. Reconcile the actual native owner on return.
     if (!state.nativeBackgroundPending) {
@@ -7413,11 +7421,15 @@ async function restoreNativeBackgroundVideo() {
         if (wantsPlay() && frames !== true) await player.ensureVisualPlayback(true);
       }
     } else if (native.active) await player.pause();
-    else if (player.player?.autoplayWanted) await player.ensureVisualPlayback(false);
+    else if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+      await player.ensureVisualPlayback(false);
+    }
     if (!current()) return;
     await player.setMuted(Boolean(state.nativeBackgroundMuted));
     state.nativeBackgroundPending = false;
-    if (native.playing) scheduleInlineVideoRecovery(player);
+    if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+      scheduleInlineVideoRecovery(player);
+    }
     nativeBackgroundLastSync = '';
   } catch (error) { console.warn('Native background video return failed',error); }
   finally {
