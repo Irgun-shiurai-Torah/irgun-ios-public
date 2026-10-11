@@ -107,16 +107,22 @@ window.ISTAccountTest = { snapshot() {
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
   const qaToken = String(window.__ISTAccountQaCommentToken || '');
+  const qaDraftValid = /^IST iOS QA \d{12,16} created$/.test(
+    String(document.getElementById('commentText')?.value || '').trim()
+  );
   let qaComment = null, qaCommentPhase = 'absent';
+  let qaCommentReturned = false, qaCommentReturnedOwned = false;
   if (qaToken && state.user) {
     for (const comment of state.watchComments) {
-      if (String(comment.user_id) !== String(state.user.id)) continue;
       const match = /^IST iOS QA (\d{12,16}) (created|created updated)$/.exec(String(comment.text || ''));
-      if (match && match[1] === qaToken) {
-        qaComment = comment;
-        qaCommentPhase = match[2] === 'created' ? 'created' : 'edited';
-        break;
-      }
+      if (!match || match[1] !== qaToken) continue;
+      qaCommentReturned = true;
+      const isOwner = String(comment.user_id) === String(state.user.id);
+      if (!isOwner) continue;
+      qaCommentReturnedOwned = true;
+      qaComment = comment;
+      qaCommentPhase = match[2] === 'created' ? 'created' : 'edited';
+      break;
     }
   }
   for (const [key, query] of Object.entries(queries)) {
@@ -164,7 +170,9 @@ window.ISTAccountTest = { snapshot() {
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     watchHasAudio:Boolean(state.watchVideo?.hasAudio),
-    qaCommentPhase,qaCommentVisible:Boolean(qaComment),
+    qaCommentPhase,qaCommentVisible:Boolean(qaComment),qaDraftValid,
+    qaCommentReturned,qaCommentReturnedOwned,
+    commentCount:state.watchComments.length,
     commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
     commentDraftEmpty:!document.getElementById('commentText')?.value,
     profileNameValue:document.getElementById('profileName')?.value || '',
