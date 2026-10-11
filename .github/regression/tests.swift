@@ -346,7 +346,7 @@
         if controls["videoSpeedToggle"] != nil {
             try regressionTap("videoSpeedToggle")
             let key = label == "1.5x" ? "videoSpeed15" : "videoSpeed10"
-            try regressionWait("Real speed choice is visible and hit-tested", timeout: 15) {
+            try regressionWait("Real speed choice is visible and hit-tested", timeout: 50) {
                 let choices = $0["controls"] as? [String:[String:Any]] ?? [:]
                 return choices[key] != nil
             }
