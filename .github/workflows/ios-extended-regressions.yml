@@ -16,8 +16,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-extended-${{ github.ref }}
-  cancel-in-progress: true
+  # Serialize against the ordinary logged-in account workflow as they use
+  # the same non-admin QA account, including session-revocation scenarios.
+  group: irgun-ios-exclusive-qa-account
+  cancel-in-progress: false
 
 jobs:
   device:
