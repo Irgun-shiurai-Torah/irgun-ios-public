@@ -62,14 +62,24 @@ final class PlaybackUITests: XCTestCase {
     @discardableResult
     private func waitFor(_ message: String, timeout: TimeInterval = 40,
                          condition: @escaping ([String: Any]) -> Bool) throws -> [String: Any] {
-        let predicate = NSPredicate { _, _ in condition(self.snapshot()) }
+        var acceptedState: [String:Any]? = nil
+        let predicate = NSPredicate { _, _ in
+            let observed = self.snapshot()
+            guard condition(observed) else { return false }
+            acceptedState = observed
+            return true
+        }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: app)
         if XCTWaiter.wait(for: [expectation], timeout: timeout) != .completed {
             evidence("failure-\(message)")
             XCTFail("\(message). Last state: \(snapshot())")
             throw Failure.timedOut(message)
         }
-        return snapshot()
+        guard let accepted = acceptedState else {
+            XCTFail("No observed state satisfied the native test condition: \(message)")
+            throw Failure.timedOut(message)
+        }
+        return accepted
     }
 
     private func evidence(_ name: String) {
@@ -91,13 +101,21 @@ final class PlaybackUITests: XCTestCase {
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
         if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
-            let state = try waitFor("Visible player button: \(label)") {
+            var hitTestedButton: [String: Any]? = nil
+            _ = try waitFor("Visible player button: \(label)") {
                 let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
-                return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
-                    buttons.values.contains { $0["label"] as? String == label && $0["hittable"] as? Bool == true }
+                guard self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500,
+                    let match = buttons.values.first(where: {
+                        $0["label"] as? String == label && $0["hittable"] as? Bool == true
+                    }) else { return false }
+                hitTestedButton = match
+                return true
             }
-            let buttons = state["playerButtons"] as? [String: [String: Any]] ?? [:]
-            let button = buttons.values.first { $0["label"] as? String == label }!
+            guard let button = hitTestedButton else {
+                evidence("button-disappeared-\(label)")
+                XCTFail("Real player control disappeared while tapping \(label)")
+                throw Failure.timedOut("Player control lost")
+            }
             app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx:number(button,"x"),dy:number(button,"y"))).tap()
             return
@@ -116,6 +134,27 @@ final class PlaybackUITests: XCTestCase {
 
     func testAppleSignInButtonIsVisible() throws {
         try tapWebButton("Account")
+        _ = try waitFor("Real account page must render before checking Apple sign-in", timeout: 60) {
+            $0["screen"] as? String == "account" &&
+            ($0["authFormVisible"] as? Bool == true || $0["profileFormVisible"] as? Bool == true)
+        }
+        // Other real logged-in tests can leave the test simulator authenticated.
+        // Apple sign-in legitimately appears only on the logged-out form.
+        // Use the actual visible Logout button; never spoof an unauthenticated state.
+        if snapshot()["profileFormVisible"] as? Bool == true {
+            XCTAssertEqual(snapshot()["accountLogoutVisible"] as? Bool, true,
+                           "Authenticated account must provide an actual Logout button")
+            try tapWebButton("Logout")
+            _ = try waitFor("Native Logout exposes the real login form", timeout: 60) {
+                $0["screen"] as? String == "account" &&
+                $0["authFormVisible"] as? Bool == true &&
+                $0["profileFormVisible"] as? Bool == false
+            }
+        }
+        _ = try waitFor("Official Apple login button must be rendered in the real sign-in form", timeout: 45) {
+            $0["authFormVisible"] as? Bool == true &&
+            $0["appleLoginButtonVisible"] as? Bool == true
+        }
         let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
         XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Continue with Apple button must be present")
         XCTAssertTrue(apple.isHittable, "Continue with Apple button must be visible and tappable")
@@ -158,7 +197,9 @@ final class PlaybackUITests: XCTestCase {
 
     private func openSample() throws {
         let button = app.buttons["ist-simulator-open"]
-        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        // The real native diagnostic button is temporarily hidden during
+        // account keyboard input; require it to return before pressing it.
+        XCTAssertTrue(button.waitForExistence(timeout: 26), "Real test shiur button did not return after input")
         button.tap()
         // Native overlay taps can be missed during the first launch animation.
         // Retry once only if JS has not accepted or failed the open request.
@@ -184,13 +225,20 @@ final class PlaybackUITests: XCTestCase {
                 s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
                 self.number(s, "videoTime") >= 28
         }
-        XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
+        // Default is 1x for a newly installed app, but a signed-in test may
+        // have already chosen a different PERSISTED speed in the same simulator.
+        // Compare real video rate with its independently saved user preference.
+        // The dedicated speed test still proves initial 1x after reset and
+        // verifies 1.5x survives a genuine process restart.
+        let storedRate = ((state["regression"] as? [String: Any])?["configuredAudioRate"] as? NSNumber)?.doubleValue ?? 1.0
+        XCTAssertEqual(number(state, "speed"), storedRate, accuracy: 0.01,
+                       "Video rate must match the actual saved playback preference")
         XCTAssertEqual(number(state, "playerCount"), 1, "Exactly one video element should exist")
         evidence("fresh-video")
     }
 
     private func assertMovingVideo() throws {
-        let before = try waitFor("Video must settle before frame sampling") {
+        var before = try waitFor("Video must settle before frame sampling") {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
             $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
@@ -198,7 +246,20 @@ final class PlaybackUITests: XCTestCase {
         }
         XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
         _ = try waitFor("Video frames and media clock must advance") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            // A real decoder replacement resets the observer's frame counter.
+            // Establish a fresh baseline on that actual settled surface, then
+            // still require multiple new frames AND an advancing media clock.
+            if self.number($0,"decoderReloads") != self.number(before,"decoderReloads") ||
+               $0["videoSource"] as? String != before["videoSource"] as? String {
+                if $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+                   $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
+                   $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
+                   self.number($0,"frames") >= 1 && self.number($0,"frameTime") > 0 {
+                    before = $0
+                }
+                return false
+            }
+            return $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             self.number($0, "frames") > self.number(before, "frames") + 2 &&
             self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
             self.number($0, "videoTime") > self.number(before, "videoTime") + 0.5
@@ -452,3 +513,4 @@ final class PlaybackUITests: XCTestCase {
         evidence("pip-reopen")
     }
 }
+

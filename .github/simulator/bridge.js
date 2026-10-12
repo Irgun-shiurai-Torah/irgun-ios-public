@@ -206,6 +206,10 @@ window.ISTSimulator = {
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen,
+      authFormVisible: Boolean(document.getElementById('authForm')),
+      profileFormVisible: Boolean(document.getElementById('profileForm')),
+      accountLogoutVisible: Boolean(document.querySelector('[data-logout]')),
+      appleLoginButtonVisible: Boolean(document.querySelector('[data-apple-login]')),
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
       gestures: simulatorGestures, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),

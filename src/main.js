@@ -491,6 +491,10 @@ async function saveOffline(kind, id) {
   const rawId = normalizedKind === 'audio' ? rawAudioId(item) : videoId(item);
   const sourceId = normalizedKind === 'audio' ? rawId : mediaApiId(item, rawId);
   const url = `${API}/download/${encodeURIComponent(sourceId)}?type=audio`;
+  // The normal audio player uses /audio/{id}. On some shiurim the separate
+  // /download endpoint can return a tiny error/manifest instead of MP3 bytes.
+  // Try the proven streaming source as a fallback, then validate saved bytes.
+  const offlineAudioUrls = [url, audioUrl(sourceId)];
   const title = itemTitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const subtitle = itemSubtitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
@@ -499,11 +503,12 @@ async function saveOffline(kind, id) {
   refreshOfflineButtonsForKey(key);
   if (state.screen === 'library' && state.librarySection === 'downloads') render();
   let listener = null;
+  let activeDownloadUrl = url;
   try {
     await Filesystem.mkdir({ directory: Directory.Data, path:'irgun-offline', recursive:true }).catch(() => {});
     const fileInfo = await Filesystem.getUri({ directory: Directory.Data, path });
     listener = await FileTransfer.addListener('progress', progress => {
-      if (String(progress?.url || '') !== url) return;
+      if (String(progress?.url || '') !== activeDownloadUrl) return;
       const total = Number(progress?.contentLength) || 0;
       const bytes = Number(progress?.bytes) || 0;
       const percent = total > 0 ? Math.max(0, Math.min(100, Math.round(bytes / total * 100))) : 0;
@@ -514,11 +519,30 @@ async function saveOffline(kind, id) {
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
-    const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+    let downloadedBytes = 0;
+    let lastDownloadError = null;
+    for (const candidate of offlineAudioUrls) {
+      activeDownloadUrl = candidate;
+      try {
+        await FileTransfer.downloadFile({ url:candidate, path:fileInfo.uri, headers, progress:true });
+        const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+        downloadedBytes = Number(stat?.size) || 0;
+        // A 2-KB response is not a lecture, even if HTTP returned 200.
+        // The true offline test additionally verifies audible native playback.
+        if (downloadedBytes >= 32768) break;
+        lastDownloadError = new Error('Server returned an incomplete offline audio file.');
+      } catch (error) {
+        lastDownloadError = error;
+      }
+      downloadedBytes = 0;
+      try { await Filesystem.deleteFile({ directory:Directory.Data, path }); } catch (_) {}
+    }
+    if (downloadedBytes < 32768) {
+      throw lastDownloadError || new Error('Offline audio is not yet available for this shiur.');
+    }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:Number(stat?.size) || Number(state.offlineJobs.get(key)?.total) || 0,
+      uri:fileInfo.uri, path, bytes:downloadedBytes,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -527,6 +551,8 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    // Do not leave a misleading "downloaded" stub behind on the device.
+    try { await Filesystem.deleteFile({ directory:Directory.Data, path }); } catch (_) {}
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);
@@ -1691,6 +1717,13 @@ function audioUrl(id) {
 function currentLanguage() {
   return window.IST_I18N && window.IST_I18N.getLanguage && window.IST_I18N.getLanguage() === 'he' ? 'he' : 'en';
 }
+window.addEventListener('irgun-playback-speed-changed', event => {
+  const rate = Number(event?.detail?.rate);
+  if (![0.75,1,1.25,1.5,1.75,2].includes(rate)) return;
+  state.playbackSpeed = rate;
+  audio.playbackRate = rate;
+});
+
 
 function paidProductTitle(item, fallback = 'Paid Shiur') {
   const en = String(item?.titleEn || item?.title || item?.titleHe || '').trim();
@@ -2337,6 +2370,11 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  if (state.authBusy) return;
+  // Preserve the address through the busy/error render so a wrong password can
+  // be corrected without losing the email or retyping it on mobile.
+  // Passwords are never copied into state or persisted.
+  state.authDraftEmail = String(email || '').trim();
   state.authBusy = true;
   state.authMessage = '';
   render();
@@ -2369,6 +2407,7 @@ async function login(email, password) {
     state.recurringLoaded = false;
     state.recurringDonations = [];
     state.authMessage = '';
+    state.authDraftEmail = '';
     state.authMode = 'login';
     state.authVerifyEmail = '';
     state.authVerifyPassword = '';
@@ -2627,21 +2666,53 @@ function requireLogin(message) {
   render();
 }
 
+const pendingFollowToggles = new Set();
 async function toggleFollow(type, key, label) {
   if (!state.user) return requireLogin('Sign in to follow speakers and topics.');
+  const identity = `${type}:${key}`;
+  // A second click must not undo the first request while the iOS WebView
+  // waits for the server. This is a toggle operation, not an idempotent POST.
+  if (pendingFollowToggles.has(identity)) return;
+  pendingFollowToggles.add(identity);
+  const userId = state.user.id;
+  const request = new AbortController();
+  const timeout = setTimeout(() => request.abort(), 25000);
   try {
     const result = await apiJson('/follows/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
+      body: JSON.stringify({ type, key, labelEn: label, labelHe: label }),
+      signal: request.signal
     });
-    const identity = `${type}:${key}`;
+    if (!state.user || state.user.id !== userId) return;
     if (result.following) state.follows.set(identity, result.item || { type, key, labelEn: label, labelHe: label });
     else state.follows.delete(identity);
     if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
     else refreshInteractiveUi();
   } catch (error) {
-    alert(error.message || 'Could not update follow.');
+    if (!state.user || state.user.id !== userId) return;
+    if (request.signal.aborted) {
+      // A timed-out toggle may nevertheless have committed. Read the actual
+      // server state; NEVER blindly retry and accidentally toggle it back.
+      const readback = new AbortController();
+      const readbackTimer = setTimeout(() => readback.abort(), 10000);
+      try {
+        const data = await apiJson('/follows', { signal: readback.signal });
+        if (state.user && state.user.id === userId && Array.isArray(data.items)) {
+          const found = data.items.find(item => `${item.type}:${item.key}` === identity);
+          if (found) state.follows.set(identity, found);
+          else state.follows.delete(identity);
+          refreshInteractiveUi();
+        }
+      } catch (_) { /* Still report timeout; do not claim the request worked. */ }
+      finally { clearTimeout(readbackTimer); }
+      alert('The Follow request timed out. Please check your Following list before trying again.');
+    } else {
+      alert(error.message || 'Could not update follow.');
+    }
+  } finally {
+    clearTimeout(timeout);
+    pendingFollowToggles.delete(identity);
   }
 }
 
@@ -4695,7 +4766,7 @@ function authHtml() {
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
       <form id="authForm" class="form-stack">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
-        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" value="${esc(state.authDraftEmail || '')}" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
         <button class="form-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Please wait...' : (registerMode ? 'Create Account' : 'Login')}</button>
       </form>
@@ -7360,8 +7431,31 @@ async function restoreNativeBackgroundVideo() {
   if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
-    if (!current() || native.id !== id) return;
-    if (!state.nativeBackgroundPending && !native.active) return;
+    if (!current()) return;
+    if (native.id !== id) {
+      // A lock/unlock can finish the native stop before the WebView receives
+      // its foreground callback. If inline video is already playing and no
+      // native owner remains, release the stale pending flag and saved mute.
+      // Do not start paused video or reconcile a different native lecture.
+      if (!native.id && !native.active && state.nativeBackgroundPending &&
+          player.video && !player.video.paused && player.player?.autoplayWanted &&
+          !player.player?.explicitlyPaused) {
+        await player.setMuted(Boolean(state.nativeBackgroundMuted));
+        if (!current()) return;
+        state.nativeBackgroundPending = false;
+        nativeBackgroundLastSync = '';
+      }
+      return;
+    }
+    if (!state.nativeBackgroundPending && !native.active) {
+      // An iOS lock may suspend the WebView before didEnterBackground starts
+      // AVPlayer. Restore inline playback only if native intended Play and
+      // the user did not explicitly Pause from media/lock-screen controls.
+      if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+        scheduleInlineVideoRecovery(player);
+      }
+      return;
+    }
     // Native Home playback can start even when iOS suspends the WebView before
     // its background event runs. Reconcile the actual native owner on return.
     if (!state.nativeBackgroundPending) {
@@ -7392,11 +7486,15 @@ async function restoreNativeBackgroundVideo() {
         if (wantsPlay() && frames !== true) await player.ensureVisualPlayback(true);
       }
     } else if (native.active) await player.pause();
-    else if (player.player?.autoplayWanted) await player.ensureVisualPlayback(false);
+    else if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+      await player.ensureVisualPlayback(false);
+    }
     if (!current()) return;
     await player.setMuted(Boolean(state.nativeBackgroundMuted));
     state.nativeBackgroundPending = false;
-    if (native.playing) scheduleInlineVideoRecovery(player);
+    if (native.desiredPlaying && player.player?.autoplayWanted && !player.player?.explicitlyPaused) {
+      scheduleInlineVideoRecovery(player);
+    }
     nativeBackgroundLastSync = '';
   } catch (error) { console.warn('Native background video return failed',error); }
   finally {
@@ -8551,3 +8649,4 @@ window.addEventListener('focus', () => {
 window.addEventListener('pageshow', repairIosViewportAfterResume);
 window.addEventListener('orientationchange', repairIosViewportAfterResume);
 setTimeout(() => handlePendingPushOpen(), 1200);
+

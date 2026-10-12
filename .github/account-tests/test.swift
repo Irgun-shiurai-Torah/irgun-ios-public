@@ -117,8 +117,8 @@
         report["nativeLoginStartedAt"] = timestamp(); persistReport()
         try touch("account")
         try awaitAccount("Account login form rendered") { $0["authFormPresent"] as? Bool == true }
-        try touch("email"); app.textFields.firstMatch.typeText(email); try dismissNativeKeyboard()
-        try touch("password"); app.secureTextFields.firstMatch.typeText(password); try dismissNativeKeyboard()
+        try nativeEnterLoginField("email",email)
+        try nativeEnterLoginField("password",password)
         // Return/Go can submit immediately. Give an in-flight request time to
         // settle before deciding whether the form still needs a native tap.
         let settledAfter = Date().timeIntervalSince1970 * 1000
@@ -126,17 +126,7 @@
             self.number($0, "observedAt") > settledAfter && $0["authBusy"] as? Bool == false
         }
         func repairNativeCredential(_ key: String, _ expected: String) throws {
-            try touch(key)
-            let field = key == "email" ? app.textFields.firstMatch : app.secureTextFields.firstMatch
-            // XCUI may drop an initial keystroke in a WebKit input on iPhone.
-            // Rewrite through the real native keyboard, never through JS setters.
-            // Secure input values remain redacted; no credentials enter artifacts.
-            let prior = field.value as? String ?? ""
-            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue,
-                                 count: max(prior.count, expected.count) + 8)
-            field.typeText(deletes)
-            field.typeText(expected)
-            try dismissNativeKeyboard()
+            try nativeEnterLoginField(key,expected)
         }
         // The document can observe a click on Login even when HTML constraint
         // validation suppressed the submit event. Validate field shapes before
@@ -172,7 +162,7 @@
             XCTAssertTrue(observed["authFormValid"] as? Bool == true && nativeEmailMatchesApproved() && nativePasswordLengthMatches(),
                           "Native login fields are incomplete or not the approved credentials; see credential-free validity observations")
             let submitBefore = number(observed, "authSubmitCount")
-            try touch("login")
+            try nativeSubmitLoginForm()
             // The click observer runs in capture phase even when HTML constraint
             // validation suppresses submit. Require the real submit event, never
             // mistake a native tap for a successful login.
@@ -285,3 +275,4 @@
         checked("Logout clears account state")
         report["accountMutationsFinishedAt"] = timestamp(); report["status"] = "passed"; persistReport()
     }
+

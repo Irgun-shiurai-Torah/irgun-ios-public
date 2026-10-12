@@ -106,6 +106,42 @@ def write_analytics_plugin():
     ANALYTICS_PLUGIN.write_text(ANALYTICS_PLUGIN_TEMPLATE.read_text())
     (IOS_APP / 'IrgunBackgroundAudioPlugin.swift').write_text((ROOT / 'scripts/IrgunBackgroundAudioPlugin.swift').read_text())
 
+def install_media_bridge_controller():
+    # WKWebView's media settings are construction-time options. Capacitor's
+    # storyboard must instantiate this configured subclass rather than trying
+    # to change PiP settings on an already-created WebView in AppDelegate.
+    source = ROOT / 'scripts' / 'IrgunBridgeViewController.swift'
+    if not source.exists():
+        die(f'Missing custom media bridge source: {source}')
+    (IOS_APP / 'IrgunBridgeViewController.swift').write_text(source.read_text())
+    storyboard = IOS_APP / 'Base.lproj' / 'Main.storyboard'
+    if not storyboard.exists():
+        die(f'Capacitor iOS storyboard is missing: {storyboard}')
+    content = storyboard.read_text()
+    tags = re.findall(r'<viewController\b[^>]*\bcustomClass="CAPBridgeViewController"[^>]*>', content)
+    if len(tags) != 1:
+        die(f'Expected exactly one CAPBridgeViewController storyboard scene, found {len(tags)}')
+    native_product_name = (os.environ.get('IOS_PRODUCT_NAME') or 'IrgunShiuraiTorah').strip()
+    native_module_name = re.sub(r'[^A-Za-z0-9_]', '', native_product_name) or 'IrgunShiuraiTorah'
+    original = tags[0]
+    replacement = original.replace('customClass="CAPBridgeViewController"',
+                                   'customClass="IrgunBridgeViewController"')
+    if 'customModule="' in replacement:
+        replacement = re.sub(r'customModule="[^"]+"',
+                             f'customModule="{native_module_name}"', replacement, count=1)
+    else:
+        replacement = replacement.replace('<viewController',
+                                          f'<viewController customModule="{native_module_name}"', 1)
+    if 'customModuleProvider=' not in replacement:
+        replacement = replacement.replace('<viewController',
+                                          '<viewController customModuleProvider="target"', 1)
+    content = content.replace(original, replacement, 1)
+    # Reject a broken generated storyboard before signing or running tests.
+    import xml.etree.ElementTree as ET
+    ET.fromstring(content)
+    storyboard.write_text(content)
+
+
 def patch_app_delegate():
     app_delegate = IOS_APP / 'AppDelegate.swift'
     if not app_delegate.exists():
@@ -332,6 +368,7 @@ def main():
     patch_info_plist(ios_client, reversed_client)
     write_entitlements()
     write_analytics_plugin()
+    install_media_bridge_controller()
     patch_app_delegate()
     write_build_metadata()
     print('iOS cloud configuration prepared successfully.')

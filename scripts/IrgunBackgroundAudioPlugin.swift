@@ -154,7 +154,7 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     private func currentTime() -> Double { let value = player?.currentTime().seconds ?? position; return value.isFinite ? max(0, value) : position }
     public func snapshot() -> [String: Any] {
-        ["id": itemID, "active": active, "playing": active && desiredPlaying,
+        ["id": itemID, "active": active, "playing": active && desiredPlaying, "desiredPlaying": desiredPlaying,
          "advancing": player?.timeControlStatus == .playing, "position": active && !seeking ? currentTime() : position,
          "ready": player?.currentItem?.status == .readyToPlay, "failed": player?.currentItem?.status == .failed, "muted": player?.isMuted ?? false,
          "backgroundSamples": backgroundSamples]
