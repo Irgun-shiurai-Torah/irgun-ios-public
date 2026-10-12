@@ -2370,6 +2370,7 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  if (state.authBusy) return;
   // Preserve the address through the busy/error render so a wrong password can
   // be corrected without losing the email or retyping it on mobile.
   // Passwords are never copied into state or persisted.
@@ -7430,7 +7431,22 @@ async function restoreNativeBackgroundVideo() {
   if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
-    if (!current() || native.id !== id) return;
+    if (!current()) return;
+    if (native.id !== id) {
+      // A lock/unlock can finish the native stop before the WebView receives
+      // its foreground callback. If inline video is already playing and no
+      // native owner remains, release the stale pending flag and saved mute.
+      // Do not start paused video or reconcile a different native lecture.
+      if (!native.id && !native.active && state.nativeBackgroundPending &&
+          player.video && !player.video.paused && player.player?.autoplayWanted &&
+          !player.player?.explicitlyPaused) {
+        await player.setMuted(Boolean(state.nativeBackgroundMuted));
+        if (!current()) return;
+        state.nativeBackgroundPending = false;
+        nativeBackgroundLastSync = '';
+      }
+      return;
+    }
     if (!state.nativeBackgroundPending && !native.active) {
       // An iOS lock may suspend the WebView before didEnterBackground starts
       // AVPlayer. Restore inline playback only if native intended Play and
@@ -8633,3 +8649,4 @@ window.addEventListener('focus', () => {
 window.addEventListener('pageshow', repairIosViewportAfterResume);
 window.addEventListener('orientationchange', repairIosViewportAfterResume);
 setTimeout(() => handlePendingPushOpen(), 1200);
+

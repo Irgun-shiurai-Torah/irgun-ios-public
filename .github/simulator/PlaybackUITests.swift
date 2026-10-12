@@ -62,14 +62,24 @@ final class PlaybackUITests: XCTestCase {
     @discardableResult
     private func waitFor(_ message: String, timeout: TimeInterval = 40,
                          condition: @escaping ([String: Any]) -> Bool) throws -> [String: Any] {
-        let predicate = NSPredicate { _, _ in condition(self.snapshot()) }
+        var acceptedState: [String:Any]? = nil
+        let predicate = NSPredicate { _, _ in
+            let observed = self.snapshot()
+            guard condition(observed) else { return false }
+            acceptedState = observed
+            return true
+        }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: app)
         if XCTWaiter.wait(for: [expectation], timeout: timeout) != .completed {
             evidence("failure-\(message)")
             XCTFail("\(message). Last state: \(snapshot())")
             throw Failure.timedOut(message)
         }
-        return snapshot()
+        guard let accepted = acceptedState else {
+            XCTFail("No observed state satisfied the native test condition: \(message)")
+            throw Failure.timedOut(message)
+        }
+        return accepted
     }
 
     private func evidence(_ name: String) {
@@ -228,7 +238,7 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func assertMovingVideo() throws {
-        let before = try waitFor("Video must settle before frame sampling") {
+        var before = try waitFor("Video must settle before frame sampling") {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
             $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
@@ -236,6 +246,19 @@ final class PlaybackUITests: XCTestCase {
         }
         XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
         _ = try waitFor("Video frames and media clock must advance") {
+            // A real decoder replacement resets the observer's frame counter.
+            // Establish a fresh baseline on that actual settled surface, then
+            // still require multiple new frames AND an advancing media clock.
+            if self.number($0,"decoderReloads") != self.number(before,"decoderReloads") ||
+               $0["videoSource"] as? String != before["videoSource"] as? String {
+                if $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+                   $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
+                   $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
+                   self.number($0,"frames") >= 1 && self.number($0,"frameTime") > 0 {
+                    before = $0
+                }
+                return false
+            }
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             self.number($0, "frames") > self.number(before, "frames") + 2 &&
             self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
@@ -490,3 +513,4 @@ final class PlaybackUITests: XCTestCase {
         evidence("pip-reopen")
     }
 }
+

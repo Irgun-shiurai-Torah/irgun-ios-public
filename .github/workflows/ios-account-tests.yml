@@ -176,7 +176,7 @@ jobs:
               keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy','authFormValid','authEmailValid','authPasswordValid','authEmailLength','authPasswordLength','authSubmitCount','authInvalidFieldKey'}
               safe={key:value[key] for key in keys if key in value}
               # Export only scalar request outcomes from the strict observer allowlist.
-              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
+              allowed_paths={'/login','/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
               requests=[]
               for item in value.get('collectionRequests',[]):
                   if not isinstance(item,dict) or item.get('path') not in allowed_paths: continue
@@ -221,4 +221,5 @@ jobs:
     with:
       managed_by_account: true
     secrets: inherit
+
 

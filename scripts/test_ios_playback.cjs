@@ -835,3 +835,49 @@ test('video layer restoration does not introduce another native seek',async()=>{
   assert.equal(seeks,0);
 });
 
+
+
+test('already resumed inline video releases a stale lock handoff without restarting',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.state.nativeBackgroundMuted=false;f.p.video.muted=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'',active:false,desiredPlaying:false});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.state.nativeBackgroundPending,false);
+  assert.equal(f.p.video.muted,false);
+  assert.equal(f.p.video.currentTime,30);
+  assert.deepEqual(f.calls,[['mute',false]]);
+});
+
+test('stale lock reconciliation cannot restart explicitly paused video',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.p.video.paused=true;f.p.player.autoplayWanted=false;f.p.player.explicitlyPaused=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'',active:false});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.p.video.paused,true);assert.equal(f.calls.length,0);
+});
+
+test('lock reconciliation does not stop or replace another native lecture',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'B',active:true,playing:true});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.state.nativeBackgroundPending,true);assert.equal(f.calls.length,0);
+});
+
+test('a failed login preserves the editable email and never stores the password',async()=>{
+  const state={authBusy:false},renders=[];
+  const c=vm.createContext({state,render:()=>renders.push({...state}),
+    apiFetch:async()=>({ok:false,json:async()=>({error:'Invalid password'})})});
+  vm.runInContext(extract('async function login(', 'async function finishSocialLogin('),c);
+  await c.login('qa@example.test','unit-test-password');
+  assert.equal(state.authDraftEmail,'qa@example.test');
+  assert.equal(state.authBusy,false);assert.equal(state.authMessage,'Invalid password');
+  assert.equal(renders.length,2);
+  assert.ok(renders.every(s=>!JSON.stringify(s).includes('unit-test-password')));
+});
+
+test('a second login submit cannot overwrite the in-flight login draft',async()=>{
+  const state={authBusy:true,authDraftEmail:'first@example.test'};
+  const c=vm.createContext({state,render:()=>assert.fail('Duplicate login render'),
+    apiFetch:()=>assert.fail('Duplicate login POST')});
+  vm.runInContext(extract('async function login(', 'async function finishSocialLogin('),c);
+  await c.login('second@example.test','unit-test-password');
+  assert.equal(state.authDraftEmail,'first@example.test');assert.equal(state.authBusy,true);
+});

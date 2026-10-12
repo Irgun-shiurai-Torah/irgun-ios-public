@@ -15,6 +15,10 @@
     }
 
     private func regressionTap(_ key: String) throws {
+        if key == "watchAudio" || key == "watchVideo" {
+            try tapWebButton(key == "watchAudio" ? "Audio" : "Video")
+            return
+        }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
         for _ in 0..<9 {
@@ -106,14 +110,14 @@
                            "Do not use an administrator account for simulator QA")
             return
         }
-        try regressionEnter("loginEmail",email)
+        try nativeEnterLoginField("email",email)
         let submittedBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
-        try regressionEnter("loginPassword",password)
+        try nativeEnterLoginField("password",password)
         // WebKit's native Go/Return may have submitted already. A second
         // login tap must NOT duplicate the in-flight POST or race a render.
         let submittedAfter = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         if submittedAfter <= submittedBefore && regression()["loggedIn"] as? Bool != true {
-            try regressionTap("loginSubmit")
+            try nativeSubmitLoginForm()
         }
         try regressionWait("Server accepted dedicated QA account",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
@@ -277,6 +281,9 @@
         let target = snapshot()["id"] as? String ?? ""
         let position = number(snapshot(),"videoTime")
         XCUIDevice.shared.press(.home)
+        _ = try waitFor("Home transition really backgrounds the app before APNs delivery",timeout:20) { _ in
+            self.app.state == .runningBackground || self.app.state == .runningBackgroundSuspended
+        }
         XCTAssertNotEqual(app.state, .runningForeground,
                           "Push delivery must wait until the app is actually backgrounded")
         try regressionArmPush(target: target, previousActions: initial)
@@ -616,11 +623,11 @@
         }
         try regressionTap("account")
         try regressionWait("Sign-in form is native visible") { $0["loginForm"] as? Bool == true }
-        try regressionEnter("loginEmail",email)
+        try nativeEnterLoginField("email",email)
         let invalidSubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
-        try regressionEnter("loginPassword",pass+"not-valid")
+        try nativeEnterLoginField("password",pass+"not-valid")
         if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= invalidSubmitBefore {
-            try regressionTap("loginSubmit")
+            try nativeSubmitLoginForm()
         }
         try regressionWait("Wrong password must return visible error and never create a session",timeout:60) {
             $0["loggedIn"] as? Bool == false &&
@@ -635,10 +642,10 @@
         XCTAssertEqual(errorForm["authEmailValid"] as? Bool,true,
                        "Email address must remain a valid native email input")
         let retrySubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
-        try regressionEnter("loginPassword",pass)
+        try nativeEnterLoginField("password",pass)
         if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= retrySubmitBefore &&
            regression()["loggedIn"] as? Bool != true {
-            try regressionTap("loginSubmit")
+            try nativeSubmitLoginForm()
         }
         try regressionWait("Valid login succeeds after bad password",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
@@ -756,4 +763,5 @@
         }
         XCTAssertEqual(regression()["isAdmin"] as? Bool,false)
     }
+
 
