@@ -229,7 +229,7 @@ final class PlaybackUITests: XCTestCase {
                 return false
             }
 
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            return $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             self.number($0, "frames") > self.number(before, "frames") + 2 &&
             self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
             self.number($0, "videoTime") > self.number(before, "videoTime") + 0.5
