@@ -35,6 +35,13 @@
             return requests.filter { $0["path"] as? String == "/follows/toggle" &&
                 ($0["ok"] as? Bool == true || (number($0, "finishedAt") > 0 && number($0, "status") > 0)) }.count
         }
+        func successCount(_ s: [String: Any], _ path: String, _ method: String) -> Int {
+            let requests = s["requests"] as? [[String: Any]] ?? []
+            return requests.filter {
+                $0["path"] as? String == path && $0["method"] as? String == method &&
+                $0["ok"] as? Bool == true
+            }.count
+        }
         func successfulHistoryWrites(_ s: [String: Any]) -> Int {
             let requests = s["requests"] as? [[String: Any]] ?? []
             return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
@@ -53,6 +60,13 @@
         }
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
+            if key == "modeAudio" || key == "modeVideo" {
+                // The public simulator suite already verifies these native
+                // accessibility buttons. Their native coordinates account for
+                // WebKit's viewport shift after email/password keyboard input.
+                try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
+                return
+            }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
             try awaitAccount("Account control rendered: " + key) {
@@ -73,6 +87,10 @@
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
                     web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    // JavaScript confirm blocks the observer's snapshot until
+                    // XCTest responds. Do not retry the destructive tap while
+                    // its real confirmation is waiting on screen.
+                    if key == "commentDelete" { return }
                     // A render can move a control between observation and touch.
                     // Continue only after the real native tap produced its click.
                     let clickDeadline = Date().addingTimeInterval(3)
@@ -117,8 +135,8 @@
         report["nativeLoginStartedAt"] = timestamp(); persistReport()
         try touch("account")
         try awaitAccount("Account login form rendered") { $0["authFormPresent"] as? Bool == true }
-        try touch("email"); app.textFields.firstMatch.typeText(email); try dismissNativeKeyboard()
-        try touch("password"); app.secureTextFields.firstMatch.typeText(password); try dismissNativeKeyboard()
+        try nativeEnterLoginField("email",email)
+        try nativeEnterLoginField("password",password)
         // Return/Go can submit immediately. Give an in-flight request time to
         // settle before deciding whether the form still needs a native tap.
         let settledAfter = Date().timeIntervalSince1970 * 1000
@@ -126,17 +144,7 @@
             self.number($0, "observedAt") > settledAfter && $0["authBusy"] as? Bool == false
         }
         func repairNativeCredential(_ key: String, _ expected: String) throws {
-            try touch(key)
-            let field = key == "email" ? app.textFields.firstMatch : app.secureTextFields.firstMatch
-            // XCUI may drop an initial keystroke in a WebKit input on iPhone.
-            // Rewrite through the real native keyboard, never through JS setters.
-            // Secure input values remain redacted; no credentials enter artifacts.
-            let prior = field.value as? String ?? ""
-            let deletes = String(repeating: XCUIKeyboardKey.delete.rawValue,
-                                 count: max(prior.count, expected.count) + 8)
-            field.typeText(deletes)
-            field.typeText(expected)
-            try dismissNativeKeyboard()
+            try nativeEnterLoginField(key,expected)
         }
         // The document can observe a click on Login even when HTML constraint
         // validation suppressed the submit event. Validate field shapes before
@@ -172,7 +180,7 @@
             XCTAssertTrue(observed["authFormValid"] as? Bool == true && nativeEmailMatchesApproved() && nativePasswordLengthMatches(),
                           "Native login fields are incomplete or not the approved credentials; see credential-free validity observations")
             let submitBefore = number(observed, "authSubmitCount")
-            try touch("login")
+            try nativeSubmitLoginForm()
             // The click observer runs in capture phase even when HTML constraint
             // validation suppresses submit. Require the real submit event, never
             // mistake a native tap for a successful login.
@@ -187,6 +195,11 @@
         let authenticatedEmail = (account()["accountEmail"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         XCTAssertTrue(authenticatedEmail == email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), "Refuse to mutate an account other than the dedicated approved account")
         checked("Native email/password login, dedicated identity and profile")
+        let originalName = account()["name"] as? String ?? ""
+        XCTAssertFalse(originalName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(account()["profileNameValue"] as? String, originalName)
+        XCTAssertEqual(account()["profileNameDisplayed"] as? String, originalName)
+        checked("Original account name is correct in the profile")
         func closeSavePicker() throws {
             if account()["playlistPickerOpen"] as? Bool == true { try touch("closePicker") }
             try awaitAccount("Save dialog closed") { $0["playlistPickerOpen"] as? Bool == false }
@@ -218,12 +231,134 @@
             successfulHistoryWrites($0) > historyWritesBeforeLecture
         }
         checked("Actual playing lecture history recorded")
+        XCTAssertEqual(account()["watchHasAudio"] as? Bool, true, "Test lecture must have real audio")
+        let originalVideoTime = number(snapshot(), "videoTime")
+        try touch("modeAudio")
+        let audioState = try waitFor("Video to Audio transfers real playback", timeout: 90) {
+            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == false && $0["pendingSeek"] as? Bool == false &&
+            self.number($0, "audioTime") >= max(0, originalVideoTime - 3)
+        }
+        let audioStart = number(audioState, "audioTime")
+        let audioMoving = try waitFor("Audio advances after Video to Audio") {
+            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            self.number($0, "audioTime") >= audioStart + 1
+        }
+        checked("Video to Audio retains playback and position")
+        let audioEnd = number(audioMoving, "audioTime")
+        try touch("modeVideo")
+        _ = try waitFor("Audio to Video restores one playing video owner", timeout: 90) {
+            $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            $0["audioPlaying"] as? Bool == false && self.number($0, "playerCount") == 1 &&
+            self.number($0, "videoTime") >= max(0, audioEnd - 3)
+        }
+        let videoFramesBefore = number(snapshot(), "frameTime")
+        _ = try waitFor("Actual video frames advance after Audio to Video", timeout: 60) {
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            self.number($0, "frameTime") > videoFramesBefore + 0.5
+        }
+        checked("Audio to Video retains position and advances visible frames")
+        XCTAssertEqual(account()["name"] as? String, originalName)
+
+        let commentMarker = String(Int(Date().timeIntervalSince1970 * 1000))
+        try awaitAccount("Comment form loaded before posting") {
+            $0["commentsLoading"] as? Bool == false && $0["commentsError"] as? Bool == false
+        }
+        try touch("commentText")
+        let nativeComposer = app.webViews.textViews.firstMatch
+        XCTAssertTrue(nativeComposer.waitForExistence(timeout: 10), "Comment composer must exist")
+        nativeComposer.typeText("IST iOS QA \(commentMarker) created")
+        // Prove native typing reached the actual comment form before allowing
+        // a server mutation; typing into some other WKWebView textarea would
+        // otherwise post an unrelated user's draft by accident.
+        try awaitAccount("Native keyboard entered the exact disposable QA comment") {
+            $0["qaDraftValid"] as? Bool == true
+        }
+        let postBefore = successCount(account(), "/comments", "POST")
+        try touch("commentPost")
+        try awaitAccount("QA comment POST accepted by the actual server") {
+            successCount($0, "/comments", "POST") > postBefore &&
+            $0["commentDraftEmpty"] as? Bool == true
+        }
+        try awaitAccount("The server returned the posted QA comment and correctly identified its owner") {
+            $0["qaCommentReturned"] as? Bool == true &&
+            $0["qaCommentReturnedOwned"] as? Bool == true &&
+            $0["qaCommentPhase"] as? String == "created"
+        }
+        checked("Comment POST persisted, visible to its owner and submitted draft cleared")
+        try touch("commentEdit")
+        try awaitAccount("Owned comment edit UI opened") {
+            let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
+            return rects["commentEditText"] != nil
+        }
+        let nativeEditor = app.webViews.textViews.matching(
+            NSPredicate(format: "value CONTAINS %@", commentMarker)
+        ).firstMatch
+        XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
+        nativeEditor.typeText(" updated")
+        try touch("commentKeyboardDone")
+        _ = try waitFor("Native comment-edit keyboard closes before Save") { _ in
+            !self.app.keyboards.firstMatch.exists
+        }
+        let editBefore = successCount(account(), "/comments/edit", "PUT")
+        try touch("commentSave")
+        try awaitAccount("Comment edit persisted on server") {
+            $0["qaCommentPhase"] as? String == "edited" &&
+            successCount($0, "/comments/edit", "PUT") > editBefore
+        }
+        checked("Comment edit saved and verified")
+        let deleteBefore = successCount(account(), "/comments/delete", "POST")
+        try touch("commentDelete")
+        let deleteAlert = app.alerts.firstMatch
+        XCTAssertTrue(deleteAlert.waitForExistence(timeout: 8), "Comment deletion confirmation must appear")
+        XCTAssertTrue(deleteAlert.staticTexts.matching(
+            NSPredicate(format:"label CONTAINS[c] %@","delete this comment")
+        ).firstMatch.exists,"Only the requested QA comment deletion may be confirmed")
+        let confirm = deleteAlert.buttons.matching(
+            NSPredicate(format:"label IN %@",["OK","Ok","Delete"])
+        ).firstMatch
+        guard confirm.exists && confirm.isHittable else {
+            XCTFail("Native comment confirmation button missing")
+            throw Failure.timedOut("Delete confirmation")
+        }
+        confirm.tap()
+        try awaitAccount("Comment delete succeeded on server") {
+            $0["qaCommentPhase"] as? String == "absent" &&
+            successCount($0, "/comments/delete", "POST") > deleteBefore
+        }
+        checked("Comment deleted successfully")
+        XCTAssertEqual(account()["name"] as? String, originalName)
         // Leave playback through a real process restart so a top-edge player
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
         try awaitAccount("Signed-in library reloads after playback") {
-            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
+            $0["name"] as? String == originalName
+        }
+        try touch("account")
+        try awaitAccount("Profile name survives real process restart") {
+            $0["profileNameValue"] as? String == originalName &&
+            $0["profileNameDisplayed"] as? String == originalName
+        }
+        checked("Account name persists after restart")
+        let commentReadsBefore = successCount(account(), "/comments", "GET")
+        try touch("shiurim"); try touch("open")
+        try awaitAccount("Deleted QA comment stays absent after restart and fresh server read") {
+            $0["watchId"] as? String == id &&
+            $0["qaCommentMarker"] as? String == commentMarker &&
+            $0["commentsLoading"] as? Bool == false &&
+            $0["commentsError"] as? Bool == false &&
+            successCount($0, "/comments", "GET") > commentReadsBefore &&
+            $0["qaCommentReturned"] as? Bool == false &&
+            $0["qaCommentPhase"] as? String == "absent"
+        }
+        checked("Comment stays deleted after native restart and fresh server GET")
+        app.terminate(); app.launch()
+        try awaitAccount("Account restores after independent deleted-comment verification") {
+            $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
+            $0["name"] as? String == originalName
         }
         try touch("library")
         try awaitAccount("Library screen rendered") {
@@ -244,6 +379,7 @@
         XCTAssertEqual(values(account(),"later").contains(id),values(changed,"later").contains(id))
         XCTAssertEqual(values(account(),"follows").sorted(),values(changed,"follows").sorted())
         XCTAssertTrue(values(account(),"history").contains(id),"Playback history must survive relaunch")
+        XCTAssertEqual(account()["name"] as? String, originalName, "Name changed unexpectedly after another restart")
         checked("Session and server-loaded collections persist after native process restart")
         evidence("logged-in-account-restored")
         // Restore the lecture flags. Keep the uniquely named QA playlist for inspection.
@@ -285,3 +421,5 @@
         checked("Logout clears account state")
         report["accountMutationsFinishedAt"] = timestamp(); report["status"] = "passed"; persistReport()
     }
+
+

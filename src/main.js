@@ -1691,6 +1691,12 @@ function audioUrl(id) {
 function currentLanguage() {
   return window.IST_I18N && window.IST_I18N.getLanguage && window.IST_I18N.getLanguage() === 'he' ? 'he' : 'en';
 }
+window.addEventListener('irgun-playback-speed-changed', event => {
+  const rate = Number(event?.detail?.rate);
+  if (![0.75,1,1.25,1.5,1.75,2].includes(rate)) return;
+  state.playbackSpeed = rate;
+  audio.playbackRate = rate;
+});
 
 function paidProductTitle(item, fallback = 'Paid Shiur') {
   const en = String(item?.titleEn || item?.title || item?.titleHe || '').trim();
@@ -2337,6 +2343,8 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  if (state.authBusy) return;
+  state.authDraftEmail = String(email || '').trim();
   state.authBusy = true;
   state.authMessage = '';
   render();
@@ -2370,6 +2378,7 @@ async function login(email, password) {
     state.recurringDonations = [];
     state.authMessage = '';
     state.authMode = 'login';
+    state.authDraftEmail = '';
     state.authVerifyEmail = '';
     state.authVerifyPassword = '';
     setToast('Signed in successfully.');
@@ -4695,7 +4704,7 @@ function authHtml() {
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
       <form id="authForm" class="form-stack">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
-        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" value="${esc(state.authDraftEmail || '')}" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
         <button class="form-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Please wait...' : (registerMode ? 'Create Account' : 'Login')}</button>
       </form>
@@ -4750,7 +4759,7 @@ function commentsHtml() {
     return `<article class="comment-card">
       <div class="comment-head"><strong>${esc(comment.author || 'Anonymous')}</strong><span>${esc(fmtDate(comment.created))}</span></div>
       ${editing
-        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
+        ? `<div class="comment-edit-box"><div class="comment-actions"><button type="button" data-comment-keyboard-done="${esc(comment.id)}">${currentLanguage() === 'he' ? 'סיום הקלדה' : 'Done typing'}</button></div><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
         : `<p>${esc(comment.text || '')}</p>${owner ? `<div class="comment-actions"><button data-edit-comment="${esc(comment.id)}">Edit</button><button data-delete-comment="${esc(comment.id)}">Delete</button></div>` : ''}`}
     </article>`;
   }).join('');
@@ -6726,6 +6735,14 @@ function refreshCommentsUi() {
 }
 
 function bindCommentButtons() {
+  document.querySelectorAll('[data-comment-keyboard-done]').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', () => {
+      const field = document.getElementById(`editCommentText-${el.dataset.commentKeyboardDone}`);
+      if (field) field.blur();
+    });
+  });
   document.querySelectorAll('[data-retry-comments]').forEach(el => {
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
@@ -7360,7 +7377,22 @@ async function restoreNativeBackgroundVideo() {
   if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
-    if (!current() || native.id !== id) return;
+    if (!current()) return;
+    if (native.id !== id) {
+      // A lock/unlock can finish the native stop before the WebView receives
+      // its foreground callback. If inline video is already playing and no
+      // native owner remains, release the stale pending flag and saved mute.
+      // Do not start paused video or reconcile a different native lecture.
+      if (!native.id && !native.active && state.nativeBackgroundPending &&
+          player.video && !player.video.paused && player.player?.autoplayWanted &&
+          !player.player?.explicitlyPaused) {
+        await player.setMuted(Boolean(state.nativeBackgroundMuted));
+        if (!current()) return;
+        state.nativeBackgroundPending = false;
+        nativeBackgroundLastSync = '';
+      }
+      return;
+    }
     if (!state.nativeBackgroundPending && !native.active) return;
     // Native Home playback can start even when iOS suspends the WebView before
     // its background event runs. Reconcile the actual native owner on return.
@@ -8318,21 +8350,46 @@ async function loadComments() {
 }
 
 async function postComment() {
-  if (!state.watchVideo) return;
+  if (!state.watchVideo || state.commentPostBusy) return;
   if (!state.user) return requireLogin('Please sign in to leave a comment.');
+  const id = videoId(state.watchVideo);
   const field = document.getElementById('commentText');
   const text = field ? field.value.trim() : '';
   if (!text) return;
-  await preserveWatchTime();
+  state.commentPostBusy = true;
+  const submit = document.querySelector('#commentForm button[type="submit"]');
+  if (submit) submit.disabled = true;
   try {
+    await preserveWatchTime();
+    if (!state.watchVideo || videoId(state.watchVideo) !== id) return;
     await apiJson('/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: videoId(state.watchVideo), text })
+      body: JSON.stringify({ videoId: id, text })
     });
-    await loadComments();
+    if (field?.isConnected && field.value.trim() === text) field.value = '';
+    if (state.watchVideo && videoId(state.watchVideo) === id) {
+      await loadComments();
+      // A successful write can be momentarily absent from a subsequent
+      // read (for example when served by a read replica). Refresh only from
+      // the actual server; never fabricate the comment in client state.
+      // Keep the current lecture and account checks to avoid updating a
+      // different shiur while the user navigates.
+      for (const delay of [350, 700, 1200]) {
+        const returned = state.watchComments.some(comment =>
+          String(comment.text || '').trim() === text &&
+          String(comment.user_id) === String(state.user?.id)
+        );
+        if (returned || !state.watchVideo || videoId(state.watchVideo) !== id || !state.user) break;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        if (state.watchVideo && videoId(state.watchVideo) === id && state.user) await loadComments();
+      }
+    }
   } catch (error) {
     alert(error.message || 'Could not post comment.');
+  } finally {
+    state.commentPostBusy = false;
+    if (submit?.isConnected) submit.disabled = false;
   }
 }
 
@@ -8551,3 +8608,5 @@ window.addEventListener('focus', () => {
 window.addEventListener('pageshow', repairIosViewportAfterResume);
 window.addEventListener('orientationchange', repairIosViewportAfterResume);
 setTimeout(() => handlePendingPushOpen(), 1200);
+
+

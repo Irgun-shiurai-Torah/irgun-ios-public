@@ -62,14 +62,24 @@ final class PlaybackUITests: XCTestCase {
     @discardableResult
     private func waitFor(_ message: String, timeout: TimeInterval = 40,
                          condition: @escaping ([String: Any]) -> Bool) throws -> [String: Any] {
-        let predicate = NSPredicate { _, _ in condition(self.snapshot()) }
+        var acceptedState: [String:Any]? = nil
+        let predicate = NSPredicate { _, _ in
+            let observed = self.snapshot()
+            guard condition(observed) else { return false }
+            acceptedState = observed
+            return true
+        }
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: app)
         if XCTWaiter.wait(for: [expectation], timeout: timeout) != .completed {
             evidence("failure-\(message)")
             XCTFail("\(message). Last state: \(snapshot())")
             throw Failure.timedOut(message)
         }
-        return snapshot()
+        guard let accepted = acceptedState else {
+            XCTFail("No observed state satisfied the native test condition: \(message)")
+            throw Failure.timedOut(message)
+        }
+        return accepted
     }
 
     private func evidence(_ name: String) {
@@ -90,14 +100,21 @@ final class PlaybackUITests: XCTestCase {
         if hide.exists && hide.isHittable { hide.tap() }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
-        if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
-            let state = try waitFor("Visible player button: \(label)") {
+        if ["Account", "Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
+            var hitTestedButton: [String:Any]? = nil
+            _ = try waitFor("Visible player button: \(label)") {
                 let buttons = $0["playerButtons"] as? [String: [String: Any]] ?? [:]
-                return self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
-                    buttons.values.contains { $0["label"] as? String == label && $0["hittable"] as? Bool == true }
+                guard self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500,
+                    let match = buttons.values.first(where: {
+                        $0["label"] as? String == label && $0["hittable"] as? Bool == true
+                    }) else { return false }
+                hitTestedButton = match
+                return true
             }
-            let buttons = state["playerButtons"] as? [String: [String: Any]] ?? [:]
-            let button = buttons.values.first { $0["label"] as? String == label }!
+            guard let button = hitTestedButton else {
+                XCTFail("Real hit-tested button disappeared: \(label)")
+                throw Failure.timedOut(label)
+            }
             app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
                 dx:number(button,"x"),dy:number(button,"y"))).tap()
             return
@@ -190,7 +207,7 @@ final class PlaybackUITests: XCTestCase {
     }
 
     private func assertMovingVideo() throws {
-        let before = try waitFor("Video must settle before frame sampling") {
+        var before = try waitFor("Video must settle before frame sampling") {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
             $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
@@ -198,7 +215,21 @@ final class PlaybackUITests: XCTestCase {
         }
         XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
         _ = try waitFor("Video frames and media clock must advance") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+            // A real decoder replacement resets the observer's frame counter.
+            // Establish a fresh baseline on that actual settled surface, then
+            // still require multiple new frames AND an advancing media clock.
+            if self.number($0,"decoderReloads") != self.number(before,"decoderReloads") ||
+               $0["videoSource"] as? String != before["videoSource"] as? String {
+                if $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
+                   $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
+                   $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
+                   self.number($0,"frames") >= 1 && self.number($0,"frameTime") > 0 {
+                    before = $0
+                }
+                return false
+            }
+
+            return $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
             self.number($0, "frames") > self.number(before, "frames") + 2 &&
             self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
             self.number($0, "videoTime") > self.number(before, "videoTime") + 0.5
@@ -452,3 +483,5 @@ final class PlaybackUITests: XCTestCase {
         evidence("pip-reopen")
     }
 }
+
+

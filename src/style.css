@@ -2510,6 +2510,41 @@ html, body, #app {
   width:100%!important;
   height:100%!important;
 }
+
+/* In iOS WKWebView, physically shrinking a native HLS video down to 96x54
+   can tear down the decoder while the clock is still moving. Preserve a
+   stable 320x180 video surface and composite its miniature thumbnail with
+   a transform. The clip is provided by the small watch-player-card parent;
+   only its 96x54 (phone) / 112x63 (tablet) preview is visible.
+   This does not replace or fake the video, and the same DOM element/clock
+   must keep decoding throughout mini/full transitions. */
+#persistentVideoMount.watch-mini-host .watch-video-stage {
+  position:absolute!important;
+  top:0!important;
+  left:0!important;
+  right:auto!important;
+  bottom:auto!important;
+  inset:auto!important;
+  width:320px!important;
+  height:180px!important;
+  min-height:180px!important;
+  max-height:180px!important;
+  aspect-ratio:16/9!important;
+  transform:scale(0.35)!important;
+  transform-origin:top left!important;
+}
+@media(max-width:560px){
+  #persistentVideoMount.watch-mini-host .watch-video-stage {
+    transform:scale(0.3)!important;
+  }
+}
+#persistentVideoMount.watch-mini-host .direct-media-player,
+#persistentVideoMount.watch-mini-host .direct-media-video {
+  width:320px!important;
+  height:180px!important;
+  max-width:none!important;
+  max-height:none!important;
+}
 @media(max-width:760px){
   .direct-media-controls{gap:5px;padding:24px 7px 7px}
   .direct-media-icon-button{width:33px;height:33px}
@@ -2662,4 +2697,5 @@ html, body, #app {
   flex:0 0 auto;
   border:0;
 }
+
 

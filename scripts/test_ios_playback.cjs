@@ -793,3 +793,119 @@ test('Google pill matches Apple visible dimensions and typography',()=>{
   assert.match(css,/\.auth-social-buttons \.google-auth-btn svg\{[\s\S]*?width:19px[\s\S]*?height:19px/);
   assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?max-width:356px[\s\S]*?height:52px!important/);
 });
+
+function nativeSeekFixture() {
+  let retry,clock=1000,position=10;
+  const assignments=[],listeners=new Map();
+  const p=Object.create(directPrototype({Date:{now:()=>clock},
+    setInterval:callback=>{retry=callback;return 1;},clearInterval:()=>{},
+    setTimeout:()=>2,clearTimeout:()=>{}}));
+  const v={seeking:false,readyState:1,playbackRate:1,
+    get currentTime(){return position;},
+    set currentTime(value){assignments.push(value);position=value;this.seeking=true;},
+    addEventListener:(name,callback)=>listeners.set(name,callback),
+    removeEventListener:(name)=>listeners.delete(name)};
+  Object.assign(p,{v,token:1,timeline:()=>{},duration:()=>120});
+  return {p,v,assignments,retry:()=>retry(),move:(value,time)=>{position=value;clock=time;},
+    finish:()=>{v.seeking=false;v.readyState=4;listeners.get('timeupdate')();}};
+}
+
+test('native seek retries do not restart a seek that is already in flight',async()=>{
+  const f=nativeSeekFixture(),pending=f.p.seekTo(60);
+  f.move(45,1500);f.retry();f.retry();
+  assert.deepEqual(f.assignments,[60]);
+  f.move(60,2000);f.finish();
+  assert.equal(await pending,60);
+});
+
+test('seek confirmation accepts advancing playback without rewinding to the target',async()=>{
+  const f=nativeSeekFixture(),pending=f.p.seekTo(60);
+  f.move(62,4000);f.finish();
+  assert.deepEqual(f.assignments,[60]);
+  assert.equal(await pending,62);
+});
+
+test('video layer restoration does not introduce another native seek',async()=>{
+  let seeks=0;
+  const p=Object.create(directPrototype());
+  const v={paused:false,readyState:4,webkitPresentationMode:'inline',style:{},
+    set currentTime(_value){seeks++;},setAttribute:()=>{},getBoundingClientRect:()=>({})};
+  Object.assign(p,{v,autoplayWanted:true,current:()=>60,duration:()=>120,wakeVideoLayer:()=>{}});
+  assert.equal(await p.relatchInlineVideoLayer(),true);
+  assert.equal(seeks,0);
+});
+
+test('comment keyboard control is available only while editing the signed-in user comment',()=>{
+  for(const language of ['en','he']) {
+    const state={watchCommentsLoading:false,watchCommentsError:'',user:{id:7},editingCommentId:'42',
+      watchComments:[{id:42,user_id:7,text:'QA draft'},{id:43,user_id:8,text:'Other user'}]};
+    const c=vm.createContext({state,esc:value=>String(value||''),fmtDate:()=>'',currentLanguage:()=>language});
+    vm.runInContext(extract('function commentsHtml(', 'function watchVimeoEmbedSrc('),c);
+    const html=c.commentsHtml();
+    assert.match(html,/data-comment-keyboard-done="42"/);
+    assert.doesNotMatch(html,/data-comment-keyboard-done="43"/);
+    assert.ok(html.includes(language==='he'?'סיום הקלדה':'Done typing'));
+  }
+});
+
+test('Done typing closes comment focus without cancelling the edit or changing its draft',()=>{
+  let clicked,blurred=0;
+  const field={value:'QA edited draft',blur:()=>blurred++};
+  const button={dataset:{commentKeyboardDone:'42'},addEventListener:(_event,handler)=>{clicked=handler;}};
+  const state={editingCommentId:'42'};
+  const document={querySelectorAll:q=>q==='[data-comment-keyboard-done]'?[button]:[],
+    getElementById:id=>{assert.equal(id,'editCommentText-42');return field;}};
+  const c=vm.createContext({document,state});
+  vm.runInContext(extract('function bindCommentButtons(', 'function readScheduleFilesCache('),c);
+  c.bindCommentButtons();clicked();
+  assert.equal(blurred,1);
+  assert.equal(field.value,'QA edited draft');
+  assert.equal(state.editingCommentId,'42');
+});
+
+
+
+test('already resumed inline video releases a stale lock handoff without restarting',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.state.nativeBackgroundMuted=false;f.p.video.muted=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'',active:false,desiredPlaying:false});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.state.nativeBackgroundPending,false);
+  assert.equal(f.p.video.muted,false);
+  assert.equal(f.p.video.currentTime,30);
+  assert.deepEqual(f.calls,[['mute',false]]);
+});
+
+test('stale lock reconciliation cannot restart explicitly paused video',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;f.p.video.paused=true;f.p.player.autoplayWanted=false;f.p.player.explicitlyPaused=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'',active:false});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.p.video.paused,true);assert.equal(f.calls.length,0);
+});
+
+test('lock reconciliation does not stop or replace another native lecture',async()=>{
+  const f=nativeFixture();f.state.nativeBackgroundPending=true;
+  f.context.IrgunBackgroundAudio.getState=async()=>({id:'B',active:true,playing:true});
+  await f.context.restoreNativeBackgroundVideo();
+  assert.equal(f.state.nativeBackgroundPending,true);assert.equal(f.calls.length,0);
+});
+
+test('a failed login preserves the editable email and never stores the password',async()=>{
+  const state={authBusy:false},renders=[];
+  const c=vm.createContext({state,render:()=>renders.push({...state}),
+    apiFetch:async()=>({ok:false,json:async()=>({error:'Invalid password'})})});
+  vm.runInContext(extract('async function login(', 'async function finishSocialLogin('),c);
+  await c.login('qa@example.test','unit-test-password');
+  assert.equal(state.authDraftEmail,'qa@example.test');
+  assert.equal(state.authBusy,false);assert.equal(state.authMessage,'Invalid password');
+  assert.equal(renders.length,2);
+  assert.ok(renders.every(s=>!JSON.stringify(s).includes('unit-test-password')));
+});
+
+test('a second login submit cannot overwrite the in-flight login draft',async()=>{
+  const state={authBusy:true,authDraftEmail:'first@example.test'};
+  const c=vm.createContext({state,render:()=>assert.fail('Duplicate login render'),
+    apiFetch:()=>assert.fail('Duplicate login POST')});
+  vm.runInContext(extract('async function login(', 'async function finishSocialLogin('),c);
+  await c.login('second@example.test','unit-test-password');
+  assert.equal(state.authDraftEmail,'first@example.test');assert.equal(state.authBusy,true);
+});

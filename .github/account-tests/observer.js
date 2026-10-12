@@ -3,6 +3,11 @@ window.__ISTAccountControlQueries = {
   account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
   library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
   login: '#authForm button[type="submit"]', logout: '[data-logout]',
+  modeAudio: '[data-watch-mode="audio"]', modeVideo: '[data-watch-mode="video"]',
+  commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
+  commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
+  commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
+  commentKeyboardDone: '[data-comment-keyboard-done]',
   profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
   open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
   save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -34,6 +39,21 @@ if (!window.__ISTAccountClickObserverInstalled) {
   window.__ISTAccountLastInvalidField = '';
   document.addEventListener('submit', event => {
     if (event.target?.id === 'authForm') window.__ISTAccountLoginSubmissions++;
+    // Identify only a disposable QA comment entered via native UI.
+    if (event.target?.id === 'commentForm') {
+      const match = /^IST iOS QA (\d{12,16}) created$/.exec(
+        String(document.getElementById('commentText')?.value || '').trim()
+      );
+      if (match && state.user && state.watchVideo) {
+        // Retain only the disposable marker and its scope in this debug build.
+        // A real process restart must reload comments from the server while
+        // still identifying exactly the comment this test created.
+        const marker = { token:match[1], userId:String(state.user.id),
+          videoId:String(videoId(state.watchVideo)) };
+        window.__ISTAccountQaCommentMarker = marker;
+        try { localStorage.setItem('istIOSQACommentMarker', JSON.stringify(marker)); } catch (_) {}
+      }
+    }
   }, true);
   document.addEventListener('invalid', event => {
     if (event.target?.closest?.('#authForm')) {
@@ -50,12 +70,16 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   const originalApiJson = apiJson;
   const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
-    // Only log the fact that a history write completed. Never capture the
-    // request body, video identifier, account identity or authentication.
-    if (!allowed.has(path) || (path === '/history' && String(args[0]?.method || 'GET').toUpperCase() !== 'POST')) {
+    const method = String(args[0]?.method || 'GET').toUpperCase();
+    const isComment = path === '/comments' || path.startsWith('/comments?') ||
+      path === '/comments/delete' || /^\/comments\/[^/?]+$/.test(path);
+    // Never record URLs with comment or media IDs, bodies, account data or tokens.
+    if ((!allowed.has(path) && !isComment) || (path === '/history' && method !== 'POST')) {
       return originalApiJson(path, ...args);
     }
-    const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
+    const safePath = !isComment ? path : path === '/comments/delete' ? '/comments/delete'
+      : path.startsWith('/comments/') ? '/comments/edit' : '/comments';
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path:safePath,method,startedAt:Date.now(),finishedAt:0,ok:false};
     window.__ISTAccountRequests.push(entry);
     try {
       const result = await originalApiJson(path, ...args);
@@ -70,11 +94,34 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   };
 }
 
+// Observe HTTP outcomes for real login requests without retaining credentials.
+if (!window.__ISTAccountLoginResponseObserverInstalled) {
+  window.__ISTAccountLoginResponseObserverInstalled = true;
+  const originalLoginFetch = apiFetch;
+  apiFetch = async function(path, ...args) {
+    if (path !== '/login') return originalLoginFetch(path, ...args);
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path:'/login',
+      method:'POST',startedAt:Date.now(),finishedAt:0,ok:false,status:0};
+    window.__ISTAccountRequests.push(entry);
+    try {
+      const response = await originalLoginFetch(path, ...args);
+      entry.status = response.status;
+      entry.ok = response.ok;
+      return response;
+    } finally { entry.finishedAt = Date.now(); }
+  };
+}
+
 window.ISTAccountTest = { snapshot() {
   const queries = {
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]', email: '#authEmail', password: '#authPassword',
     login: '#authForm button[type="submit"]', logout: '[data-logout]',
+  modeAudio: '[data-watch-mode="audio"]', modeVideo: '[data-watch-mode="video"]',
+  commentText: '#commentText', commentPost: '#commentForm button[type="submit"]',
+  commentEdit: '[data-edit-comment]', commentEditText: '[id^="editCommentText-"]',
+  commentSave: '[data-save-comment]', commentDelete: '[data-delete-comment]',
+  commentKeyboardDone: '[data-comment-keyboard-done]',
     profile: '[data-account-section="profile"]', settings: '[data-account-section="settings"]',
     open: '[data-watch]', like: '.watch-actions [data-like],.watch-action[data-like]',
     save: '.watch-actions [data-open-playlist-picker],.watch-action[data-open-playlist-picker]',
@@ -87,8 +134,48 @@ window.ISTAccountTest = { snapshot() {
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
+  let qaMarker = window.__ISTAccountQaCommentMarker;
+  if (!qaMarker) {
+    try { qaMarker = JSON.parse(localStorage.getItem('istIOSQACommentMarker') || 'null'); } catch (_) {}
+  }
+  const markerInScope = qaMarker && state.user && state.watchVideo &&
+    String(qaMarker.userId) === String(state.user.id) &&
+    String(qaMarker.videoId) === String(videoId(state.watchVideo));
+  const qaToken = markerInScope && /^\d{12,16}$/.test(String(qaMarker.token))
+    ? String(qaMarker.token) : '';
+  const qaDraftValid = /^IST iOS QA \d{12,16} created$/.test(
+    String(document.getElementById('commentText')?.value || '').trim()
+  );
+  let qaComment = null, qaCommentPhase = 'absent';
+  let qaCommentReturned = false, qaCommentReturnedOwned = false;
+  if (qaToken && state.user) {
+    for (const comment of state.watchComments) {
+      const match = /^IST iOS QA (\d{12,16}) (created|created updated)$/.exec(String(comment.text || ''));
+      if (!match || match[1] !== qaToken) continue;
+      qaCommentReturned = true;
+      const isOwner = String(comment.user_id) === String(state.user.id);
+      if (!isOwner) continue;
+      qaCommentReturnedOwned = true;
+      qaComment = comment;
+      qaCommentPhase = match[2] === 'created' ? 'created' : 'edited';
+      break;
+    }
+  }
   for (const [key, query] of Object.entries(queries)) {
-    const candidates = [...document.querySelectorAll(query)];
+    let candidates = [...document.querySelectorAll(query)];
+    if (key === 'open') {
+      const playable = candidates.filter(el => state.videoById?.get(String(el.dataset.watch || ''))?.hasAudio === true);
+      if (playable.length) candidates = playable;
+    }
+    if (['commentEdit','commentSave','commentDelete','commentEditText','commentKeyboardDone'].includes(key)) {
+      if (!qaComment) candidates = [];
+      else if (key === 'commentEditText') {
+        candidates = candidates.filter(el => el.id === 'editCommentText-' + String(qaComment.id));
+      } else {
+        const attr = {commentEdit:'editComment',commentSave:'saveComment',commentDelete:'deleteComment',commentKeyboardDone:'commentKeyboardDone'}[key];
+        candidates = candidates.filter(el => String(el.dataset[attr] || '') === String(qaComment.id));
+      }
+    }
     const element = candidates[0];
     if (element) {
       const r=element.getBoundingClientRect();
@@ -118,10 +205,21 @@ window.ISTAccountTest = { snapshot() {
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.rawAudioId||x.videoId||x.id||x.vimeoId||'').replace(/^audio:/,'')),
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
+    watchHasAudio:Boolean(state.watchVideo?.hasAudio),
+    qaCommentPhase,qaCommentVisible:Boolean(qaComment),qaDraftValid,
+    qaCommentMarker:qaToken,
+    qaCommentReturned,qaCommentReturnedOwned,
+    commentCount:state.watchComments.length,
+    commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
+    commentDraftEmpty:!document.getElementById('commentText')?.value,
+    profileNameValue:document.getElementById('profileName')?.value || '',
+    profileNameDisplayed:document.querySelector('.profile-line span')?.textContent?.trim() || '',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),
     authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),
     authEmailValid:!!document.querySelector('#authEmail')?.validity.valid,
     authPasswordValid:!!document.querySelector('#authPassword')?.validity.valid,
+    authEmailFocused:document.activeElement?.id === 'authEmail',
+    authPasswordFocused:document.activeElement?.id === 'authPassword',
     authFormValid:[...document.querySelectorAll('#authForm input')].length>=2 && [...document.querySelectorAll('#authForm input')].every(input=>input.validity.valid),
     authEmailLength:document.querySelector('#authEmail')?.value.length||0,
     authPasswordLength:document.querySelector('#authPassword')?.value.length||0,
@@ -138,3 +236,5 @@ if(window.ISTSimulator){
     ...JSON.parse(original()),account:window.ISTAccountTest.snapshot()
   });
 }
+
+

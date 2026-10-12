@@ -12,8 +12,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-account-${{ github.ref }}
-  cancel-in-progress: true
+  # Never run account mutations beside iOS extended regression logout and
+  # name-edit scenarios using the same dedicated non-admin QA account.
+  group: irgun-ios-exclusive-qa-account
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   account:
@@ -123,6 +126,13 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:SimulatorUITests/PlaybackUITests/testLoggedInAccountPersistenceAndLogout \
             test 2>&1 | tee simulator-results/xcodebuild.log
+          python3 - <<'PY_EXECUTED'
+          from pathlib import Path
+          log = Path('simulator-results/xcodebuild.log').read_text(errors='replace')
+          expected = "Test Case '-[SimulatorUITests.PlaybackUITests testLoggedInAccountPersistenceAndLogout]' passed ("
+          if expected not in log or 'Executed 0 tests' in log:
+              raise SystemExit('Required native account/comments XCTest did not execute and pass')
+          PY_EXECUTED
 
       - name: Save credential-free result summary
         if: always()
@@ -163,7 +173,7 @@ jobs:
               keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy','authFormValid','authEmailValid','authPasswordValid','authEmailLength','authPasswordLength','authSubmitCount','authInvalidFieldKey'}
               safe={key:value[key] for key in keys if key in value}
               # Export only scalar request outcomes from the strict observer allowlist.
-              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
+              allowed_paths={'/login','/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history','/comments','/comments/edit','/comments/delete'}
               requests=[]
               for item in value.get('collectionRequests',[]):
                   if not isinstance(item,dict) or item.get('path') not in allowed_paths: continue
@@ -173,6 +183,8 @@ jobs:
                       if isinstance(number,(int,float)) and not isinstance(number,bool): clean[key]=number
                   for key in ['ok','following','liked']:
                       if isinstance(item.get(key),bool): clean[key]=item[key]
+                  method=item.get('method')
+                  if method in {'GET','POST','PUT','DELETE'}: clean['method']=method
                   requests.append(clean)
               safe['collectionRequests']=requests
               safe['evidenceCredentialsCleared']=cleared
@@ -196,3 +208,5 @@ jobs:
           path: account-results/
           if-no-files-found: warn
           retention-days: 7
+
+
