@@ -94,6 +94,24 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   };
 }
 
+// Observe HTTP outcomes for real login requests without retaining credentials.
+if (!window.__ISTAccountLoginResponseObserverInstalled) {
+  window.__ISTAccountLoginResponseObserverInstalled = true;
+  const originalLoginFetch = apiFetch;
+  apiFetch = async function(path, ...args) {
+    if (path !== '/login') return originalLoginFetch(path, ...args);
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path:'/login',
+      method:'POST',startedAt:Date.now(),finishedAt:0,ok:false,status:0};
+    window.__ISTAccountRequests.push(entry);
+    try {
+      const response = await originalLoginFetch(path, ...args);
+      entry.status = response.status;
+      entry.ok = response.ok;
+      return response;
+    } finally { entry.finishedAt = Date.now(); }
+  };
+}
+
 window.ISTAccountTest = { snapshot() {
   const queries = {
     account: '.bottom-nav [data-nav="account"]', shiurim: '.bottom-nav [data-nav="shiurim"]',
@@ -200,6 +218,8 @@ window.ISTAccountTest = { snapshot() {
     authBusy:!!state.authBusy,authFormPresent:!!document.querySelector('#authForm'),authFieldsEmpty:['#authEmail','#authPassword'].every(q=>!document.querySelector(q)?.value),authError:!!document.querySelector('.auth-card .form-message'),
     authEmailValid:!!document.querySelector('#authEmail')?.validity.valid,
     authPasswordValid:!!document.querySelector('#authPassword')?.validity.valid,
+    authEmailFocused:document.activeElement?.id === 'authEmail',
+    authPasswordFocused:document.activeElement?.id === 'authPassword',
     authFormValid:[...document.querySelectorAll('#authForm input')].length>=2 && [...document.querySelectorAll('#authForm input')].every(input=>input.validity.valid),
     authEmailLength:document.querySelector('#authEmail')?.value.length||0,
     authPasswordLength:document.querySelector('#authPassword')?.value.length||0,
@@ -216,4 +236,5 @@ if(window.ISTSimulator){
     ...JSON.parse(original()),account:window.ISTAccountTest.snapshot()
   });
 }
+
 

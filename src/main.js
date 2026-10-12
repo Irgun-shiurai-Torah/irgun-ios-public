@@ -2343,6 +2343,8 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  if (state.authBusy) return;
+  state.authDraftEmail = String(email || '').trim();
   state.authBusy = true;
   state.authMessage = '';
   render();
@@ -2376,6 +2378,7 @@ async function login(email, password) {
     state.recurringDonations = [];
     state.authMessage = '';
     state.authMode = 'login';
+    state.authDraftEmail = '';
     state.authVerifyEmail = '';
     state.authVerifyPassword = '';
     setToast('Signed in successfully.');
@@ -4701,7 +4704,7 @@ function authHtml() {
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
       <form id="authForm" class="form-stack">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
-        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" value="${esc(state.authDraftEmail || '')}" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
         <button class="form-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Please wait...' : (registerMode ? 'Create Account' : 'Login')}</button>
       </form>
@@ -7374,7 +7377,22 @@ async function restoreNativeBackgroundVideo() {
   if (player.player) player.player.backgroundReturnPending = true;
   try {
     const native = await IrgunBackgroundAudio.getState();
-    if (!current() || native.id !== id) return;
+    if (!current()) return;
+    if (native.id !== id) {
+      // A lock/unlock can finish the native stop before the WebView receives
+      // its foreground callback. If inline video is already playing and no
+      // native owner remains, release the stale pending flag and saved mute.
+      // Do not start paused video or reconcile a different native lecture.
+      if (!native.id && !native.active && state.nativeBackgroundPending &&
+          player.video && !player.video.paused && player.player?.autoplayWanted &&
+          !player.player?.explicitlyPaused) {
+        await player.setMuted(Boolean(state.nativeBackgroundMuted));
+        if (!current()) return;
+        state.nativeBackgroundPending = false;
+        nativeBackgroundLastSync = '';
+      }
+      return;
+    }
     if (!state.nativeBackgroundPending && !native.active) return;
     // Native Home playback can start even when iOS suspends the WebView before
     // its background event runs. Reconcile the actual native owner on return.
@@ -8590,4 +8608,5 @@ window.addEventListener('focus', () => {
 window.addEventListener('pageshow', repairIosViewportAfterResume);
 window.addEventListener('orientationchange', repairIosViewportAfterResume);
 setTimeout(() => handlePendingPushOpen(), 1200);
+
 
