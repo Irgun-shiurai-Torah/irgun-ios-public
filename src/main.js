@@ -3444,6 +3444,14 @@ function refreshPersistentMiniVideoChrome() {
 
 async function togglePersistentMiniVideoPlayback(event) {
   if (event) event.stopPropagation();
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) {
+    try {
+      if (iosNativePlayerPilot.state?.playing) await iosNativePlayerPilot.pause();
+      else await iosNativePlayerPilot.play();
+      refreshPersistentMiniVideoChrome();
+    } catch (error) { console.warn('Native mini player toggle failed',error); }
+    return;
+  }
   const player = state.watchVimeo;
   if (!player || !state.watchVimeoReady) return;
   try {
@@ -3593,6 +3601,7 @@ async function resetWatchVimeoPlayer() {
 }
 
 async function quickVimeoTime(fallback = 0, timeoutMs = 900) {
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) return Math.max(0,Number(iosNativePlayerPilot.state?.position)||Number(state.watchResumeSeconds)||0);
   const player = state.watchVimeo;
   const safeFallback = Math.max(0, Number(fallback) || 0);
   if (!player || typeof player.getCurrentTime !== 'function') return safeFallback;
@@ -3614,6 +3623,7 @@ async function minimizeWatchToPersistent() {
   document.body.classList.add('irgun-watch-mini-hosted');
   bindPersistentVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) scheduleIosNativeSurface();
 }
 
 async function expandPersistentWatch() {
@@ -3626,6 +3636,7 @@ async function expandPersistentWatch() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   refreshPersistentMiniVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) scheduleIosNativeSurface();
 }
 
 function homeHtml() {
@@ -6595,10 +6606,12 @@ function bind() {
 
   document.querySelectorAll('[data-play-toggle]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
+    if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active && state.watchMode==='audio') { void (iosNativePlayerPilot.state?.playing ? iosNativePlayerPilot.pause() : iosNativePlayerPilot.play()); return; }
     togglePlay();
   }));
   document.querySelectorAll('[data-skip]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
+    if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active && state.watchMode==='audio') { void iosNativePlayerPilot.seek(Math.max(0,(Number(iosNativePlayerPilot.state?.position)||0)+(Number(el.dataset.skip)||0))); return; }
     skip(Number(el.dataset.skip) || 0);
   }));
   document.querySelectorAll('[data-open-player]').forEach(el => el.addEventListener('click', event => {
@@ -7583,7 +7596,20 @@ audio.addEventListener('error', () => {
 });
 
 async function openWatch(id, requestedTime = null, options = {}) {
-  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active && iosNativePlayerPilot.id !== String(id)) await iosNativePlayerPilot.stop(false);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) {
+    if (iosNativePlayerPilot.id !== String(id)) {
+      const former = await iosNativePlayerPilot.stop(false);
+      if (state.user && state.watchVideo) saveHistory(videoId(state.watchVideo),state.watchMode,Number(former?.position)||0,Number(former?.duration)||0,false).catch(()=>{});
+    } else {
+      if (requestedTime != null) await iosNativePlayerPilot.seek(Math.max(0,Number(requestedTime)||0));
+      if (!document.hidden && !iosNativePlayerPilot.state?.playing) await iosNativePlayerPilot.play();
+      state.watchResumeSeconds = Number(iosNativePlayerPilot.state?.position)||state.watchResumeSeconds;
+      if (state.watchMode !== 'video') await switchWatchMode('video');
+      hostCurrentWatchOverlay('full');
+      scheduleIosNativeSurface();
+      return;
+    }
+  }
   const video = state.videoById.get(String(id));
   if (!video) return;
 
@@ -7891,7 +7917,13 @@ async function preserveWatchTime() {
 }
 
 async function closeWatch(save = true) {
-  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) await iosNativePlayerPilot.stop(false);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) {
+    const native = await iosNativePlayerPilot.stop(false);
+    state.watchResumeSeconds = Math.max(0,Number(native?.position)||Number(state.watchResumeSeconds)||0);
+    if (save && state.user && state.watchVideo) {
+      await saveHistory(videoId(state.watchVideo),state.watchMode,state.watchResumeSeconds,Number(native?.duration)||Number(state.watchVideo.duration)||0,false).catch(()=>{});
+    }
+  }
   if (!state.watchVideo) return;
   stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
@@ -7989,6 +8021,22 @@ async function destroyWatchVideoOwner() {
 async function switchWatchMode(mode) {
   if (!state.watchVideo || state.mediaSwitchBusy) return;
   if (!['video', 'audio'].includes(mode) || mode === state.watchMode) return;
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) {
+    state.mediaSwitchBusy = true;
+    try {
+      const snapshot = await iosNativePlayerPilot.mode(mode);
+      state.watchResumeSeconds = Math.max(0,Number(snapshot?.position)||0);
+      state.watchMode = mode;
+      state.watchVideoPlaying = Boolean(snapshot?.playing);
+      if (mode==='audio' && state.watchHostedExternally) clearPersistentVideoMount();
+      render();
+      if (mode==='video') { hostCurrentWatchOverlay('full'); scheduleIosNativeSurface(); }
+      usageAnalytics.event(mode==='audio'?'video_to_audio':'audio_to_video',
+        {shiurId:String(videoId(state.watchVideo)),mediaType:mode,dedupeKey:`native-switch:${mode}:${videoId(state.watchVideo)}`,cooldownMs:2000});
+    } catch (error) { console.warn('Native media switch failed',error); setToast('Could not switch the native player.'); }
+    finally { state.mediaSwitchBusy = false; }
+    return;
+  }
 
   const video = state.watchVideo;
   const id = videoId(video);
@@ -8512,6 +8560,24 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
   });
 }
 
+// Native video is a single UIKit surface above the watch-stage placeholder.
+// Keep its frame aligned after scroll, resize and mini/full transitions.
+function scheduleIosNativeSurface() {
+  if (!iosNativePlayerPilot?.active || state.watchMode !== 'video' || nativePilotLayoutScheduled) return;
+  nativePilotLayoutScheduled = true;
+  requestAnimationFrame(() => {
+    nativePilotLayoutScheduled = false;
+    if (!iosNativePlayerPilot?.active || state.watchMode !== 'video') return;
+    const rect = document.getElementById('watchVideoStage')?.getBoundingClientRect();
+    if (!rect || rect.width < 40 || rect.height < 30) return;
+    void iosNativePlayerPilot.layout(state.watchMinimized ? 'mini' : 'inline',rect)
+      .catch(error => console.warn('Native video surface layout failed',error));
+  });
+}
+window.addEventListener('scroll', scheduleIosNativeSurface, {passive:true});
+window.addEventListener('resize', scheduleIosNativeSurface);
+window.addEventListener('orientationchange', scheduleIosNativeSurface);
+
 // Isolated experiment. Off by default: requires localStorage opt-in and then
 // an explicit developer call to window.ISTNativePlayerPilot.openCurrent().
 iosNativePlayerPilot = createIosNativePlayerPilot({
@@ -8525,7 +8591,8 @@ iosNativePlayerPilot = createIosNativePlayerPilot({
       artist: state.watchVideo._speakerLabel || state.watchVideo.speaker || ''
     } : null,
     position: state.watchResumeSeconds || 0,
-    rate: state.playbackSpeed || 1
+    rate: state.playbackSpeed || 1,
+    wasPlaying: state.watchVideoPlaying || Boolean(state.watchVimeo?.player?.autoplayWanted)
   }),
   loadVideoSources: loadIosDirectVideoSources,
   releaseLegacy: async () => {
@@ -8549,7 +8616,29 @@ iosNativePlayerPilot = createIosNativePlayerPilot({
     render();
     await initWatchVimeo(Boolean(autoplay));
   },
-  stageRect: () => document.getElementById('watchVideoStage')?.getBoundingClientRect()
+  stageRect: () => document.getElementById('watchVideoStage')?.getBoundingClientRect(),
+  onState: snapshot => {
+    if (!state.watchVideo || String(videoId(state.watchVideo)) !== String(snapshot.id||'')) return;
+    if (Number.isFinite(Number(snapshot.position))) state.watchResumeSeconds=Math.max(0,Number(snapshot.position));
+    state.watchVideoPlaying=Boolean(snapshot.playing);
+    refreshPersistentMiniVideoChrome();
+    const seek=document.getElementById('nativeWatchSeek');
+    const seconds=Math.max(0,Number(snapshot.position)||0), duration=Math.max(0,Number(snapshot.duration)||Number(state.watchVideo.duration)||0);
+    if (seek && !seek.matches(':active')) { seek.max=String(Math.max(1,duration)); seek.value=String(Math.min(seconds,Math.max(1,duration))); }
+    const time=document.getElementById('nativeWatchTime');
+    if(time)time.textContent=`${fmtTime(seconds)} / ${fmtTime(duration)}`;
+    const play=document.querySelector('[data-native-play]');
+    if(play){play.innerHTML=snapshot.playing?'<span class="pause-mark">II</span> Pause':svgIcon('play')+' Play';play.setAttribute('aria-label',snapshot.playing?'Pause':'Play');}
+    if(state.user && snapshot.playing && seconds>1 && Date.now()-nativePilotHistoryAt>=15000){
+      nativePilotHistoryAt=Date.now();
+      saveHistory(String(snapshot.id),state.watchMode,seconds,duration,false).catch(()=>{});
+    }
+    if(snapshot.failed && !nativePilotFailureHandled){
+      nativePilotFailureHandled=true;
+      setToast('Native media failed; returning to the standard player.');
+      setTimeout(()=>{if(iosNativePlayerPilot?.active)void iosNativePlayerPilot.stop(true).catch(e=>console.warn('Native fallback failed',e));},0);
+    }
+  }
 });
 render();
 bootstrap({ initial:true });
