@@ -7,7 +7,7 @@ export const NATIVE_PILOT_STORAGE_KEY = 'istNativeAvPlayerPilotV1';
 
 export function createIosNativePlayerPilot({
   capacitor, registerPlugin, storage,
-  getCurrent, loadVideoSources, releaseLegacy, restoreLegacy, stageRect
+  getCurrent, loadVideoSources, releaseLegacy, restoreLegacy, stageRect, onState = () => {}
 }) {
   if (capacitor?.getPlatform?.() !== 'ios' ||
       !capacitor?.isNativePlatform?.() ||
@@ -19,6 +19,12 @@ export function createIosNativePlayerPilot({
   let lastState = null;
   let lastId = '';
   let stopListening = null;
+  let pendingOpen = null;
+  const publish = next => {
+    if (!next || !active || (lastId && next.id && next.id !== lastId)) return;
+    lastState = next;
+    try { onState(next); } catch (error) { console.warn('Native pilot UI observation failed',error); }
+  };
 
   const safeRect = () => {
     const r = stageRect?.() || {};
@@ -40,21 +46,22 @@ export function createIosNativePlayerPilot({
       if (active) return native.getState();
       busy = true;
       let released = false;
+      const current = getCurrent();
+      pendingOpen = current;
       try {
-        const current = getCurrent();
         if (!current?.video?.id) throw new Error('Open a shiur before starting the native pilot');
         const sources = await loadVideoSources(current.video);
         // No MP3 substitution. Verify the actual HLS asset before experimenting.
         if (!sources?.hls) throw new Error('This shiur has no HLS source for the native pilot');
         active = true;
-        await releaseLegacy();
+        // Set this flag before the asynchronous release. A partially completed
+        // release must also restore legacy playback on failure.
         released = true;
-        const handle = await native.addListener('state', next => {
-          if (active && (!lastId || next?.id === lastId)) lastState = next;
-        });
+        await releaseLegacy();
+        const handle = await native.addListener('state', publish);
         stopListening = async () => handle.remove();
         lastId = String(current.video.id);
-        lastState = await native.open({
+        publish(await native.open({
           id: lastId,
           url: sources.hls,
           title: current.video.title || 'Shiur',
@@ -64,7 +71,7 @@ export function createIosNativePlayerPilot({
           mode: 'video',
           autoplay: true,
           rect: safeRect()
-        });
+        }));
         return lastState;
       } catch (error) {
         active = false;
@@ -73,46 +80,49 @@ export function createIosNativePlayerPilot({
         await stopListening?.().catch(() => {});
         stopListening = null;
         await native.stop().catch(() => {});
-        if (released) await restoreLegacy({ autoplay: false, position: Number(getCurrent()?.position) || 0 });
+        if (released) {
+          try { await restoreLegacy({ autoplay: Boolean(current?.wasPlaying ?? true), position: Number(current?.position) || 0 }); }
+          catch (restoreError) { console.error('Native pilot legacy restore failed',restoreError); }
+        }
         throw error;
-      } finally { busy = false; }
+      } finally { pendingOpen = null; busy = false; }
     },
 
     async mode(mode) {
       if (!active) throw new Error('Native pilot is not active');
       if (!['audio','video'].includes(mode)) throw new Error('Invalid mode');
-      lastState = await native.setMode({ mode });
+      publish(await native.setMode({ mode }));
       return lastState;
     },
 
     async seek(position) {
       if (!active) throw new Error('Native pilot is not active');
-      lastState = await native.seek({ position: Math.max(0, Number(position) || 0) });
+      publish(await native.seek({ position: Math.max(0, Number(position) || 0) }));
       return lastState;
     },
 
     async rate(rate) {
       if (!active) throw new Error('Native pilot is not active');
-      lastState = await native.setRate({ rate: Number(rate) || 1 });
+      publish(await native.setRate({ rate: Number(rate) || 1 }));
       return lastState;
     },
 
     async layout(layout, rect = null) {
       if (!active) throw new Error('Native pilot is not active');
       if (!['inline','mini','full'].includes(layout)) throw new Error('Invalid layout');
-      lastState = await native.setLayout({ layout, rect: rect || safeRect() });
+      publish(await native.setLayout({ layout, rect: rect || safeRect() }));
       return lastState;
     },
 
     async play() {
       if (!active) throw new Error('Native pilot is not active');
-      lastState = await native.play();
+      publish(await native.play());
       return lastState;
     },
 
     async pause() {
       if (!active) throw new Error('Native pilot is not active');
-      lastState = await native.pause();
+      publish(await native.pause());
       return lastState;
     },
 
