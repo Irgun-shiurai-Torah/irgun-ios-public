@@ -3647,7 +3647,7 @@ async function minimizeWatchToPersistent() {
     if (rect?.width > 30 && rect?.height > 25) {
       await iosNativePlayerPilot.layout('mini',rect);
     } else {
-      console.warn('Native mini player's watch stage is missing',rect);
+      console.warn('Native mini-player watch stage is missing',rect);
     }
     refreshPersistentMiniVideoChrome();
     return;
