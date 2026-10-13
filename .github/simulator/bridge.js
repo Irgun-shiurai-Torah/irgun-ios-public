@@ -203,7 +203,24 @@ window.ISTSimulator = {
       };
       video.requestVideoFrameCallback(track);
     }
+    const nativeButtons = Object.fromEntries(Object.entries({
+      start:'[data-native-pilot-start]',audio:'[data-watch-mode="audio"]',
+      video:'[data-watch-mode="video"]',play:'[data-native-play]',
+      forward:'[data-native-skip="15"]',back:'[data-native-skip="-15"]',
+      minimize:'[data-minimize-watch]',expand:'[data-expand-watch]'
+    }).map(([key,query])=>{
+      const element=[...document.querySelectorAll(query)].find(simulatorVisible);
+      const box=element?.getBoundingClientRect();
+      const x=box?box.left+box.width/2:0,y=box?box.top+box.height/2:0;
+      const topHit=box?document.elementFromPoint(x,y):null;
+      return [key,{x,y,hittable:Boolean(simulatorVisible(element)&&topHit&&(element===topHit||element.contains(topHit)))}];
+    }));
     return JSON.stringify({
+      nativePilot:window.ISTNativePlayerPilot ? {
+        active:Boolean(window.ISTNativePlayerPilot.active),
+        id:String(window.ISTNativePlayerPilot.id||''),
+        state:window.ISTNativePlayerPilot.state||{}
+      } : null, nativeButtons,
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
