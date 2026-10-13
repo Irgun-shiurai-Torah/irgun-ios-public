@@ -40,6 +40,7 @@ const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
 let iosNativePlayerPilot = null; // Only available when explicitly opted into the pilot.
+let nativePilotHistoryAt=0, nativePilotFailureHandled=false, nativePilotLayoutScheduled=false;
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const IOS_IAP_PRODUCT_BY_PAID_AUDIO = Object.freeze({
   'pap-braunstein-married-woman':'org.irgunshiuraitorah.paid.braunstein.married.woman',
@@ -5284,13 +5285,13 @@ function watchHtml() {
       <button class="mini-video-play" data-mini-video-play-toggle="1" aria-label="${state.watchVideoPlaying ? 'Pause' : 'Play'}">${state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play')}</button>
       <button class="mini-video-close" data-close-mini-video="1" aria-label="Close video">×</button>
     </div>
-    <header class="watch-top"><button data-close-watch="1">Back</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${IS_IOS && Capacitor.isNativePlatform() ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
+    <header class="watch-top"><button data-close-watch="1">Back</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${IS_IOS && Capacitor.isNativePlatform() && !iosNativePlayerPilot?.active ? `<button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
     <div class="watch-scroll">
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${audio.paused ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</div></div>`}
+          : (iosNativePlayerPilot?.active ? `<div class="watch-audio-panel native-audio-panel">${logoArtworkHtml('large')}<input id="nativeWatchSeek" class="seek" type="range" min="0" max="${Math.max(1,Number(iosNativePlayerPilot.state?.duration)||Number(v.duration)||1)}" value="${Number(iosNativePlayerPilot.state?.position)||0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-native-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-native-play="1">${iosNativePlayerPilot.state?.playing ? '<span class="pause-mark">II</span> Pause' : svgIcon('play')+' Play'}</button><button class="skip-control" data-native-skip="15">${svgIcon('forward15')}</button></div><div id="nativeWatchTime" class="watch-audio-time">${fmtTime(Number(iosNativePlayerPilot.state?.position)||0)} / ${fmtTime(Number(iosNativePlayerPilot.state?.duration)||Number(v.duration)||0)}</div><select id="nativeWatchRate" aria-label="Playback speed">${[0.75,1,1.25,1.5,1.75,2].map(rate=>`<option value="${rate}" ${Math.abs(rate-Number(iosNativePlayerPilot.state?.rate||state.playbackSpeed||1))<0.01?'selected':''}>${rate}×</option>`).join('')}</select></div>` : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${audio.paused ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</div></div>`)}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -5299,6 +5300,8 @@ function watchHtml() {
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
           ${v.hasAudio ? (state.watchMode === 'audio' ? `<button class="watch-action" data-switch-video="${esc(id)}">${svgIcon('video')}<span class="watch-action-text">Video</span></button>` : `<button class="watch-action" data-switch-audio="${esc(id)}">${svgIcon('audio')}<span class="watch-action-text">Audio</span></button>`) : ''}
+          ${IS_IOS && iosNativePlayerPilot && !iosNativePlayerPilot.active ? `<button class="watch-action" data-native-pilot-start="1">${svgIcon('play')}<span class="watch-action-text">Try Native Player</span></button>` : ''}
+          ${IS_IOS && iosNativePlayerPilot?.active ? `<span class="watch-action" aria-label="Native AVPlayer active">Native Player</span>` : ''}
           <button class="watch-action" data-share-kind="video" data-share-id="${esc(id)}">${svgIcon('share')}<span class="watch-action-text">Share</span></button>
           <button class="watch-action" data-download-kind="video" data-download-id="${esc(id)}">${svgIcon('download')}<span class="watch-action-text">Download</span></button>
           ${offlineState ? `<button class="watch-action ${offlineState.cls}" data-save-offline-kind="video" data-save-offline-id="${esc(id)}">${offlineIconHtml('watch-offline-icon')}<span class="watch-action-text">${esc(offlineState.label)}</span>${offlineState.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>` : ''}
@@ -6066,6 +6069,7 @@ function render() {
   updatePlayerUi();
   refreshOfflineButtonsForKey();
   if (state.watchVideo && state.watchMode === 'video') setTimeout(initWatchVimeo, 0);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) scheduleIosNativeSurface();
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
   if (state.screen === 'schedule' && state.scheduleView === 'flyers') setTimeout(loadSchedule, 0);
@@ -6655,6 +6659,46 @@ function bind() {
     updatePlayerUi();
   });
 
+  document.querySelectorAll('[data-native-pilot-start]').forEach(el => el.addEventListener('click', async () => {
+    if (!iosNativePlayerPilot || iosNativePlayerPilot.active) return;
+    el.disabled = true;
+    try {
+      await iosNativePlayerPilot.openCurrent();
+      nativePilotFailureHandled = false;
+      nativePilotHistoryAt = 0;
+      state.watchMode = 'video';
+      state.videoOwnsPlayback = true;
+      state.watchVideoPlaying = Boolean(iosNativePlayerPilot.state?.playing);
+      render();
+      hostCurrentWatchOverlay('full');
+      scheduleIosNativeSurface();
+    } catch (error) {
+      console.warn('Native AVPlayer pilot could not start; previous player restored',error);
+      setToast('Native AVPlayer unavailable; the previous player was restored.');
+    } finally { el.disabled = false; }
+  }));
+  document.querySelectorAll('[data-native-play]').forEach(el => el.addEventListener('click', () => {
+    if (!iosNativePlayerPilot?.active) return;
+    void (iosNativePlayerPilot.state?.playing ? iosNativePlayerPilot.pause() : iosNativePlayerPilot.play())
+      .catch(error => console.warn('Native playback toggle failed',error));
+  }));
+  document.querySelectorAll('[data-native-skip]').forEach(el => el.addEventListener('click', () => {
+    if (!iosNativePlayerPilot?.active) return;
+    const position = Math.max(0,(Number(iosNativePlayerPilot.state?.position)||0)+(Number(el.dataset.nativeSkip)||0));
+    void iosNativePlayerPilot.seek(position).catch(error => console.warn('Native skip failed',error));
+  }));
+  const nativeSeek = document.getElementById('nativeWatchSeek');
+  nativeSeek?.addEventListener('change', () => {
+    if (iosNativePlayerPilot?.active) void iosNativePlayerPilot.seek(Number(nativeSeek.value)||0)
+      .catch(error => console.warn('Native seek failed',error));
+  });
+  document.getElementById('nativeWatchRate')?.addEventListener('change', event => {
+    if (!iosNativePlayerPilot?.active) return;
+    const rate=Number(event.target.value)||1;
+    state.playbackSpeed=rate;
+    localStorage.setItem(SPEED_KEY,String(rate));
+    void iosNativePlayerPilot.rate(rate).catch(error=>console.warn('Native rate failed',error));
+  });
   document.querySelectorAll('[data-close-watch]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', () => closeWatch(true)); });
   document.querySelectorAll('[data-watch-mode]').forEach(el => el.addEventListener('click', () => switchWatchMode(el.dataset.watchMode)));
   document.querySelectorAll('[data-switch-audio]').forEach(el => el.addEventListener('click', () => switchWatchMode('audio')));
