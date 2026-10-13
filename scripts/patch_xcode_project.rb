@@ -92,7 +92,7 @@ target_attrs = attrs[target.uuid] ||= {}
 system_caps = target_attrs['SystemCapabilities'] ||= {}
 system_caps['com.apple.SignInWithApple'] = { 'enabled' => 1 }
 system_caps['com.apple.Push'] = { 'enabled' => 1 }
-system_caps['com.apple.InAppPurchase'] = { 'enabled' => 1 }
+system_caps.delete('com.apple.InAppPurchase')
 system_caps.delete('com.apple.ApplePay')
 
 project.save
