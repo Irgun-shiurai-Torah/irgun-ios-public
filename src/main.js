@@ -1,5 +1,6 @@
 import './style.css';
 import './direct-media.js';
+import { createIosNativePlayerPilot } from './ios-native-player-pilot.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
@@ -38,6 +39,7 @@ const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
+let iosNativePlayerPilot = null; // Only available when explicitly opted into the pilot.
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const IOS_IAP_PRODUCT_BY_PAID_AUDIO = Object.freeze({
   'pap-braunstein-married-woman':'org.irgunshiuraitorah.paid.braunstein.married.woman',
@@ -7537,6 +7539,7 @@ audio.addEventListener('error', () => {
 });
 
 async function openWatch(id, requestedTime = null, options = {}) {
+  if (iosNativePlayerPilot?.active && iosNativePlayerPilot.id !== String(id)) await iosNativePlayerPilot.stop(false);
   const video = state.videoById.get(String(id));
   if (!video) return;
 
@@ -7737,6 +7740,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
+  if (iosNativePlayerPilot?.active) return; // AVPlayer stays active without a handoff.
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
@@ -7824,6 +7828,7 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
+  if (iosNativePlayerPilot?.active) return;
   restoreVideoAfterSystemPip();
   if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
@@ -7842,6 +7847,7 @@ async function preserveWatchTime() {
 }
 
 async function closeWatch(save = true) {
+  if (iosNativePlayerPilot?.active) await iosNativePlayerPilot.stop(false);
   if (!state.watchVideo) return;
   stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
@@ -8022,6 +8028,7 @@ function watchPlayerInitializationIsCurrent(initialization) {
 }
 
 async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false) {
+  if (iosNativePlayerPilot?.active) return; // Native item is sole owner during the pilot.
   const pending = state.watchVimeoInitialization;
   if (watchPlayerInitializationIsCurrent(pending)) {
     // render() may arrive first. Preserve the subsequent explicit Play request.
@@ -8461,6 +8468,45 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
   });
 }
 
+// Isolated experiment. Off by default: requires localStorage opt-in and then
+// an explicit developer call to window.ISTNativePlayerPilot.openCurrent().
+iosNativePlayerPilot = createIosNativePlayerPilot({
+  capacitor: Capacitor,
+  registerPlugin,
+  storage: localStorage,
+  getCurrent: () => ({
+    video: state.watchVideo ? {
+      ...state.watchVideo,
+      id: videoId(state.watchVideo),
+      artist: state.watchVideo._speakerLabel || state.watchVideo.speaker || ''
+    } : null,
+    position: state.watchResumeSeconds || 0,
+    rate: state.playbackSpeed || 1
+  }),
+  loadVideoSources: loadIosDirectVideoSources,
+  releaseLegacy: async () => {
+    stopNativeBackgroundAudio();
+    state.videoOwnsPlayback = true;
+    hardStopHtmlAudioForVideo();
+    const previous = state.watchVimeo;
+    state.watchVimeoGeneration++;
+    state.watchVimeo = null;
+    state.watchVimeoReady = false;
+    state.watchVimeoInitialization = null;
+    try { await previous?.destroy?.(); } catch (_) {}
+    clearPersistentVideoMount();
+    render();
+  },
+  restoreLegacy: async ({ autoplay, position }) => {
+    state.watchResumeSeconds = Math.max(0, Number(position) || 0);
+    state.videoOwnsPlayback = false;
+    state.watchMode = 'video';
+    state.watchHostedExternally = false;
+    render();
+    await initWatchVimeo(Boolean(autoplay));
+  },
+  stageRect: () => document.getElementById('watchVideoStage')?.getBoundingClientRect()
+});
 render();
 bootstrap({ initial:true });
 
