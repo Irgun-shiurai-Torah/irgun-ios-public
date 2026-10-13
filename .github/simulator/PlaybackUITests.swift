@@ -205,6 +205,128 @@ final class PlaybackUITests: XCTestCase {
         }
     }
 
+    private func pilotState(_ snapshot: [String: Any]) -> [String: Any] {
+        (snapshot["nativePilot"] as? [String: Any])?["state"] as? [String: Any] ?? [:]
+    }
+
+    private func touchPilotControl(_ key: String) throws {
+        let hide = app.buttons["ist-simulator-hide-controls"]
+        if hide.exists && hide.isHittable { hide.tap() }
+        for _ in 0..<8 {
+            let observed = snapshot()
+            let buttons = observed["nativeButtons"] as? [String: [String: Any]] ?? [:]
+            if let button = buttons[key], button["hittable"] as? Bool == true {
+                let before = observed["observedAt"] as? NSNumber
+                let web = app.webViews.firstMatch
+                web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                    dx:number(button,"x"), dy:number(button,"y"))).tap()
+                return
+            }
+            app.webViews.firstMatch.swipeUp()
+        }
+        evidence("missing-pilot-control-\(key)")
+        XCTFail("Native AVPlayer control was never hittable: \(key)")
+        throw Failure.timedOut(key)
+    }
+
+    func testUnifiedNativePlayerRetainsClockAcrossAudioVideoAndHome() throws {
+        try openSample() // This is a real HLS lecture with video and audio.
+        let legacyId = snapshot()["id"] as? String ?? ""
+        XCTAssertFalse(legacyId.isEmpty)
+        try touchPilotControl("start") // Real native tap; no JavaScript fake player.
+
+        let started = try waitFor("Native AVPlayer opens a real playable HLS item", timeout: 90) { s in
+            let native=self.pilotState(s)
+            let p=s["nativePilot"] as? [String:Any] ?? [:]
+            return p["active"] as? Bool == true &&
+                native["ready"] as? Bool == true &&
+                native["sameItem"] as? Bool == true &&
+                native["id"] as? String == legacyId &&
+                native["mode"] as? String == "video" &&
+                self.number(native,"itemEpoch") >= 1
+        }
+        let original = pilotState(started)
+        let epoch = number(original,"itemEpoch")
+        XCTAssertGreaterThan(epoch,0)
+        XCTAssertGreaterThan(number(original,"videoWidth"),0,"Native item must have real video dimensions")
+        XCTAssertEqual(number(original,"rate"),1,accuracy:0.02)
+        XCTAssertFalse(started["audioPlaying"] as? Bool ?? true,"Web audio must be released")
+        XCTAssertEqual(number(started,"playerCount"),0,"Web video must be destroyed before native ownership")
+
+        let initialPosition=number(original,"position")
+        _ = try waitFor("Native HLS really advances during video", timeout: 45) { s in
+            let n=self.pilotState(s)
+            return n["playing"] as? Bool == true &&
+                self.number(n,"position") > initialPosition+1.5 &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        evidence("native-video-playing")
+
+        try touchPilotControl("audio")
+        let audioState = try waitFor("Audio shares the same AVPlayer item", timeout: 30) { s in
+            let n=self.pilotState(s)
+            return s["mode"] as? String == "audio" && n["mode"] as? String == "audio" &&
+                n["sameItem"] as? Bool == true &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        let beforeAudio=number(pilotState(audioState),"position")
+        _ = try waitFor("Native audio continues without reopening media", timeout: 30) { s in
+            let n=self.pilotState(s)
+            return n["playing"] as? Bool == true &&
+                self.number(n,"position") > beforeAudio+1.0 &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true,"No second HTML audio engine")
+        evidence("native-audio-same-item")
+
+        try touchPilotControl("forward")
+        let beforeSeek=number(pilotState(snapshot()),"position")
+        _ = try waitFor("Native forward seeks the same item", timeout: 30) { s in
+            let n=self.pilotState(s)
+            return self.number(n,"itemEpoch") == epoch &&
+                self.number(n,"position") >= beforeSeek+10
+        }
+        try touchPilotControl("play") // Pause audio with a real on-screen button.
+        let paused = try waitFor("Native audio pauses", timeout: 25) { self.pilotState($0)["playing"] as? Bool == false }
+        let stoppedClock = number(pilotState(paused),"position")
+        Thread.sleep(forTimeInterval:2)
+        XCTAssertEqual(number(pilotState(snapshot()),"position"),stoppedClock,accuracy:0.8)
+        try touchPilotControl("play")
+        let resumed = try waitFor("Native audio resumes", timeout: 30) { self.pilotState($0)["playing"] as? Bool == true }
+        XCTAssertEqual(number(pilotState(resumed),"itemEpoch"),epoch)
+
+        try touchPilotControl("video")
+        let restored = try waitFor("Video restored without AVPlayer item replacement", timeout: 35) { s in
+            let n=self.pilotState(s)
+            return s["mode"] as? String == "video" &&
+                n["mode"] as? String == "video" &&
+                n["playing"] as? Bool == true &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        evidence("native-video-restored")
+
+        let beforeHome=number(pilotState(restored),"position")
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval:5)
+        app.activate()
+        _ = try waitFor("Native audio continues through Home and reopening",timeout:60) { s in
+            let n=self.pilotState(s)
+            return n["id"] as? String == legacyId && n["active"] as? Bool == true &&
+                self.number(n,"itemEpoch") == epoch &&
+                self.number(n,"position") >= beforeHome+1.0
+        }
+        evidence("native-home-reopened")
+
+        try touchPilotControl("minimize")
+        _ = try waitFor("Native mini player uses same AVPlayer item",timeout:25) { s in
+            let n=self.pilotState(s)
+            return s["minimized"] as? Bool == true &&
+                n["layout"] as? String == "mini" &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        evidence("native-mini-same-item")
+    }
+
     func testFreshVideoHasMovingFrames() throws {
         try openSample()
         try assertMovingVideo()
