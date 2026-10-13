@@ -41,6 +41,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var layout = "inline"
     private var lastSurfaceRect: [String: Any]?
     private var generation = 0
+    private var itemEpoch = 0
+    private var pendingOpen: CAPPluginCall?
+    private var pendingOpenPosition: Double = 0
+    private var pendingOpenGeneration: Int = 0
+    private var pendingOpenTimeout: DispatchWorkItem?
     private var playerObserver: NSKeyValueObservation?
     private var itemObserver: NSKeyValueObservation?
     private var timeObserver: Any?
@@ -194,7 +199,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             "playing": active && player.timeControlStatus == .playing,
             "playRequested": playingWanted,
             "rate": Double(playbackRate),
-            "sameItem": active && player.currentItem != nil
+            "sameItem": active && player.currentItem != nil,
+            "itemEpoch": itemEpoch,
+            "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
+            "videoHeight": Double(player.currentItem?.presentationSize.height ?? 0),
+            "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
     }
 
@@ -210,6 +219,70 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         if d > 0 { metadata[MPMediaItemPropertyPlaybackDuration] = d }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = metadata
         notifyListeners("state", data: snapshot())
+    }
+
+    // Resolve open only after AVFoundation knows whether the HLS media item is
+    // playable. Otherwise WebKit shows a native player that immediately fails
+    // while its JavaScript caller thinks the transition succeeded.
+    private func finishPendingOpenIfReady() {
+        guard let call = pendingOpen, let item = player.currentItem else { return }
+        switch item.status {
+        case .readyToPlay:
+            pendingOpen = nil
+            pendingOpenTimeout?.cancel()
+            pendingOpenTimeout = nil
+            let owner = pendingOpenGeneration
+            let position = pendingOpenPosition
+            let finish: () -> Void = {
+                guard owner == self.generation, self.active else {
+                    call.reject("Native media request was cancelled")
+                    return
+                }
+                if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
+                else { self.player.pause() }
+                self.publishState()
+                call.resolve(self.snapshot())
+            }
+            if position > 0.1 {
+                player.seek(
+                    to: CMTime(seconds: position, preferredTimescale: 600),
+                    toleranceBefore: CMTime(seconds: 0.2, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.2, preferredTimescale: 600)
+                ) { _ in DispatchQueue.main.async(execute: finish) }
+            } else { finish() }
+        case .failed:
+            pendingOpen = nil
+            pendingOpenTimeout?.cancel()
+            pendingOpenTimeout = nil
+            player.pause()
+            active = false
+            call.reject("Native media is not playable: " + (item.error?.localizedDescription ?? "unknown HLS error"))
+        default:
+            return
+        }
+    }
+
+    private func waitForPlayableItem(_ call: CAPPluginCall, position: Double) {
+        if let previous = pendingOpen {
+            previous.reject("A new media request replaced this one")
+        }
+        pendingOpenTimeout?.cancel()
+        pendingOpen = call
+        pendingOpenPosition = position
+        pendingOpenGeneration = generation
+        let owner = generation
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, self.pendingOpen != nil, self.pendingOpenGeneration == owner else { return }
+            let waiting = self.pendingOpen
+            self.pendingOpen = nil
+            self.pendingOpenTimeout = nil
+            self.player.pause()
+            self.active = false
+            waiting?.reject("Native HLS did not become playable within 25 seconds")
+        }
+        pendingOpenTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: timeout)
+        finishPendingOpenIfReady()
     }
 
     @objc public func open(_ call: CAPPluginCall) {
@@ -240,14 +313,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             let replacing = self.itemID != id || self.itemURL != source ||
                             self.player.currentItem == nil
             self.generation += 1
-            let thisGeneration = self.generation
             if replacing {
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
+                self.itemEpoch += 1
                 self.player.replaceCurrentItem(with: item)
-                self.itemObserver = item.observe(\.status, options: [.new]) { [weak self] _, _ in
-                    DispatchQueue.main.async { self?.publishState() }
+                self.itemObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
+                    DispatchQueue.main.async {
+                        self?.publishState()
+                        self?.finishPendingOpenIfReady()
+                    }
                 }
                 self.itemID = id
                 self.itemURL = source
@@ -257,22 +333,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
             let requested = max(0, call.getDouble("position") ?? 0)
-            let finish: () -> Void = {
-                guard thisGeneration == self.generation else {
-                    call.reject("An updated native media request replaced this one")
-                    return
-                }
-                if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
-                else { self.player.pause() }
-                self.publishState()
-                call.resolve(self.snapshot())
-            }
-            if requested > 0.1 {
-                self.player.seek(to: CMTime(seconds: requested, preferredTimescale: 600),
-                                 toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                    DispatchQueue.main.async(execute: finish)
-                }
-            } else { finish() }
+            self.waitForPlayableItem(call, position: requested)
         }
     }
 
@@ -366,6 +427,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc public func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.generation += 1
+            if let pending = self.pendingOpen { pending.reject("Native media stopped") }
+            self.pendingOpen = nil
+            self.pendingOpenTimeout?.cancel()
+            self.pendingOpenTimeout = nil
             self.playingWanted = false
             self.player.pause()
             self.itemObserver = nil
@@ -391,6 +456,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         itemObserver = nil
         if let token = timeObserver { player.removeTimeObserver(token) }
         if let observer = endObserver { NotificationCenter.default.removeObserver(observer) }
+        pendingOpenTimeout?.cancel()
+        if let pending = pendingOpen { pending.reject("Native player released") }
         clearRemoteControls()
     }
 }
