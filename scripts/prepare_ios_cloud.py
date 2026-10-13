@@ -105,6 +105,7 @@ def write_analytics_plugin():
         die(f'Analytics plugin template is missing: {ANALYTICS_PLUGIN_TEMPLATE}')
     ANALYTICS_PLUGIN.write_text(ANALYTICS_PLUGIN_TEMPLATE.read_text())
     (IOS_APP / 'IrgunBackgroundAudioPlugin.swift').write_text((ROOT / 'scripts/IrgunBackgroundAudioPlugin.swift').read_text())
+    (IOS_APP / 'IrgunUnifiedPlayerPlugin.swift').write_text((ROOT / 'scripts/IrgunUnifiedPlayerPlugin.swift').read_text())
 
 def patch_app_delegate():
     app_delegate = IOS_APP / 'AppDelegate.swift'
@@ -137,6 +138,7 @@ def patch_app_delegate():
         let plugin = IrgunAnalyticsPlugin()
         capacitorBridge.registerPluginInstance(plugin)
         capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())
+        capacitorBridge.registerPluginInstance(IrgunUnifiedPlayerPlugin())
         irgunAnalyticsPlugin = plugin
     }
 
@@ -270,6 +272,8 @@ def patch_app_delegate():
 
     if 'capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())' not in text:
         text = text.replace('capacitorBridge.registerPluginInstance(plugin)', 'capacitorBridge.registerPluginInstance(plugin)\n        capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())', 1)
+    if 'capacitorBridge.registerPluginInstance(IrgunUnifiedPlayerPlugin())' not in text:
+        text = text.replace('capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())', 'capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())\n        capacitorBridge.registerPluginInstance(IrgunUnifiedPlayerPlugin())', 1)
 
     # Dispatch native lifecycle transitions into the WebView before iOS suspends it.
     for method_name, event_name in [
