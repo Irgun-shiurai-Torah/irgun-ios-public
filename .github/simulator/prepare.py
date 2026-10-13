@@ -17,6 +17,13 @@ def web():
         raise SystemExit('Simulator bridge already injected; use a fresh checkout')
     bridge = (HERE / 'bridge.js').read_text().replace(
         '__SIMULATOR_VIDEO_ID__', json.dumps(os.environ.get('SIMULATOR_VIDEO_ID', '')))
+    if os.environ.get('SIMULATOR_NATIVE_PILOT') == '1':
+        needle = 'iosNativePlayerPilot = createIosNativePlayerPilot({'
+        if text.count(needle) != 1:
+            raise SystemExit('Native pilot marker unavailable for simulator test')
+        text = text.replace(needle, "localStorage.setItem('istNativeAvPlayerPilotV1','1');\\n" + needle, 1)
+        # The injected opt-in exists only in disposable simulator builds.
+        text = text.replace(';\\n' + needle, ';\n' + needle, 1)
     source.write_text(text + '\n' + bridge)
 
 
