@@ -7539,7 +7539,7 @@ audio.addEventListener('error', () => {
 });
 
 async function openWatch(id, requestedTime = null, options = {}) {
-  if (iosNativePlayerPilot?.active && iosNativePlayerPilot.id !== String(id)) await iosNativePlayerPilot.stop(false);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active && iosNativePlayerPilot.id !== String(id)) await iosNativePlayerPilot.stop(false);
   const video = state.videoById.get(String(id));
   if (!video) return;
 
@@ -7740,7 +7740,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
-  if (iosNativePlayerPilot?.active) return; // AVPlayer stays active without a handoff.
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) return; // AVPlayer stays active without a handoff.
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
@@ -7828,7 +7828,7 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
-  if (iosNativePlayerPilot?.active) return;
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) return;
   restoreVideoAfterSystemPip();
   if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
@@ -7847,7 +7847,7 @@ async function preserveWatchTime() {
 }
 
 async function closeWatch(save = true) {
-  if (iosNativePlayerPilot?.active) await iosNativePlayerPilot.stop(false);
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) await iosNativePlayerPilot.stop(false);
   if (!state.watchVideo) return;
   stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
@@ -8028,7 +8028,7 @@ function watchPlayerInitializationIsCurrent(initialization) {
 }
 
 async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false) {
-  if (iosNativePlayerPilot?.active) return; // Native item is sole owner during the pilot.
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) return; // Native item is sole owner during the pilot.
   const pending = state.watchVimeoInitialization;
   if (watchPlayerInitializationIsCurrent(pending)) {
     // render() may arrive first. Preserve the subsequent explicit Play request.
