@@ -16,6 +16,6 @@ assert.match(main, /function paidShiurimHtml\(\) \{\s*if \(IS_IOS\)/);
 assert.match(main, /const items = state\.paidCatalog\.filter\(item => item\.owned\)/);
 assert.match(main, /function paidProductCard\(item\) \{\s*\/\/[^\n]*\n\s*if \(IS_IOS && !item\?\.owned\) return ''/);
 assert.match(main, /async function initPaidCheckout\(productId\) \{[^]*?if \(IS_IOS\) return;/);
-assert.match(main, /apiJson\(\x60\/paid-audio\/play-session/);
+assert.match(main, /apiJson\('\/paid-audio\/play-session'/);
 assert.match(main, /apiJson\('\/paid-audio\/create-session'/);
 console.log('iOS reader-only static checks passed');
