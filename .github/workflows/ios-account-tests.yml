@@ -30,7 +30,8 @@ jobs:
       IOS_MARKETING_VERSION: "1.2.71"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
-      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
+      # iOS-only approved test identity. Never modify the Android repository or its credentials.
+      IRGUN_TEST_EMAIL: testappapple@istshovavim.org
       IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
       DEVICE_FAMILY: ${{ matrix.family }}
 
