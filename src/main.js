@@ -3616,6 +3616,42 @@ async function quickVimeoTime(fallback = 0, timeoutMs = 900) {
 
 async function minimizeWatchToPersistent() {
   if (!state.watchVideo || state.watchMode !== 'video' || state.watchMinimized) return;
+  const native = typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active;
+  if (native) {
+    // The native view is *above* WKWebView. Preserve the same player item while
+    // attaching the web mini chrome and moving the AVKit frame to its thumbnail.
+    let overlay = persistentVideoMount?.querySelector('.watch-overlay');
+    if (!overlay) {
+      state.watchHostedExternally = false;
+      if (!document.querySelector('#app .watch-overlay')) render();
+      if (!hostCurrentWatchOverlay('mini')) {
+        console.warn('Native mini player has no attached watch overlay');
+        return;
+      }
+      overlay = persistentVideoMount?.querySelector('.watch-overlay');
+    }
+    if (!overlay || !persistentVideoMount) {
+      console.warn('Native mini player mount is unavailable');
+      return;
+    }
+    state.watchHostedExternally = true;
+    state.watchMinimized = true;
+    persistentVideoMount.classList.remove('watch-full-host');
+    persistentVideoMount.classList.add('watch-mini-host');
+    document.body.classList.add('irgun-watch-mini-hosted');
+    bindPersistentVideoChrome();
+    state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+    // Read the new CSS after it has laid out; don't depend on a later render.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const rect = document.getElementById('watchVideoStage')?.getBoundingClientRect();
+    if (rect?.width > 30 && rect?.height > 25) {
+      await iosNativePlayerPilot.layout('mini',rect);
+    } else {
+      console.warn('Native mini player's watch stage is missing',rect);
+    }
+    refreshPersistentMiniVideoChrome();
+    return;
+  }
   if (!state.watchHostedExternally && !hostCurrentWatchOverlay('mini')) return;
   state.watchMinimized = true;
   persistentVideoMount.classList.remove('watch-full-host');
@@ -3623,7 +3659,6 @@ async function minimizeWatchToPersistent() {
   document.body.classList.add('irgun-watch-mini-hosted');
   bindPersistentVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
-  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) scheduleIosNativeSurface();
 }
 
 async function expandPersistentWatch() {
@@ -3636,7 +3671,11 @@ async function expandPersistentWatch() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   refreshPersistentMiniVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
-  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) scheduleIosNativeSurface();
+  if (typeof iosNativePlayerPilot !== 'undefined' && iosNativePlayerPilot?.active) {
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const rect = document.getElementById('watchVideoStage')?.getBoundingClientRect();
+    if (rect?.width > 30 && rect?.height > 25) await iosNativePlayerPilot.layout('inline',rect);
+  }
 }
 
 function homeHtml() {
@@ -8577,6 +8616,25 @@ function scheduleIosNativeSurface() {
 window.addEventListener('scroll', scheduleIosNativeSurface, {passive:true});
 window.addEventListener('resize', scheduleIosNativeSurface);
 window.addEventListener('orientationchange', scheduleIosNativeSurface);
+// Native AVKit can retain an older UIKit frame when the iPad comes back from Home.
+// Reconcile against the current WebView stage before the user taps mini controls.
+window.addEventListener('irgunNativeForeground', scheduleIosNativeSurface);
+window.addEventListener('irgunNativeDidBecomeActive', () => {
+  scheduleIosNativeSurface();
+  setTimeout(scheduleIosNativeSurface,180);
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) scheduleIosNativeSurface();
+});
+// Capture native-pilot mini actions even when the watch DOM is re-parented.
+document.addEventListener('click', event => {
+  if (!iosNativePlayerPilot?.active) return;
+  const control = event.target?.closest?.('[data-minimize-watch]');
+  if (!control) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  void minimizeWatchToPersistent().catch(error => console.warn('Native mini transition failed',error));
+},true);
 
 // Isolated experiment. Off by default: requires localStorage opt-in and then
 // an explicit developer call to window.ISTNativePlayerPilot.openCurrent().

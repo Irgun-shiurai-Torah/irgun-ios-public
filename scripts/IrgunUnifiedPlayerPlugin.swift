@@ -101,6 +101,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         if viewer.parent != nil { return true }
         guard let root = bridge?.webView?.window?.rootViewController else { return false }
         root.addChild(viewer)
+        // An AVPlayerViewController surface should never resize across the WebView
+        // title bar after iPad foreground/layout changes: frame is controlled by JS.
+        viewer.view.autoresizingMask = []
+        viewer.view.translatesAutoresizingMaskIntoConstraints = true
+        viewer.view.clipsToBounds = true
         root.view.addSubview(viewer.view)
         viewer.didMove(toParent: root)
         return true
@@ -120,16 +125,27 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeSurface(_ box: [String: Any]?) {
-        if let box = box, let rect = frame(from: box) {
-            viewer.view.frame = rect
+        if let box = box, let rect = frame(from: box), let root = viewer.parent?.view {
+            // The fullscreen watch controls live above the WebView video stage.
+            // Never let the native AVKit view overlap their tappable header
+            // after foreground/rotation on iPad.
+            let safeHeaderBottom = max(72, root.safeAreaInsets.top + 56)
+            let top = max(safeHeaderBottom, rect.minY)
+            let right = min(root.bounds.maxX, rect.maxX)
+            let bottom = min(root.bounds.maxY, rect.maxY)
+            let left = max(root.bounds.minX, rect.minX)
+            viewer.view.frame = CGRect(x: left, y: top,
+                                       width: max(0, right - left),
+                                       height: max(0, bottom - top))
         } else if let root = viewer.parent?.view {
             let size = root.bounds.size
             let width = max(1, size.width)
-            viewer.view.frame = CGRect(x: 0, y: max(0, (size.height - width * 9 / 16) / 3),
+            viewer.view.frame = CGRect(x: 0, y: max(90, (size.height - width * 9 / 16) / 3),
                                        width: width, height: width * 9 / 16)
         }
-        viewer.view.isHidden = mode == "audio"
-        viewer.view.isUserInteractionEnabled = mode == "video"
+        viewer.view.isHidden = mode == "audio" || viewer.view.frame.width < 20 || viewer.view.frame.height < 20
+        // In mini mode the WebView's overlay owns the mini controls and video hit target.
+        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini"
         viewer.view.setNeedsLayout()
     }
 
@@ -203,6 +219,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             "itemEpoch": itemEpoch,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
             "videoHeight": Double(player.currentItem?.presentationSize.height ?? 0),
+            "surfaceX": Double(viewer.view.frame.minX),
+            "surfaceY": Double(viewer.view.frame.minY),
+            "surfaceWidth": Double(viewer.view.frame.width),
+            "surfaceHeight": Double(viewer.view.frame.height),
+            "surfaceInteractive": viewer.view.isUserInteractionEnabled,
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
     }

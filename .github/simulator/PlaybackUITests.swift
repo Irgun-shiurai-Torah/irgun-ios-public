@@ -317,6 +317,18 @@ final class PlaybackUITests: XCTestCase {
         }
         evidence("native-home-reopened")
 
+        // UIKit's AVKit view is over WKWebView. Prove it does not occlude the
+        // app's mini button on iPad after Home/reopen.
+        let preMini = snapshot()
+        let preNative = pilotState(preMini)
+        let preButtons = preMini["nativeButtons"] as? [String: [String: Any]] ?? [:]
+        if let button = preButtons["minimize"] {
+            let x = number(button,"x"), y = number(button,"y")
+            let nx = number(preNative,"surfaceX"), ny = number(preNative,"surfaceY")
+            let nw = number(preNative,"surfaceWidth"), nh = number(preNative,"surfaceHeight")
+            XCTAssertFalse(nw > 0 && nh > 0 && x >= nx && x < nx+nw && y >= ny && y < ny+nh,
+                           "Native AVKit video surface must not cover mini control")
+        }
         try touchPilotControl("minimize")
         _ = try waitFor("Native mini player uses same AVPlayer item",timeout:25) { s in
             let n=self.pilotState(s)
