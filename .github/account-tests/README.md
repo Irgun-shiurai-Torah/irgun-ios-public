@@ -7,3 +7,7 @@ The account workflow is intentionally separate from the general iOS Simulator Pl
 Checks: login, profile and settings display, like/Watch Later/follow toggles, playback history, creating a uniquely named QA playlist, process termination/relaunch, persisted server-loaded collections, logout and account state clearing. iPhone and iPad run sequentially. The regular playback workflow remains account-free and does not duplicate these logged-in checks.
 
 The test restores the selected lecture flags after success. Uniquely named `Irgun-QA-*` playlists and history remain for inspection; a failed run may leave test flags for diagnosis. Tests do not edit personal accounts, submit comments, send follow emails, change notification subscriptions, charge payments or delete accounts. Profile edits, registration/verification, password reset, Google/Apple login, cross-device simultaneous sync, offline downloads and payment sandbox flows are not covered by this initial suite. Native success is required; syntax validation is not a test pass.
+
+## iOS-only test identity (October 2026)
+
+The iOS-only Actions workflow uses `testappapple@istshovavim.org` as its dedicated non-admin test email. The password continues to be injected from the `IRGUN_TEST_PASSWORD` secret **in this iOS repository only**. Do not put the password in Git, test logs or the app. Do not change Android test credentials. If the account has a different password after the email change, update the iOS repository's `IRGUN_TEST_PASSWORD` secret independently.
