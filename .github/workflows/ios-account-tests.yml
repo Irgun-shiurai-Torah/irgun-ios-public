@@ -49,6 +49,7 @@ jobs:
       - name: Build app and add account-test observations
         run: |
           npm install --no-audit --no-fund
+          node --test scripts/test_ios_native_player_pilot.mjs
           python3 .github/simulator/prepare.py web
           python3 .github/account-tests/prepare.py web
           npm run build
