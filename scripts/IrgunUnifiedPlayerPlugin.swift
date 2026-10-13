@@ -39,6 +39,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var playbackRate: Float = 1
     private var mode = "video"
     private var layout = "inline"
+    private var lastSurfaceRect: [String: Any]?
     private var generation = 0
     private var playerObserver: NSKeyValueObservation?
     private var itemObserver: NSKeyValueObservation?
@@ -234,7 +235,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             self.artist = call.getString("artist") ?? ""
             self.playbackRate = Float(max(0.5, min(2, call.getDouble("rate") ?? 1)))
             self.playingWanted = call.getBool("autoplay") ?? false
-            self.placeSurface(call.getObject("rect"))
+            self.lastSurfaceRect = call.getObject("rect")
+            self.placeSurface(self.lastSurfaceRect)
             let replacing = self.itemID != id || self.itemURL != source ||
                             self.player.currentItem == nil
             self.generation += 1
@@ -335,7 +337,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             // Critical single-owner property: do not replace or seek the item.
             self.mode = next
-            self.placeSurface(nil)
+            self.placeSurface(self.lastSurfaceRect)
             self.publishState()
             call.resolve(self.snapshot())
         }
@@ -350,7 +352,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             self.layout = next
-            self.placeSurface(call.getObject("rect"))
+            if let rect = call.getObject("rect") { self.lastSurfaceRect = rect }
+            self.placeSurface(self.lastSurfaceRect)
             self.publishState()
             call.resolve(self.snapshot())
         }
@@ -372,6 +375,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             self.itemURL = ""
             self.mode = "video"
             self.layout = "inline"
+            self.lastSurfaceRect = nil
             self.clearRemoteControls()
             if self.viewer.parent != nil {
                 self.viewer.willMove(toParent: nil)
