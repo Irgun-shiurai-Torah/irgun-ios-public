@@ -321,8 +321,8 @@ def write_build_metadata():
     meta.write_text(
         f'Bundle ID: {BUNDLE_ID}\nMarketing version: {MARKETING_VERSION}\nBuild number: {BUILD_NUMBER}\n'
         f'Firebase plist installed: {GOOGLE_PLIST.exists()}\n'
-        'Capabilities requested: Sign in with Apple, Push Notifications, In-App Purchase, Background Audio\n'
-        'Paid digital audio: App Store In-App Purchase / StoreKit 2\n'
+        'Capabilities requested: Sign in with Apple, Push Notifications, Background Audio\n'
+        'Paid audio: reader-only access to purchases linked to Irgun accounts\n'
     )
 
 def main():
