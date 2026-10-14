@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-account-${{ github.ref }}
+  # Runs share one dedicated non-admin server account; serialize across branches.
+  group: ios-account-shared-test-account
   cancel-in-progress: true
 
 jobs:
