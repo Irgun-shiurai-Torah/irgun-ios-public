@@ -37,6 +37,26 @@ const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
+
+// Never load a payment SDK inside the iOS reader app. Browser/web checkout
+// remains available in non-iOS builds for the separate website experience.
+let webStripeSdkPromise = null;
+function ensureWebStripeSdk() {
+  if (IS_IOS) return Promise.reject(new Error('Checkout is not offered in the iOS app.'));
+  if (typeof window.Stripe === 'function') return Promise.resolve();
+  if (!webStripeSdkPromise) {
+    webStripeSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://js.stripe.com/dahlia/stripe.js';
+      script.onload = () => typeof window.Stripe === 'function'
+        ? resolve() : reject(new Error('Secure payment form could not load.'));
+      script.onerror = () => reject(new Error('Secure payment form could not load.'));
+      document.head.appendChild(script);
+    }).catch(error => { webStripeSdkPromise = null; throw error; });
+  }
+  return webStripeSdkPromise;
+}
 const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const ADMIN_MODE_KEY = 'istAppAdminMode';
 const SPONSOR_DEDICATION_TYPES = [
@@ -3758,7 +3778,7 @@ function paidProductCard(item) {
       <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : !IS_IOS && item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : !IS_IOS ? '<button class="paid-primary" disabled>Coming Soon</button>' : ''}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
       <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>
       ${item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : ''}
-      ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
+      ${!IS_IOS && state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
     </div>
   </article>`;
 }
@@ -4061,9 +4081,8 @@ function donationProviderPanelHtml() {
   return '';
 }
 
-function iosDonationWebsiteUrl(mode = 'donation') {
+function iosDonationWebsiteUrl() {
   const params = new URLSearchParams({ from:'ios-app', method:'stripe' });
-  if (mode === 'sponsor') params.set('mode', 'sponsor');
   if (currentLanguage() === 'he') params.set('lang', 'he');
   return `${WEBSITE}donate.html?${params.toString()}`;
 }
@@ -4074,10 +4093,9 @@ function donateHtml() {
   if (IS_IOS) {
     return `<div class="page-title pro-page-title"><span class="page-kicker">SUPPORT TORAH</span><h1>${hebrew?'תמכו באירגון שיעורי תורה':'Support Irgun Shiurai Torah'}</h1><p>${hebrew?'התרומות מתבצעות באתר המאובטח של אירגון שיעורי תורה.':'Donations are completed on the secure Irgun Shiurai Torah website.'}</p></div>
       <section class="donation-provider-panel-app ios-external-donation-card">
-        <div class="payment-frame-header-app"><div><h2>${hebrew?'תרומה באתר המאובטח':'Donate on Our Secure Website'}</h2><p>${hebrew?'מטעמי מדיניות App Store, לחיצה על אחד הכפתורים תפתח את אתר אירגון שיעורי תורה בדפדפן מאובטח. התשלום אינו מעובד בתוך האפליקציה.':'To comply with App Store nonprofit donation rules, these buttons open the Irgun Shiurai Torah website in a secure browser. No charitable payment is processed inside the app.'}</p></div></div>
+        <div class="payment-frame-header-app"><div><h2>${hebrew?'תרומה באתר המאובטח':'Donate on Our Secure Website'}</h2><p>${hebrew?'תרומות לצדקה תומכות בשיעורי תורה חינמיים. תרומה אינה מעניקה גישה לתוכן בתשלום או לתכונות נוספות באפליקציה.':'Charitable donations support free Torah lectures. Donating does not unlock paid audio or additional app features.'}</p></div></div>
         <div class="ios-external-donation-actions">
           <button class="stripe-inapp-primary" type="button" data-ios-donation-web="donation">${hebrew?'תרומה כללית באתר':'Donate on Website'}</button>
-          <button class="stripe-inapp-secondary" type="button" data-ios-donation-web="sponsor">${hebrew?'הקדשת לימוד התורה באתר':'Sponsor Online Learning on Website'}</button>
         </div>
         <small>${hebrew?'האתר ייפתח באמצעות דפדפן iOS המאובטח. ניתן לחזור לאפליקציה לאחר השלמת התרומה.':'The website opens using the secure iOS browser. You can return to the app after completing the donation.'}</small>
       </section>`;
@@ -4097,7 +4115,7 @@ function setDonationSetupMessage(message, error=false) {
 async function presentNativeIosDonation(_body, sponsor) {
   // Charitable donations are handed off to the secure website rather than
   // processed with a native Stripe/Apple Pay donation flow.
-  await openExternal(iosDonationWebsiteUrl(sponsor ? 'sponsor' : 'donation'));
+  await openExternal(iosDonationWebsiteUrl());
   return true;
 }
 
@@ -4133,6 +4151,7 @@ async function prepareDonationCheckout(event) {
   state.donationPaymentStage=true; state.donationCheckoutBusy=true; state.donationCheckoutMessage='Preparing secure payment...'; state.donationSuccess=''; render();
   try {
     const data=await apiJson('/stripe/donation-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    await ensureWebStripeSdk();
     if(!window.Stripe)throw new Error('Secure Stripe payment form could not load.');
     const stripe=window.Stripe(data.publishableKey,{locale:currentLanguage()==='he'?'he':'en'});
     const checkout=await stripe.initCheckoutElementsSdk({clientSecret:data.clientSecret});
@@ -4281,7 +4300,7 @@ function privacyHtml() {
       <p><strong>פעילות בחשבון:</strong> לייקים, שמירה להמשך, היסטוריית צפייה והאזנה ומיקום המשך, מעקב אחר מגידי שיעור ונושאים, תגובות, העדפות התראות ורכישות דיגיטליות המקושרות לחשבון.</p>
       <p><strong>מידע שימושי וטכני:</strong> אירועי צפייה/האזנה, מזהה אקראי לצמצום ספירה כפולה, ולוגים רגילים של שירות ואבטחה שעשויים לכלול כתובת IP, פרטי דפדפן/אפליקציה, זמנים ושגיאות.</p>
       <h2>תרומות, תרומות חודשיות ורכישות</h2>
-      <p>תרומות בכרטיס ותרומות חודשיות עשויות להיות מעובדות באמצעות <strong>Stripe</strong>. אפשרויות אחרות עשויות להשתמש ב־<strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong> או <strong>Matbia</strong>, לפי בחירתכם. רכישות דיגיטליות עשויות להשתמש גם במערכת הרכישות של חנות האפליקציות כאשר הדבר נדרש. אירגון שיעורי תורה אינו שומר מספרי כרטיס אשראי מלאים במסד הנתונים של החשבון.</p>
+      <p>תרומות בכרטיס ותרומות חודשיות עשויות להיות מעובדות באמצעות <strong>Stripe</strong>. אפשרויות אחרות עשויות להשתמש ב־<strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong> או <strong>Matbia</strong>, לפי בחירתכם. ב־iOS ניתן להאזין לאוספים שכבר משויכים לחשבון ללא רכישה מתוך האפליקציה. אירגון שיעורי תורה אינו שומר מספרי כרטיס אשראי מלאים במסד הנתונים של החשבון.</p>
       <p>בתרומה חודשית אנו עשויים לשמור את הסכום, יום החיוב שנבחר, סוג התקופה, מספר החודשים כאשר התקופה קבועה, מזהי ספק התשלום, סטטוס והחשבון שמנהל את התרומה כאשר אתם מחוברים.</p>
       <h2>כיצד אנו משתמשים במידע</h2><p>המידע משמש להפעלת החשבון ואבטחתו, שמירת ספרייה והיסטוריית צפייה/האזנה, מעקבים ותגובות, התראות, עיבוד תרומות ורכישות, מתן גישה לתוכן שנרכש, מענה לפניות, שליחת הודעות חשבון שביקשתם, פתרון תקלות, ספירת שימוש ושיפור השירות.</p>
       <h2>ספקי שירות</h2><p>אנו עשויים להשתמש ב־<strong>Cloudflare</strong> לתשתיות, API, מסדי נתונים ואחסון; <strong>Vimeo</strong> לווידאו ושידורים חיים; <strong>Google Drive</strong> לקבצים מוגנים; <strong>Firebase</strong> לשירותי התחברות/Push נתמכים; <strong>Google</strong> ו־<strong>Apple</strong> לשירותי התחברות או אפליקציה; <strong>Stripe</strong> וספקי התשלום האחרים המפורטים לעיל; ו־<strong>Resend</strong> לשליחת אימייל.</p>
@@ -4301,7 +4320,7 @@ function privacyHtml() {
       <p><strong>Account activity:</strong> likes, Watch Later selections, watch/listen history and resume position, followed speakers/topics, comments, notification preferences, and account-linked digital purchases.</p>
       <p><strong>Usage and technical information:</strong> watch/listen events, a randomly generated visitor identifier used to reduce duplicate counting, and ordinary service/security logs that may include IP address, browser/app information, timestamps and errors.</p>
       <h2>Donations, recurring donations and purchases</h2>
-      <p>Card donations and recurring donations may be processed by <strong>Stripe</strong>. Other donation methods may use <strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong>, or <strong>Matbia</strong>, depending on what you choose. Digital purchases may also use the applicable app-store purchase system where required. Irgun Shiurai Torah does not store full payment-card numbers in the Irgun account database.</p>
+      <p>Card donations and recurring donations may be processed by <strong>Stripe</strong>. Other donation methods may use <strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong>, or <strong>Matbia</strong>, depending on what you choose. In the iOS app, existing account holders can listen to collections they already own; the app does not offer checkout. Irgun Shiurai Torah does not store full payment-card numbers in the Irgun account database.</p>
       <p>For recurring donations we may store the amount, selected billing day, term type, number of months when fixed, payment-provider identifiers, status, and the Irgun account that manages the donation when you are signed in.</p>
       <h2>How we use information</h2><p>We use information to operate and secure accounts; remember library, follows and playback history; provide comments, saved shiurim and notifications; process donations and digital purchases; provide purchased listening access; respond to messages; send requested account or follow emails; troubleshoot problems; count usage; and improve the service.</p>
       <h2>Service providers</h2><p>Our service providers may include <strong>Cloudflare</strong> for delivery, APIs, databases and storage; <strong>Vimeo</strong> for video and live playback; <strong>Google Drive</strong> for protected media/files; <strong>Firebase</strong> for supported sign-in/push services; <strong>Google</strong> and <strong>Apple</strong> for supported sign-in or app services; <strong>Stripe</strong> and the other payment providers listed above; and <strong>Resend</strong> for email delivery.</p>
@@ -5619,6 +5638,7 @@ async function loadPaidCatalog(force = false, options = {}) {
   const silent = Boolean(options?.silent);
   if (state.paidLoading) return;
   if (state.paidLoaded && !force) return;
+  if (IS_IOS && !state.user) { state.paidCatalog = []; state.paidLoaded = true; state.paidError = ''; return; }
   state.paidLoading = true;
   state.paidError = '';
   if (!silent && ['paid','library','account'].includes(state.screen)) render();
@@ -5627,7 +5647,9 @@ async function loadPaidCatalog(force = false, options = {}) {
       ? apiJson(`/paid-audio?v=${Date.now()}`)
       : publicJson(`/paid-audio?v=${Date.now()}`);
     const data = await promiseWithTimeout(paidRequest, 12000, currentLanguage()==='he' ? 'טעינת החנות ארכה זמן רב מדי. נסו שוב.' : 'The purchase page took too long to load. Please try again.');
-    state.paidCatalog = Array.isArray(data.items) ? data.items : [];
+    const fetchedItems = Array.isArray(data.items) ? data.items : [];
+    // A reader app displays only signed-in entitlements, not the shop's inventory.
+    state.paidCatalog = IS_IOS ? fetchedItems.filter(item => item.owned === true) : fetchedItems;
     state.paidLoaded = true;
     if (Capacitor.isNativePlatform() && state.user) setTimeout(warmPaidPurchases, 120);
   } catch (error) {
@@ -5697,6 +5719,7 @@ async function initPaidCheckout(productId) {
       render();
       return;
     }
+    await ensureWebStripeSdk();
     if (!window.Stripe) throw new Error('Secure Stripe payment form could not load.');
     const stripe = window.Stripe(data.publishableKey, { locale: currentLanguage() === 'he' ? 'he' : 'en' });
     const checkout = stripe.initCheckoutElementsSdk({
@@ -5851,6 +5874,15 @@ async function handleAppReturn() {
   const kind = params.get('app_return');
   const sessionId = params.get('stripe_session_id');
   if (!kind) return;
+  if (IS_IOS && kind === 'paid') {
+    // Old checkout deep links cannot initiate or resume payment inside this reader app.
+    state.screen = 'paid';
+    state.paidLoaded = false;
+    await loadPaidCatalog(true);
+    try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    render();
+    return;
+  }
   try {
     if (sessionId) {
       const data = await apiJson(`/stripe/session-status?session_id=${encodeURIComponent(sessionId)}`);
@@ -6001,8 +6033,7 @@ function bindDonationControls(root=document) {
   const qs=selector=>root.querySelector(selector);
 
   qsa('[data-ios-donation-web]').forEach(el => el.addEventListener('click', async () => {
-    const mode = el.dataset.iosDonationWeb === 'sponsor' ? 'sponsor' : 'donation';
-    try { await openExternal(iosDonationWebsiteUrl(mode)); }
+    try { await openExternal(iosDonationWebsiteUrl()); }
     catch (error) { console.warn('Could not open donation website', error); }
   }));
 
