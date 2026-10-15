@@ -3,6 +3,7 @@ import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
+import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -287,6 +288,55 @@ const state = {
 };
 
 audio.playbackRate = state.playbackSpeed;
+
+// All native iOS media, including purchased/regular audio and HLS video,
+// goes through this one Swift AVPlayer. No opt-in flag and no second player.
+const iosUnified = createIosUnifiedAVPlayer({
+  capacitor:Capacitor, registerPlugin,
+  onState:onIosUnifiedState
+});
+let iosNativeLastHistoryAt = 0;
+let iosNativeSurfacePending = false;
+function iosNativeActive() { return Boolean(iosUnified?.active); }
+function iosNativePosition() { return Math.max(0,Number(iosUnified?.state?.position)||0); }
+function iosNativeDuration() { return Math.max(0,Number(iosUnified?.state?.duration)||0); }
+function iosNativePlaying() { return Boolean(iosUnified?.state?.playing); }
+function onIosUnifiedState(snapshot) {
+  if (!snapshot?.active) return;
+  const position=Math.max(0,Number(snapshot.position)||0);
+  const duration=Math.max(0,Number(snapshot.duration)||0);
+  if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
+    state.watchResumeSeconds=position;
+    state.watchVideoPlaying=Boolean(snapshot.playing);
+  }
+  if (state.current && snapshot.mode==='audio') {
+    updatePlayerUi();
+    const id=String(state.current.id||'');
+    if (position>=30 && state.current.kind!=='paid-audio') recordPublicView(id,'audio');
+    if (state.user && Date.now()-iosNativeLastHistoryAt>15000) {
+      iosNativeLastHistoryAt=Date.now();
+      saveCurrentAudioHistory(false,false).catch(()=>{});
+    }
+  } else if (state.watchVideo && snapshot.mode==='video' && state.user &&
+             Date.now()-iosNativeLastHistoryAt>15000) {
+    iosNativeLastHistoryAt=Date.now();
+    saveHistory(videoId(state.watchVideo),'video',position,duration,false).catch(()=>{});
+  }
+}
+function scheduleIosUnifiedSurface() {
+  if (!iosNativeActive() || !state.watchVideo || state.watchMode!=='video' ||
+      iosNativeSurfacePending || state.watchPictureInPicture) return;
+  iosNativeSurfacePending=true;
+  requestAnimationFrame(()=>{
+    iosNativeSurfacePending=false;
+    if (!iosNativeActive()||!state.watchVideo||state.watchMode!=='video') return;
+    const rect=nativeVideoFrame(document);
+    if (rect) void iosUnified.layout(state.watchMinimized?'mini':'inline',rect)
+      .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
+  });
+}
+window.addEventListener('resize',scheduleIosUnifiedSurface);
+window.addEventListener('scroll',scheduleIosUnifiedSurface,true);
 
 function tr(key, values = {}) {
   if (window.IST_I18N && typeof window.IST_I18N.t === 'function') {
@@ -5061,6 +5111,25 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     if (!isCurrent()) throw new Error('Video initialization cancelled');
   };
   const videoKey = videoId(video);
+  if (iosUnified) {
+    const sources = await loadIosDirectVideoSources(video);
+    assertCurrent();
+    const url = sources?.hls || sources?.mp4 || '';
+    if (!url) throw new Error('A native HLS/MP4 video stream is not available for this shiur yet.');
+    // There is no Vimeo/WKWebView fallback on native iOS: one audio/video
+    // player is a strict ownership invariant.
+    stopNativeBackgroundAudio();
+    await iosUnified.open({
+      id:`video:${videoKey}`,url,
+      title:displayShiurTitle(video.title,'Shiur'),
+      artist:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+      position:Math.max(0,Number(startSeconds)||0),
+      rate:state.playbackSpeed,mode:'video',autoplay:Boolean(autoplay),
+      rect:nativeVideoFrame(document)||{}
+    });
+    assertCurrent();
+    return {player:createIosNativeVideoAdapter(iosUnified,`video:${videoKey}`),backend:'native'};
+  }
   if (
     IS_IOS &&
     Capacitor.isNativePlatform() &&
@@ -8095,6 +8164,19 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       return;
     }
     state.watchVimeo = player;
+    if (created.backend === 'native') {
+      state.watchVimeoReady = true;
+      state.watchResumeSeconds = iosNativePosition();
+      state.watchVideoPlaying = iosNativePlaying();
+      state.videoOwnsPlayback = true;
+      state.playerOpen = false;
+      usageAnalytics.setMedia({isPlaying:iosNativePlaying(),mediaType:'video',
+        playerState:iosNativePlaying()?'playing':'paused',shiurId:String(videoKey)});
+      if (iosNativePlaying()) usageAnalytics.event('video_start',
+        {shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
+      scheduleIosUnifiedSurface();
+      return;
+    }
     // A Watch tap can arrive after render has already started source discovery.
     // Promote that Play request, while preserving an explicit Pause during load.
     if (initialization.userInitiated && player.player && !player.player.explicitlyPaused) player.player.autoplayWanted = true;
