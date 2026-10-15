@@ -5198,12 +5198,15 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
   if (iosUnified) {
     const sources = await loadIosDirectVideoSources(video);
     assertCurrent();
-    const url = sources?.hls || sources?.mp4 || '';
-    if (!url) throw new Error('A native HLS/MP4 video stream is not available for this shiur yet.');
-    // There is no Vimeo/WKWebView fallback on native iOS: one audio/video
-    // player is a strict ownership invariant.
+    const directUrl = sources?.hls || sources?.mp4 || '';
+    // Vimeo-only shiurim have no Drive HLS or MP4 yet. Use the Worker-owned
+    // Vimeo file route as a stable AVPlayer URL; never start a WebKit iframe.
+    const vimeoId = String(video.vimeoId || videoKey).match(/^(\d+)/)?.[1] || '';
+    const vimeoUrl = video.sourceType !== 'drive-library' && vimeoId
+      ? `${API}/download/${encodeURIComponent(vimeoId)}?type=vimeo` : '';
+    if (!directUrl && !vimeoUrl) throw new Error('No native video source is available for this shiur.');
     stopNativeBackgroundAudio();
-    await iosUnified.open({
+    const openNative = url => iosUnified.open({
       id:`video:${videoKey}`,url,
       title:displayShiurTitle(video.title,'Shiur'),
       artist:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
@@ -5211,6 +5214,18 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
       rate:state.playbackSpeed,mode:'video',autoplay:Boolean(autoplay),
       rect:nativeVideoFrame(document)||{}
     });
+    if (directUrl) {
+      try {
+        await openNative(directUrl);
+      } catch (error) {
+        assertCurrent();
+        if (!vimeoUrl) throw error;
+        console.warn('Native Drive/HLS video failed; retrying with Vimeo source',error);
+        await openNative(vimeoUrl);
+      }
+    } else {
+      await openNative(vimeoUrl);
+    }
     assertCurrent();
     return {player:createIosNativeVideoAdapter(iosUnified,`video:${videoKey}`),backend:'native'};
   }
