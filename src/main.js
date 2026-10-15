@@ -5473,7 +5473,7 @@ function watchHtml() {
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${audio.paused ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</div></div>`}
+          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(iosAudioUiDuration()) ? iosAudioUiDuration() : 0}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -5521,8 +5521,8 @@ function miniPlayerHtml() {
     <div class="mini-progress"><span id="miniProgress"></span></div>
     <div class="mini-main">
       <button class="circle-btn" data-skip="-${state.skipSeconds}">-${state.skipSeconds}</button>
-      <div class="mini-copy"><strong>${esc(c.title || 'Shiur')}</strong><span id="miniTime">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</span></div>
-      <button class="circle-btn play" data-play-toggle="1">${audio.paused ? '&#9654;' : 'II'}</button>
+      <div class="mini-copy"><strong>${esc(c.title || 'Shiur')}</strong><span id="miniTime">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</span></div>
+      <button class="circle-btn play" data-play-toggle="1">${iosAudioUiPaused() ? '&#9654;' : 'II'}</button>
       <button class="circle-btn" data-skip="${state.skipSeconds}">+${state.skipSeconds}</button>
     </div>
   </div>`;
@@ -5545,9 +5545,9 @@ function fullPlayerHtml() {
       <div class="player-art ${c.thumbnail ? '' : 'audio-logo'}">${c.thumbnail ? `<img src="${esc(c.thumbnail)}" alt="">` : '<img src="/logo.png" alt="Irgun Shiurai Torah">'}</div>
       <div class="player-heading"><h2>${esc(c.title || '')}</h2><p>${esc(c.subtitle || '')}</p></div>
       ${followButtons ? `<div class="follow-bar player-follow-bar">${followButtons}</div>` : ''}
-      <input id="fullSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1">
-      <div class="time-row"><span id="fullCurrent">${fmtTime(audio.currentTime)}</span><span id="fullDuration">${fmtDurationOrUnknown(audio.duration)}</span></div>
-      <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${audio.paused ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
+      <input id="fullSeek" class="seek" type="range" min="0" max="${Number.isFinite(iosAudioUiDuration()) ? iosAudioUiDuration() : 0}" value="${iosAudioUiPosition() || 0}" step="1">
+      <div class="time-row"><span id="fullCurrent">${fmtTime(iosAudioUiPosition())}</span><span id="fullDuration">${fmtDurationOrUnknown(iosAudioUiDuration())}</span></div>
+      <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
       <div class="player-action-grid">
         ${isPaid ? `<button data-paid-bookmark-current="1">${svgIcon('bookmark')}<span>Bookmark</span></button>${Number(c.bookmarkSeconds) > 0 ? `<button data-paid-go-bookmark="1">${svgIcon('back15')}<span>Go to ${fmtTime(c.bookmarkSeconds)}</span></button>` : ''}<button data-nav="paid">${svgIcon('store')}<span>Paid Shiurim</span></button>` : `${canWatch ? `<button data-player-watch="${esc(c.id)}">${svgIcon('video')}<span>Watch</span></button>` : ''}<button class="${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span>${liked ? 'Liked' : 'Like'}</span></button><button class="${savePresentation?.cls || ''}" data-open-playlist-picker="1" data-playlist-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-playlist-id="${esc(c.id)}">${svgIcon('bookmark')}<span>${tr(savePresentation?.label || 'Save')}</span></button><button data-share-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-share-id="${esc(c.id)}">${svgIcon('share')}<span>Share</span></button><button data-download-kind="${c.kind === 'library-audio' ? 'audio' : 'video-audio'}" data-download-id="${esc(c.id)}">${svgIcon('download')}<span>Download</span></button><button data-save-offline-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-save-offline-id="${esc(c.id)}" class="${offlineState?.cls || ''}">${offlineIconHtml()}<span>${esc(offlineState?.label || (currentLanguage()==='he'?'האזנה ללא אינטרנט':'Listen Offline'))}</span>${offlineState?.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>`}
       </div>
@@ -7482,6 +7482,7 @@ function stopNativeBackgroundAudio() {
   if (nativeBackgroundAudioAvailable()) IrgunBackgroundAudio.stop({clear:true}).catch(() => {});
 }
 function prepareNativeBackgroundAudio(item, isPlaying, position, mediaType = 'video', force = false) {
+  if (iosNativeActive()) return; // The same AVPlayer already handles background.
   if (!nativeBackgroundAudioAvailable() || mediaType !== 'video' || document.hidden || state.nativeBackgroundPending) return;
   if (!state.watchVideo || state.watchMode !== 'video' || String(videoId(state.watchVideo)) !== String(item.id || videoId(item))) return;
   const player = state.watchVimeo;
@@ -7796,6 +7797,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
 }
 
 function currentVideoClockForBackground() {
+  if (iosNativeActive()) return iosNativePosition();
   const player = state.watchVimeo;
   const directVideo = player?.video || player?.player?.v || null;
   const directTime = Number(directVideo?.currentTime);
@@ -7892,6 +7894,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
+  if (iosNativeActive()) return; // Native AVPlayer has no WebKit -> background handoff.
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
@@ -7979,6 +7982,7 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
+  if (iosNativeActive()) {scheduleIosUnifiedSurface();return;}
   restoreVideoAfterSystemPip();
   if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
@@ -7992,7 +7996,7 @@ async function preserveWatchTime() {
   if (state.watchMode === 'video') {
     state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0);
   } else if (state.watchMode === 'audio' && state.current && state.current.id === videoId(state.watchVideo)) {
-    state.watchResumeSeconds = state.pendingAudioSeek?.target || audio.currentTime || 0;
+    state.watchResumeSeconds = iosAudioUiActive() ? iosNativePosition() : (state.pendingAudioSeek?.target || audio.currentTime || 0);
   }
 }
 
@@ -8722,6 +8726,7 @@ window.addEventListener('irgunNativeDidBecomeActive', () => {
 
 let iosInterruptedPlayback = null;
 function rememberIosInterruptedPlayback() {
+  if (iosNativeActive()) return; // Native AVAudioSession owns interruptions and remote commands.
   if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo?.video && !state.watchVimeo.video.paused) {
     iosInterruptedPlayback = { kind:'video', videoId:String(videoId(state.watchVideo)) };
     return;
@@ -8733,6 +8738,7 @@ function rememberIosInterruptedPlayback() {
   iosInterruptedPlayback = null;
 }
 function resumeIosInterruptedPlayback() {
+  if (iosNativeActive()) return;
   const interrupted = iosInterruptedPlayback;
   iosInterruptedPlayback = null;
   if (!interrupted) return;
@@ -8747,6 +8753,7 @@ function resumeIosInterruptedPlayback() {
 }
 function pauseForIosRouteLoss() {
   iosInterruptedPlayback = null;
+  if (iosNativeActive()) {void iosUnified.pause().catch(()=>{});return;}
   if (state.watchVideo && state.watchMode === 'video') {
     try { state.watchVimeo?.pause?.(); } catch (_) {}
   } else if (state.current) {
