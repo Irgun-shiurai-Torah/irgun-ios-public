@@ -2,6 +2,7 @@ import './style.css';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
+import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -37,6 +38,21 @@ const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
+if (IS_IOS) document.body.classList.add('irgun-ios');
+
+// One iOS navigation element stays outside #app as pages and Watch renders
+// change. The UI has an Android-style sliding active-tab indicator.
+const syncIosBottomNavigation = createIosBottomNavigation({
+  isIos: () => IS_IOS && Capacitor.isNativePlatform(),
+  document,
+  model: () => ({
+    root: iosNavigationRoot(state.screen, state.iosNavRoot),
+    language: currentLanguage()
+  }),
+  markup: bottomNavHtml,
+  navigate: navigateIosBottomTab
+});
+
 
 // Never load a payment SDK inside the iOS reader app. Browser/web checkout
 // remains available in non-iOS builds for the separate website experience.
@@ -82,6 +98,7 @@ const state = {
   usingCachedLibrary: false,
   offlineCacheSavedAt: 0,
   screen: 'home',
+  iosNavRoot: 'home',
   videos: [],
   audioItems: [],
   videoById: new Map(),
@@ -3375,9 +3392,9 @@ function bottomNavHtml() {
     ['library', 'Library', 'library'],
     ['account', 'Account', 'account']
   ];
-  const activeRoot = state.screen.startsWith('live') ? 'live' : state.screen;
-  return `<nav class="bottom-nav">${items.map(([key, label, icon]) => `
-    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}">
+  const activeRoot = IS_IOS ? iosNavigationRoot(state.screen, state.iosNavRoot) : (state.screen.startsWith('live') ? 'live' : state.screen);
+  return `<nav class="bottom-nav${IS_IOS ? ' ios-floating-nav' : ''}" aria-label="${currentLanguage()==='he'?'ניווט ראשי':'Main navigation'}">${IS_IOS ? '<span class="nav-active-indicator" aria-hidden="true"></span>' : ''}${items.map(([key, label, icon]) => `
+    <button type="button" class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${IS_IOS && activeRoot === key ? ' aria-current="page"' : ''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
 }
@@ -3407,7 +3424,7 @@ function shell(content) {
     <main class="content">${content}</main>
     ${state.current && !watchAudioOwnsUi && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
-    ${bottomNavHtml()}
+    ${IS_IOS ? '' : bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
@@ -5910,6 +5927,11 @@ function analyticsScreenLabel() {
 // Preserve the current touch target until an eligible tab gesture completes.
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
+  syncIosBottomNavigation();
+  if (IS_IOS && state.screen === 'library' && !state.user &&
+      ['likes','later','history','following'].includes(state.librarySection)) {
+    state.librarySection = 'downloads';
+  }
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {
@@ -6066,6 +6088,41 @@ function bindDonationControls(root=document) {
   qs('#donationStripeForm')?.addEventListener('submit', prepareDonationCheckout);
   qs('#donationPayButton')?.addEventListener('click', confirmDonationCheckout);
   qsa('[data-donation-back]').forEach(el => el.addEventListener('click', () => closeDonationCheckout(true)));
+}
+
+let iosNavigationSequence = 0;
+async function navigateIosBottomTab(button) {
+  if (!IS_IOS) return;
+  const next = button.dataset.nav;
+  if (!['home','shiurim','live','library','account'].includes(next)) return;
+  const sequence = ++iosNavigationSequence;
+  state.iosNavRoot = next;
+  syncIosBottomNavigation();
+  try {
+    await prepareIosTabNavigation({
+      state,
+      exitFullscreen: async () => {
+        // Exit without replacing the current HLS/video element or source.
+        const player = state.watchVimeo?.player;
+        if (typeof player?.exitFullscreen === 'function') player.exitFullscreen();
+      },
+      minimizeVideo: () => minimizeWatchToPersistent(),
+      closeAudioWatch: () => closeWatch(true)
+    });
+  } catch (error) {
+    console.warn('iOS tab player presentation failed', error);
+  }
+  if (sequence !== iosNavigationSequence) return;
+  state.screen = next;
+  if (next === 'library' && !state.user &&
+      ['likes','later','history','following'].includes(state.librarySection)) {
+    state.librarySection = 'downloads';
+  }
+  if (next === 'live') { state.scheduleDataLoaded = false; state.liveStatusLoaded = false; }
+  state.libraryLimit = 48;
+  state.filterDialog = '';
+  render();
+  window.scrollTo({ top:0, behavior:'smooth' });
 }
 
 function bind() {
@@ -6521,7 +6578,9 @@ function bind() {
     state.playbackSpeed = Number(el.dataset.speedChoice) || 1;
     audio.playbackRate = state.playbackSpeed;
     localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
-    render();
+    // Updating one setting should not rebuild or scroll the playing sheet.
+    document.querySelectorAll('[data-speed-choice]').forEach(button =>
+      button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
   }));
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
