@@ -36,6 +36,7 @@ const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
+const IrgunVideoDisplay = registerPlugin('IrgunVideoDisplay');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
 if (IS_IOS) document.body.classList.add('irgun-ios');
@@ -3445,6 +3446,58 @@ function clearPersistentVideoMount() {
   document.body.classList.remove('irgun-system-pip-active');
 }
 
+let iosVideoDisplayKey = '';
+let iosSensorFullscreenDirection = '';
+function syncIosVideoDisplay() {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  const active = Boolean(state.watchVideo && state.watchMode === 'video');
+  const direct = state.watchVimeo?.player;
+  const playing = active && Boolean(state.watchVideoPlaying ||
+    (direct?.autoplayWanted && !direct?.explicitlyPaused));
+  const presentation = {
+    active, playing,
+    mini: active && Boolean(state.watchMinimized),
+    pip: active && Boolean(state.watchPictureInPicture)
+  };
+  const key = JSON.stringify(presentation);
+  if (key === iosVideoDisplayKey) return;
+  iosVideoDisplayKey = key;
+  IrgunVideoDisplay.playback(presentation).catch(error => {
+    if (iosVideoDisplayKey === key) iosVideoDisplayKey = '';
+    console.warn('iOS video orientation/idle-time policy unavailable', error);
+  });
+}
+async function bindIosVideoOrientation() {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  try {
+    await IrgunVideoDisplay.addListener('orientation', ({fullscreen,direction}) => {
+      if (document.hidden || !state.watchVideo || state.watchMode !== 'video' ||
+          state.watchMinimized || state.watchPictureInPicture) return;
+      // Only direct HLS owns the page's element and custom fullscreen. Native
+      // Vimeo fallback keeps its own presentation; do not replace that player.
+      const direct = state.watchVimeo?.player;
+      if (!direct || typeof direct.enterCustomFullscreen !== 'function') return;
+      const landscape = Boolean(fullscreen);
+      if (landscape && direct.customFullscreen) {
+        void IrgunVideoDisplay.setFullscreen({enabled:true,fromSensor:true,direction}).catch(()=>{});
+        return;
+      }
+      if (landscape && !direct.customFullscreen) {
+        iosSensorFullscreenDirection = String(direction || 'landscapeLeft');
+        try { direct.enterCustomFullscreen(); }
+        finally { iosSensorFullscreenDirection = ''; }
+      } else if (!landscape && direct.customFullscreen) {
+        iosSensorFullscreenDirection = 'portrait';
+        try { direct.exitFullscreen(); }
+        finally { iosSensorFullscreenDirection = ''; }
+      }
+    });
+  } catch (error) {
+    console.warn('Native iOS orientation listener unavailable', error);
+  }
+}
+if (IS_IOS && Capacitor.isNativePlatform()) void bindIosVideoOrientation();
+
 function refreshPersistentMiniVideoChrome() {
   if (!persistentVideoMount) return;
   const button = persistentVideoMount.querySelector('[data-mini-video-play-toggle]');
@@ -3500,6 +3553,7 @@ function enterIosPictureInPicture(event) {
   // Mark the transition now so it cannot replace the video with audio at zero.
   state.watchResumeSeconds = currentVideoClockForBackground();
   state.watchPictureInPicture = true;
+  syncIosVideoDisplay();
 
   try {
     if (typeof player.preparePictureInPicture === 'function') player.preparePictureInPicture();
@@ -3583,6 +3637,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   state.watchHostedExternally = true;
   const mini = mode === 'mini';
   state.watchMinimized = mini;
+  syncIosVideoDisplay();
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
   document.body.classList.toggle('irgun-watch-mini-hosted', mini);
   bindPersistentVideoChrome();
@@ -3620,6 +3675,7 @@ async function minimizeWatchToPersistent() {
   if (!state.watchVideo || state.watchMode !== 'video' || state.watchMinimized) return;
   if (!state.watchHostedExternally && !hostCurrentWatchOverlay('mini')) return;
   state.watchMinimized = true;
+  syncIosVideoDisplay();
   persistentVideoMount.classList.remove('watch-full-host');
   persistentVideoMount.classList.add('watch-mini-host');
   document.body.classList.add('irgun-watch-mini-hosted');
@@ -3630,6 +3686,7 @@ async function minimizeWatchToPersistent() {
 async function expandPersistentWatch() {
   if (!state.watchVideo || !state.watchMinimized) return;
   state.watchMinimized = false;
+  syncIosVideoDisplay();
   if (persistentVideoMount) {
     persistentVideoMount.classList.remove('watch-mini-host');
     persistentVideoMount.classList.add('watch-full-host');
@@ -4838,6 +4895,13 @@ class IosDirectVideoAdapter {
       iframe,
       poster,
       apiBase: API,
+      speed: state.playbackSpeed,
+      onSpeedChange: rate => {
+        const speed = [0.75,1,1.25,1.5,1.75,2].includes(Number(rate)) ? Number(rate) : 1;
+        state.playbackSpeed = speed;
+        audio.playbackRate = speed;
+        localStorage.setItem(SPEED_KEY, String(speed));
+      },
       onTimeUpdate: state => this.emit('timeupdate', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPlay: state => this.emit('play', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPause: state => this.emit('pause', { seconds:state.position || 0, duration:state.duration || 0 }),
@@ -5928,6 +5992,7 @@ function analyticsScreenLabel() {
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
   syncIosBottomNavigation();
+  syncIosVideoDisplay();
   if (IS_IOS && state.screen === 'library' && !state.user &&
       ['likes','later','history','following'].includes(state.librarySection)) {
     state.librarySection = 'downloads';
@@ -7793,6 +7858,7 @@ async function closeWatch(save = true) {
   state.watchVimeoGeneration += 1;
   clearPersistentVideoMount();
   state.watchVideo = null;
+  syncIosVideoDisplay();
   state.backgroundVideoReturnToVideo = false;
   state.pipBackgroundReturnPending = false;
   state.pipWasBackgrounded = false;
@@ -8137,6 +8203,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       hardStopHtmlAudioForVideo();
       state.playerOpen = false;
       state.watchVideoPlaying = true;
+      syncIosVideoDisplay();
       refreshPersistentMiniVideoChrome();
       await setVimeoHandoffMuted(player, false);
       if (!isCurrentPlayer()) return;
@@ -8150,7 +8217,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchResumeSeconds = Math.max(0, Number(t) || state.watchResumeSeconds || 0);
       if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
     });
-    player.on('pause', async () => { if (!isCurrentPlayer()) return; state.watchVideoPlaying = false; usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
+    player.on('pause', async () => { if (!isCurrentPlayer()) return; state.watchVideoPlaying = false; syncIosVideoDisplay(); usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
     let resumeAfterPip = false;
     if (player.on) {
       player.on('pictureinpictureintent', data => {
@@ -8163,7 +8230,12 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         prepareNativeBackgroundAudio(videoMediaItem, state.watchVideoPlaying, currentVideoClockForBackground(), 'video', true);
       });
       player.on('fullscreenchange', data => {
-        if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
+        if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+        IrgunVideoDisplay.setFullscreen({
+          enabled: Boolean(data && data.fullscreen),
+          fromSensor: Boolean(iosSensorFullscreenDirection),
+          direction: iosSensorFullscreenDirection || ''
+        }).catch(error => console.warn('Native iOS fullscreen orientation unavailable', error));
       });
       player.on('enterpictureinpicture', () => {
         if (!isCurrentPlayer()) return;
