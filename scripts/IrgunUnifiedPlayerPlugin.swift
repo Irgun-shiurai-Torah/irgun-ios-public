@@ -46,6 +46,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var nativeSeek: UISlider?
     private var nativeElapsed: UILabel?
     private var nativeDuration: UILabel?
+    private var fullscreenButtonTaps = 0
     private var qualityHeight: Int = 0
     private var availableHeights: [Int] = []
     private var isPiPRequested = false
@@ -296,6 +297,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "surfaceWidth": Double(viewer.view.frame.width),
             "surfaceHeight": Double(viewer.view.frame.height),
             "surfaceInteractive": viewer.view.isUserInteractionEnabled,
+            "fullscreenButtonTaps": fullscreenButtonTaps,
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
         #if targetEnvironment(simulator)
@@ -554,7 +556,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         result.layer.cornerRadius = 10
         result.addTarget(self, action: selector, for: .touchUpInside)
         result.widthAnchor.constraint(equalToConstant: width).isActive = true
-        result.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        // Native iPad fullscreen controls need Apple's minimum 44pt hit target.
+        // A 34pt button under the status-bar edge can be reported as hittable
+        // by XCTest without UIKit receiving its touchUpInside action.
+        result.heightAnchor.constraint(equalToConstant: 44).isActive = true
         return result
     }
 
@@ -576,7 +581,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let pip = button("PiP", width: 40, selector: #selector(tapPiP))
         let quality = button("Auto", width: 58, selector: #selector(tapQuality))
         let speed = button("1×", width: 52, selector: #selector(tapSpeed))
-        let full = button("⛶", width: 34, selector: #selector(tapFull))
+        let full = button("⛶", width: 44, selector: #selector(tapFull))
         mini.accessibilityIdentifier = "irgun-native-mini"
         mini.accessibilityLabel = "Keep playing at bottom of app"
         pip.accessibilityIdentifier = "irgun-native-pip"
@@ -597,7 +602,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         top.alignment = .center
         overlay.addSubview(top)
         NSLayoutConstraint.activate([
-            top.topAnchor.constraint(equalTo: overlay.topAnchor, constant: 5),
+            // Never put the exit-fullscreen button inside the iPad status bar,
+            // camera housing, or the iPhone dynamic island.
+            top.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 7),
             top.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -6),
             top.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 4)
         ])
@@ -746,6 +753,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     @objc private func tapFull() {
+        fullscreenButtonTaps += 1
         layout = layout == "full" ? "inline" : "full"
         placeSurface(lastSurfaceRect)
         notifyListeners("requestFullscreen", data: ["fullscreen": layout == "full"])
