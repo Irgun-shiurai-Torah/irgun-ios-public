@@ -45,6 +45,8 @@ test('video watch and audio sheet use Follow controls and refresh locale',()=>{
   assert.match(app,/const followButtons = currentFollowButtons\(v\)/);
   assert.match(app,/const followButtons = currentFollowButtons\(sourceItem\)/);
   assert.match(app,/data-follow-label-he/);
-  assert.match(app,/followVerb\(following, currentLanguage\(\) === 'he'\)/);
+  // Follow buttons compute the locale once and pass that flag to followVerb.
+  assert.match(app,/const he\s*=\s*currentLanguage\(\)\s*===\s*'he'/);
+  assert.match(app,/followVerb\(following,\s*he\)/);
   assert.match(app,/WEBSITE \+ 'library-metadata\.json'/);
 });
