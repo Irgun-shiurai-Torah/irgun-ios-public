@@ -525,8 +525,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 call.reject("Unsupported native video layout")
                 return
             }
-            if next == "mini" && self.pipController?.isPictureInPictureActive == true {
-                self.pipController?.stopPictureInPicture()
+            if next == "mini" {
+                if self.pipController?.isPictureInPictureActive == true {
+                    self.pipController?.stopPictureInPicture()
+                }
                 self.isPiPRequested = false
                 self.notifyListeners("pipState", data:["active":false,"reason":"mini"])
             }
@@ -880,6 +882,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         placeSurface(lastSurfaceRect)
     }
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        if layout == "mini" || mode != "video" || !active {
+            pictureInPictureController.stopPictureInPicture()
+            isPiPRequested = false
+            notifyListeners("pipState", data:["active":false,"reason":"mini"])
+            return
+        }
         isPiPRequested = true
         notifyListeners("pipState", data:["active":true])
         placeSurface(lastSurfaceRect)
