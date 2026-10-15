@@ -285,6 +285,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "qualities": availableHeights,
             "pipActive": pipController?.isPictureInPictureActive ?? false,
             "pipSupported": AVPictureInPictureController.isPictureInPictureSupported(),
+            "pipPossible": pipController?.isPictureInPicturePossible ?? false,
             "layerReady": videoLayer.isReadyForDisplay && !viewer.view.isHidden,
             "overlayOccluded": overlayOccluded,
             "pipRequested": isPiPRequested,
