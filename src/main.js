@@ -8002,6 +8002,44 @@ async function preserveWatchTime() {
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  if (iosNativeActive() && String(iosUnified.id)===`video:${videoId(state.watchVideo)}`) {
+    const wasAudio=state.watchMode==='audio';
+    const lecture=state.watchVideo;
+    const at=iosNativePosition(),duration=iosNativeDuration();
+    if (save && state.user) {
+      await saveHistory(videoId(lecture),wasAudio?'audio':'video',at,duration,false).catch(()=>{});
+    }
+    if (wasAudio) {
+      // Same AVPlayer keeps playing in the Library's Mini audio presentation.
+      state.current=state.current||{
+        kind:'video-audio',id:String(videoId(lecture)),
+        title:displayShiurTitle(lecture.title,'Shiur'),
+        subtitle:lecture._speakerLabel||lecture.speaker||'',
+        url:audioUrl(mediaApiId(lecture,videoId(lecture))),native:true
+      };
+    } else {
+      await iosUnified.stop().catch(error=>console.warn('Native video close failed',error));
+      state.current=null;
+    }
+    try { await state.watchVimeo?.destroy?.(); } catch (_) {}
+    state.watchVimeo=null;
+    state.watchVimeoReady=false;
+    state.watchVimeoGeneration+=1;
+    clearPersistentVideoMount();
+    state.watchVideo=null;
+    state.watchMinimized=false;
+    state.watchHostedExternally=false;
+    state.watchPictureInPicture=false;
+    state.videoOwnsPlayback=false;
+    state.playerOpen=false;
+    state.watchComments=[];
+    state.watchCommentsError='';
+    state.editingCommentId='';
+    state.watchMode=wasAudio?'audio':'video';
+    syncIosVideoDisplay();
+    render();
+    return;
+  }
   stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
