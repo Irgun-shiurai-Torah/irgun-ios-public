@@ -12,6 +12,8 @@ import UIKit
 // to drop). A single player layer supports inline, Mini, fullscreen and PiP.
 @objc(IrgunUnifiedPlayerPlugin)
 public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
+    public static weak var current: IrgunUnifiedPlayerPlugin?
+    public func simulatorSnapshot() -> [String: Any] { return snapshot() }
     public let identifier = "IrgunUnifiedPlayerPlugin"
     public let jsName = "IrgunUnifiedPlayer"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -67,6 +69,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
     override public func load() {
+        Self.current = self
         viewer.view.backgroundColor = .black
         videoLayer.player = player
         videoLayer.videoGravity = .resizeAspect
@@ -797,6 +800,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     deinit {
+        pipController?.stopPictureInPicture()
         playerObserver = nil
         itemObserver = nil
         if let token = timeObserver { player.removeTimeObserver(token) }
