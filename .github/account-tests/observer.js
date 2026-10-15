@@ -88,7 +88,17 @@ window.ISTAccountTest = { snapshot() {
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
   for (const [key, query] of Object.entries(queries)) {
-    const candidates = [...document.querySelectorAll(query)];
+    const rendered = [...document.querySelectorAll(query)];
+    // The newest lecture may be Vimeo-only or have no speaker metadata.
+    // Only select a real lecture with an actual speaker Follow button, so
+    // account tests exercise the feature instead of assuming every shiur
+    // has a speaker chip. This instrumentation does NOT alter live app UI.
+    const candidates = key === 'open'
+      ? rendered.filter(element => {
+          const lecture = state.videoById?.get(String(element.dataset.watch || ''));
+          return (lecture?._speakerIds || []).some(id => Boolean(String(speakerLabel(id) || '').trim()));
+        })
+      : rendered;
     const element = candidates[0];
     if (element) {
       const r=element.getBoundingClientRect();
