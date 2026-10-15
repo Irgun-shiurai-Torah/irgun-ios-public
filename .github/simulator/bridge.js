@@ -264,7 +264,7 @@ window.ISTSimulator = {
       expandX: expandBox ? expandBox.left + expandBox.width / 2 : 0,
       expandY: expandBox ? expandBox.top + expandBox.height / 2 : 0,
       pip: native ? native.pipActive === true : Boolean(state.watchPictureInPicture || document.pictureInPictureElement === video || video?.webkitPresentationMode === 'picture-in-picture'),
-      pipSupported: native ? native.pipSupported === true : Boolean(video && ((document.pictureInPictureEnabled && video.requestPictureInPicture) ||
+      pipSupported: native ? (native.pipSupported === true && native.pipPossible === true) : Boolean(video && ((document.pictureInPictureEnabled && video.requestPictureInPicture) ||
         video.webkitSupportsPresentationMode?.('picture-in-picture'))),
       pipDiagnostic: (() => {
         const info=document.getElementById('dmPip')?.__irgunPipDiagnostic;
