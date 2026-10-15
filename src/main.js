@@ -3709,6 +3709,7 @@ function hostCurrentWatchOverlay(mode = 'full') {
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
   document.body.classList.toggle('irgun-watch-mini-hosted', mini);
   bindPersistentVideoChrome();
+  scheduleIosUnifiedSurface();
   return Boolean(persistentVideoMount.querySelector('#watchVimeoFrame'));
 }
 
@@ -3749,6 +3750,7 @@ async function minimizeWatchToPersistent() {
   document.body.classList.add('irgun-watch-mini-hosted');
   bindPersistentVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  scheduleIosUnifiedSurface();
 }
 
 async function expandPersistentWatch() {
@@ -3762,6 +3764,7 @@ async function expandPersistentWatch() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   refreshPersistentMiniVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  scheduleIosUnifiedSurface();
 }
 
 function homeHtml() {
@@ -6116,6 +6119,7 @@ function render() {
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
+  if (iosNativeActive()) setTimeout(scheduleIosUnifiedSurface,0);
   if (state.watchVideo && state.watchMode === 'video') setTimeout(initWatchVimeo, 0);
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
@@ -8030,6 +8034,49 @@ async function destroyWatchVideoOwner() {
 async function switchWatchMode(mode) {
   if (!state.watchVideo || state.mediaSwitchBusy) return;
   if (!['video', 'audio'].includes(mode) || mode === state.watchMode) return;
+
+  if (iosNativeActive() && state.watchVimeo?.isIrgunUnifiedNativeAVPlayer) {
+    const video=state.watchVideo;
+    const id=videoId(video);
+    if (mode==='audio' && !video.hasAudio) return;
+    state.mediaSwitchBusy=true;
+    try {
+      // Swift setMode only hides/shows the same AVPlayerLayer. It never
+      // replaces or seeks its AVPlayerItem, so the audio clock cannot reset.
+      const previous=state.watchResumeSeconds;
+      const snapshot=await iosUnified.mode(mode);
+      state.watchMode=mode;
+      state.watchResumeSeconds=Math.max(0,Number(snapshot?.position)||previous||0);
+      state.watchVideoPlaying=Boolean(snapshot?.playing);
+      state.playerOpen=false;
+      if (mode==='audio') {
+        state.videoOwnsPlayback=false;
+        state.current={
+          kind:'video-audio', id:String(id),sourceId:mediaApiId(video,id),
+          title:displayShiurTitle(video.title,'Shiur'),
+          subtitle:[video.showcase,video._speakerLabel,video._topicLabel].filter(Boolean).join(' - '),
+          thumbnail:video.thumbnail||'', url:audioUrl(mediaApiId(video,id)),
+          networkUrl:audioUrl(mediaApiId(video,id)),native:true
+        };
+        clearPersistentVideoMount();
+      } else {
+        state.videoOwnsPlayback=true;
+        state.current=null;
+        state.watchMinimized=false;
+      }
+      render();
+      if (mode==='video') {
+        hostCurrentWatchOverlay('full');
+        scheduleIosUnifiedSurface();
+      }
+    } catch(error) {
+      console.error('One AVPlayer Video/Audio mode switch failed',error);
+      setToast('Could not switch player mode. Playback was not restarted.');
+    } finally {
+      state.mediaSwitchBusy=false;
+    }
+    return;
+  }
 
   const video = state.watchVideo;
   const id = videoId(video);
