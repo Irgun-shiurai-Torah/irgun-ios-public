@@ -65,14 +65,20 @@ window.ISTSimulator = {
         if (state.watchMode !== mode) await switchWatchMode(mode);
         await new Promise((resolve,reject) => {
           const start = Date.now(), check = () => {
-            if (mode === 'audio' ? (state.current && audio.readyState >= 2 && !state.pendingAudioSeek) : (state.watchVimeoReady && state.watchVimeo?.video?.readyState >= 2)) resolve();
+            if (iosNativeActive()
+              ? (iosUnified.state.ready && iosUnified.state.mode === mode && (!state.watchVideo || state.watchVimeoReady))
+              : (mode === 'audio' ? (state.current && audio.readyState >= 2 && !state.pendingAudioSeek) : (state.watchVimeoReady && state.watchVimeo?.video?.readyState >= 2))) resolve();
             else if (Date.now()-start>90000) reject(new Error('Screenshot video did not become ready'));
             else setTimeout(check,250);
           }; check();
         });
         if (page === 'audio-player') { state.screen='home'; state.playerOpen = true; render(); }
         else if (page === 'mini-player') { state.screen='home'; render(); await minimizeWatchToPersistent(); }
-        else if (page === 'fullscreen') { if (state.watchMinimized) await expandPersistentWatch(); document.getElementById('dmFull')?.click(); }
+        else if (page === 'fullscreen') {
+          if (state.watchMinimized) await expandPersistentWatch();
+          if (iosNativeActive()) await iosUnified.layout('full', nativeVideoFrame(document)||{});
+          else document.getElementById('dmFull')?.click();
+        }
       } else {
         state.screen = page.startsWith('library-') ? 'library' : page.startsWith('filter-') ? 'shiurim' : page === 'register' ? 'account' : page;
         if (page.startsWith('library-')) state.librarySection = page.slice(8);
@@ -98,7 +104,9 @@ window.ISTSimulator = {
           const start=Date.now(),check=()=>{
             this.snapshot();
             const player=state.watchVimeo?.player;
-            if(simulatorFrames>0&&simulatorVisible(player?.v)&&!player?.loading&&player?.load?.hidden!==false)resolve();
+            if(iosNativeActive()
+              ? (Number(iosUnified.state.decodedFrames)>0 && iosUnified.state.layerReady === true)
+              : (simulatorFrames>0&&simulatorVisible(player?.v)&&!player?.loading&&player?.load?.hidden!==false))resolve();
             else if(Date.now()-start>30000)reject(new Error('Screenshot video has no presented frame or is still loading'));
             else setTimeout(check,250);
           };check();
@@ -159,16 +167,32 @@ window.ISTSimulator = {
   },
   snapshot() {
     const video = state.watchVimeo?.video;
+    // Production's single AVPlayer has no DOM video. Expose live bridge state
+    // only; the simulator's Swift probe separately reads the actual AVPlayer.
+    const native = iosNativeActive() ? iosUnified.state : null;
+    const nativeVideo = Boolean(native && native.mode === 'video');
+    const nativeVideoVisible = nativeVideo && native.layerReady === true &&
+      native.overlayOccluded !== true && native.layout !== 'mini' && native.pipActive !== true;
     const videoBox = video?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
-    const contentBox = document.querySelector('.content')?.getBoundingClientRect();
+    const contentRoot = document.querySelector('.content');
+    const contentBox = contentRoot?.getBoundingClientRect();
+    const renderedScreen = contentRoot?.dataset?.screen || '';
+    const tabSwipeReady = renderedScreen === state.screen &&
+      !state.iosNavPending && !state.loading && !state.error &&
+      !state.playerOpen && !state.filterDialog &&
+      (!state.watchVideo || state.watchMinimized) &&
+      !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop');
     let tabSwipeY = 0;
-    // Pick a real content row after layout; refuse header, input and carousel hits.
-    for (let y = Math.max(180, contentBox?.top + 24 || 180); y < innerHeight - 140; y += 20) {
+    // Test only a genuinely rendered and gesture-eligible page. Avoid the
+    // live section's title/header rows and any transient old DOM between tabs.
+    for (let y = Math.max(220, (contentBox?.top || 0) + 48);
+         tabSwipeReady && y < innerHeight - 140; y += 18) {
       const safe = [.2,.8].every(x => {
         const hit = document.elementFromPoint(innerWidth*x,y);
-        if (!hit?.closest('.content') || hit.closest('input,textarea,select,button,video,iframe,[role="dialog"]')) return false;
+        if (!hit?.closest('.content') ||
+            hit.closest('input,textarea,select,button,video,iframe,[role="dialog"],.direct-media-player,.watch-overlay,.mini-player,.sheet-backdrop,.bottom-nav')) return false;
         for(let node=hit;node && node.closest('.content');node=node.parentElement) {
           if (/auto|scroll/.test(getComputedStyle(node).overflowX) && node.scrollWidth>node.clientWidth+2) return false;
         }
@@ -205,7 +229,7 @@ window.ISTSimulator = {
     }
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
-      screen: state.screen,
+      screen: state.screen, renderedScreen, tabSwipeReady,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
       gestures: simulatorGestures, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),
@@ -215,8 +239,8 @@ window.ISTSimulator = {
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
-      backend: state.watchVimeo?.player?.backend || '',
-      videoSource: video?.currentSrc || video?.src || '',
+      backend: native ? (String(native.sourceUrl||'').includes('.m3u8')?'hls-native':'mp4') : (state.watchVimeo?.player?.backend || ''),
+      videoSource: native?.sourceUrl || video?.currentSrc || video?.src || '',
       reportedExpectedSource: this.reportedExpectedSource, reportedSources: this.reportedSources,
       vimeoEmbed: document.getElementById('watchVimeoFrame')?.dataset?.vimeoSrc || '',
       fallbackBanner: Boolean(document.querySelector('.watch-hls-fallback-note')) || /HLS could not start.*Playing Vimeo/.test(document.body.innerText),
@@ -228,20 +252,29 @@ window.ISTSimulator = {
       visualRecoveryPending: Boolean(state.watchVimeo?.player?.visualPlaybackPromise),
       playerCount: document.querySelectorAll('#directVideoElement').length,
       initializing: Boolean(state.watchVimeoInitialization),
-      videoTime: Number(video?.currentTime) || 0, videoPlaying: Boolean(video && !video.paused && !video.ended),
-      videoVisible: simulatorVisible(video), controlsVisible: simulatorVisible(document.getElementById('dmPlay')),
-      videoX:videoBox?.left || 0, videoY:videoBox?.top || 0, videoWidth:videoBox?.width || 0, videoHeight:videoBox?.height || 0,
-      fullscreen:Boolean(state.watchVimeo?.player?.customFullscreen || document.fullscreenElement),
+      videoTime: native ? (Number(native.position)||0) : (Number(video?.currentTime)||0),
+      videoPlaying: native ? (nativeVideo&&native.playing===true) : Boolean(video && !video.paused && !video.ended),
+      videoVisible: native ? nativeVideoVisible : simulatorVisible(video),
+      controlsVisible: native ? nativeVideoVisible&&native.layout!=='mini' : simulatorVisible(document.getElementById('dmPlay')),
+      videoX:native?(Number(native.surfaceX)||0):(videoBox?.left||0),
+      videoY:native?(Number(native.surfaceY)||0):(videoBox?.top||0),
+      videoWidth:native?(Number(native.surfaceWidth)||0):(videoBox?.width||0),
+      videoHeight:native?(Number(native.surfaceHeight)||0):(videoBox?.height||0),
+      fullscreen:native ? native.layout === 'full' : Boolean(state.watchVimeo?.player?.customFullscreen || document.fullscreenElement),
       nativeBackgroundPending:Boolean(state.nativeBackgroundPending),
-      frameApi: Boolean(video?.requestVideoFrameCallback), frames: simulatorFrames, frameTime: simulatorFrameTime,
-      decodedFrames: Number(video?.webkitDecodedFrameCount) || 0,
+      frameApi: native ? Number(native.decodedFrames)>0 : Boolean(video?.requestVideoFrameCallback),
+      frames: native ? (Number(native.decodedFrames)||0) : simulatorFrames,
+      frameTime: native ? (Number(native.frameTime)||0) : simulatorFrameTime,
+      decodedFrames: native ? (Number(native.decodedFrames)||0) : (Number(video?.webkitDecodedFrameCount)||0),
       mediaReadyState: Number(video?.readyState) || 0, seeking: Boolean(video?.seeking),
       audioTime: Number(audio.currentTime) || 0, audioPlaying: Boolean(!audio.paused && !audio.ended),
+      nativeAudioTime: native?.mode==='audio' ? (Number(native.position)||0) : 0,
+      nativeAudioPlaying: native?.mode==='audio' && native.playing === true,
       pendingSeek: Boolean(state.pendingAudioSeek), minimized: Boolean(state.watchMinimized),
       expandX: expandBox ? expandBox.left + expandBox.width / 2 : 0,
       expandY: expandBox ? expandBox.top + expandBox.height / 2 : 0,
-      pip: Boolean(state.watchPictureInPicture || document.pictureInPictureElement === video || video?.webkitPresentationMode === 'picture-in-picture'),
-      pipSupported: Boolean(video && ((document.pictureInPictureEnabled && video.requestPictureInPicture) ||
+      pip: native ? native.pipActive === true : Boolean(state.watchPictureInPicture || document.pictureInPictureElement === video || video?.webkitPresentationMode === 'picture-in-picture'),
+      pipSupported: native ? (native.pipSupported === true && native.pipPossible === true) : Boolean(video && ((document.pictureInPictureEnabled && video.requestPictureInPicture) ||
         video.webkitSupportsPresentationMode?.('picture-in-picture'))),
       pipDiagnostic: (() => {
         const info=document.getElementById('dmPip')?.__irgunPipDiagnostic;
@@ -249,7 +282,10 @@ window.ISTSimulator = {
           lastEvent:info.lastEvent,active:info.active,requested:info.requested,
           webkitMode:String(video?.webkitPresentationMode||'')} : null;
       })(),
-      speed: Number(video?.playbackRate || audio.playbackRate), hidden: document.hidden
+      speed: native ? (Number(native.rate)||1) : Number(video?.playbackRate || audio.playbackRate),
+      nativeItemEpoch: Number(native?.itemEpoch)||0,
+      nativeLayerReady: native?.layerReady === true,
+      hidden: document.hidden
     });
   }
 };

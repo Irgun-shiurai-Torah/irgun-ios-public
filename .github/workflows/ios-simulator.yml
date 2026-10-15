@@ -125,6 +125,7 @@ jobs:
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
 
       - name: Run playback UI tests
+        id: playback
         shell: bash
         run: |
           set -euo pipefail
@@ -175,7 +176,17 @@ jobs:
 
       - name: Package clean App Store screenshots
         if: always()
-        run: python3 .github/simulator/package_screenshots.py
+        shell: bash
+        run: |
+          if [ -f simulator-results/attachments/manifest.json ]; then
+            python3 .github/simulator/package_screenshots.py
+          elif [ "${{ steps.playback.outcome }}" != "success" ]; then
+            echo "UI tests did not finish cleanly; no screenshot manifest was exported."
+            echo "The playback test job already contains the actual error."
+          else
+            echo "::error::Tests passed but screenshot export manifest is missing."
+            exit 1
+          fi
 
       - name: Upload clean screenshots (part 1)
         if: always()

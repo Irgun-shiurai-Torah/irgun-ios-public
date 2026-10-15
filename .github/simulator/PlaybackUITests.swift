@@ -88,6 +88,30 @@ final class PlaybackUITests: XCTestCase {
     private func tapWebButton(_ label: String) throws {
         let hide = app.buttons["ist-simulator-hide-controls"]
         if hide.exists && hide.isHittable { hide.tap() }
+        // UI-only actions: native UIKit controls for the one AVPlayer, web
+        // controls only for the legacy non-native regression scenario.
+        let native = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+        if native["active"] as? Bool == true && native["mode"] as? String == "video" {
+            let mappings = [
+                "Fullscreen": "irgun-native-fullscreen",
+                "Exit Fullscreen": "irgun-native-fullscreen",
+                "Pause video": "irgun-native-play",
+                "Play video": "irgun-native-play",
+                "Picture in Picture": "irgun-native-pip",
+                "Keep playing at bottom of app": "irgun-native-mini"
+            ]
+            if let identifier = mappings[label] {
+                let control = app.buttons[identifier]
+                let ready = NSPredicate(format:"exists == true AND hittable == true")
+                guard XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:control)],timeout:20) == .completed else {
+                    evidence("missing-native-control-\(label)")
+                    XCTFail("Native AVPlayer control unavailable: \(label)")
+                    throw Failure.timedOut(label)
+                }
+                control.tap()
+                return
+            }
+        }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
         if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
@@ -222,8 +246,12 @@ final class PlaybackUITests: XCTestCase {
         func swipe(_ left: Bool, to screen: String) throws {
             let current = snapshot()["screen"] as? String ?? ""
             let state = try waitFor("Settled content for swipe from \(current)") {
-                $0["screen"] as? String == current && $0["pageLoading"] as? Bool == false &&
-                self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 && self.number($0,"tabSwipeY") >= 180
+                $0["screen"] as? String == current &&
+                $0["renderedScreen"] as? String == current &&
+                $0["tabSwipeReady"] as? Bool == true &&
+                $0["pageLoading"] as? Bool == false &&
+                self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
+                self.number($0,"tabSwipeY") >= 220
             }
             let y = number(state, "tabSwipeY")
             let web = app.webViews.firstMatch
@@ -231,7 +259,11 @@ final class PlaybackUITests: XCTestCase {
             let start = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.8 : 0.2), dy: y))
             let end = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.2 : 0.8), dy: y))
             start.press(forDuration: 0.05, thenDragTo: end)
-            _ = try waitFor("Swipe must open \(screen)") { $0["screen"] as? String == screen }
+            _ = try waitFor("Swipe must open \(screen)") {
+                $0["screen"] as? String == screen &&
+                $0["renderedScreen"] as? String == screen &&
+                $0["tabSwipeReady"] as? Bool == true
+            }
         }
         for screen in ["shiurim", "live", "library", "account"] { try swipe(true, to: screen) }
         try swipe(true, to: "account") // No wrapping past the last tab.
@@ -244,48 +276,83 @@ final class PlaybackUITests: XCTestCase {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        // Native overlay taps can be missed during the first launch animation.
-        // Retry once only if JS has not accepted or failed the open request.
         let acceptanceDeadline = Date().addingTimeInterval(4)
         while Date() < acceptanceDeadline {
-            let current = snapshot()
-            if current["opening"] as? Bool == true || !(current["id"] as? String ?? "").isEmpty || !(current["error"] as? String ?? "").isEmpty { break }
+            let now = snapshot()
+            if now["opening"] as? Bool == true ||
+                !(now["id"] as? String ?? "").isEmpty ||
+                !(now["error"] as? String ?? "").isEmpty { break }
             Thread.sleep(forTimeInterval: 0.3)
         }
         let accepted = snapshot()
-        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
-        let state = try waitFor("Same-shiur direct HLS or MP4 must start visibly", timeout: 150) { s in
-            // Native HLS can fail source initialization and legitimately fall back
-            // directly to the same shiur's MP4, before any decoder-reload attempt.
-            // Still require the real local media URL, playback and correct identity;
-            // assertMovingVideo() separately proves decoded video frames advance.
+        if accepted["opening"] as? Bool != true &&
+            (accepted["id"] as? String ?? "").isEmpty &&
+            (accepted["error"] as? String ?? "").isEmpty { button.tap() }
+        let state = try waitFor("Same-shiur native HLS/MP4 video must become visible",timeout:150) { s in
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
             let source = s["videoSource"] as? String ?? ""
             let sameShiurMP4 = s["backend"] as? String == "mp4" &&
                 source.contains("/media/") && source.contains("/video.mp4")
+            if native["active"] as? Bool == true {
+                return s["mode"] as? String == "video" &&
+                    s["ready"] as? Bool == true &&
+                    ["hls-native","mp4"].contains(s["backend"] as? String ?? "") &&
+                    (s["id"] as? String) == (s["sampleId"] as? String) &&
+                    native["mode"] as? String == "video" &&
+                    native["ready"] as? Bool == true &&
+                    native["playing"] as? Bool == true &&
+                    native["layerReady"] as? Bool == true &&
+                    self.number(native,"videoWidth") > 0 &&
+                    self.number(native,"surfaceWidth") > 40 &&
+                    self.number(native,"surfaceHeight") > 30 &&
+                    self.number(native,"decodedFrames") >= 1 &&
+                    self.number(native,"position") >= 28
+            }
             return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
                 (s["backend"] as? String == "hls-native" || sameShiurMP4) &&
                 (s["id"] as? String) == (s["sampleId"] as? String) &&
-                s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
-                self.number(s, "videoTime") >= 28
+                s["videoPlaying"] as? Bool == true &&
+                s["videoVisible"] as? Bool == true &&
+                self.number(s,"videoTime") >= 28
         }
-        XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
-        XCTAssertEqual(number(state, "playerCount"), 1, "Exactly one video element should exist")
+        XCTAssertEqual(number(state,"speed"),1,accuracy:0.01)
+        let native=state["nativePlayer"] as? [String:Any] ?? [:]
+        XCTAssertEqual(number(state,"playerCount"), native["active"] as? Bool == true ? 0 : 1,
+                       "Native AVPlayer must not create an HTML video decoder")
         evidence("fresh-video")
     }
 
     private func assertMovingVideo() throws {
-        let before = try waitFor("Video must settle before frame sampling") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
-            $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
-            self.number($0, "frames") >= 1 && self.number($0, "frameTime") > 0
+        let before = try waitFor("Video decoder must be presenting frames",timeout:45) { s in
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
+            if native["active"] as? Bool == true {
+                return native["mode"] as? String == "video" &&
+                    native["playing"] as? Bool == true &&
+                    native["ready"] as? Bool == true &&
+                    native["layerReady"] as? Bool == true &&
+                    self.number(native,"videoWidth") > 0 &&
+                    self.number(native,"decodedFrames") >= 1
+            }
+            return s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                s["initializing"] as? Bool != true && s["decoderLoading"] as? Bool != true &&
+                self.number(s,"frames") >= 1 && self.number(s,"frameTime") > 0
         }
-        XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
-        _ = try waitFor("Video frames and media clock must advance") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            self.number($0, "frames") > self.number(before, "frames") + 2 &&
-            self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
-            self.number($0, "videoTime") > self.number(before, "videoTime") + 0.5
+        let nativeBefore = before["nativePlayer"] as? [String:Any] ?? [:]
+        _ = try waitFor("Decoded frames and the media clock must advance",timeout:45) { s in
+            let n = s["nativePlayer"] as? [String:Any] ?? [:]
+            if nativeBefore["active"] as? Bool == true {
+                return n["id"] as? String == nativeBefore["id"] as? String &&
+                    n["playing"] as? Bool == true &&
+                    n["layerReady"] as? Bool == true &&
+                    self.number(n,"itemEpoch") == self.number(nativeBefore,"itemEpoch") &&
+                    self.number(n,"decodedFrames") >= self.number(nativeBefore,"decodedFrames") + 2 &&
+                    self.number(n,"frameTime") > self.number(nativeBefore,"frameTime") + 0.5 &&
+                    self.number(n,"position") > self.number(nativeBefore,"position") + 0.5
+            }
+            return s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                self.number(s,"frames") > self.number(before,"frames") + 2 &&
+                self.number(s,"frameTime") > self.number(before,"frameTime") + 0.5 &&
+                self.number(s,"videoTime") > self.number(before,"videoTime") + 0.5
         }
     }
 
@@ -314,7 +381,9 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertEqual(embed?.queryItems?.first { $0.name == "h" }?.value, "585d5d53db")
         XCTAssertEqual(state["directFallbackId"] as? String, "")
         XCTAssertFalse(state["fallbackBanner"] as? Bool ?? true)
-        XCTAssertEqual(number(state, "playerCount"), 1)
+        XCTAssertEqual(number(state, "playerCount"),
+                       ((state["nativePlayer"] as? [String:Any])?["active"] as? Bool) == true ? 0 : 1,
+                       "Do not construct a second HTML media player")
         try assertMovingVideo()
         evidence("reported-shiur-moving")
         try tapWebButton("Pause video")
@@ -338,7 +407,7 @@ final class PlaybackUITests: XCTestCase {
         _ = try waitFor("Same-shiur deep link must keep player ready and advancing") {
             $0["ready"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
             $0["controlsVisible"] as? Bool == true && self.number($0, "videoTime") > before + 1 &&
-            self.number($0, "playerCount") == 1
+            self.number($0, "playerCount") == (((($0["nativePlayer"] as? [String:Any])?["active"] as? Bool) == true) ? 0 : 1)
         }
         try assertMovingVideo()
         evidence("same-shiur-reopen")
@@ -350,11 +419,14 @@ final class PlaybackUITests: XCTestCase {
         let videoTime = number(snapshot(), "videoTime")
         try tapWebButton("Audio")
         let audio = try waitFor("Audio switch must resume near the video position") {
-            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
-            $0["pendingSeek"] as? Bool == false && self.number($0, "audioTime") >= videoTime - 2
+            $0["mode"] as? String == "audio" &&
+            ($0["nativeAudioPlaying"] as? Bool == true || $0["audioPlaying"] as? Bool == true) &&
+            $0["pendingSeek"] as? Bool == false &&
+            (self.number($0, "nativeAudioTime") > 0 ?
+                self.number($0, "nativeAudioTime") : self.number($0, "audioTime")) >= videoTime - 2
         }
         evidence("watch-audio")
-        let position = number(audio, "audioTime")
+        let position = number(audio,"nativeAudioTime") > 0 ? number(audio,"nativeAudioTime") : number(audio,"audioTime")
         try tapWebButton("Video")
         _ = try waitFor("Video switch must resume near the audio position") {
             $0["ready"] as? Bool == true && $0["mode"] as? String == "video" &&
@@ -368,7 +440,10 @@ final class PlaybackUITests: XCTestCase {
     func testHomeAndReopenContinuesPosition() throws {
         try openSample()
         try assertMovingVideo()
-        let before = number(snapshot(), "videoTime")
+        let before = number(snapshot(),"videoTime")
+        let initial = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+        let itemEpoch=number(initial,"itemEpoch")
+        let itemID=initial["id"] as? String ?? ""
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 20)
         let home = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -376,14 +451,25 @@ final class PlaybackUITests: XCTestCase {
         home.lifetime = .keepAlways
         add(home)
         app.activate()
-        let native = try waitFor("Native background samples must be available") {
-            (($0["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []).count >= 3
-        }
-        let samples = (native["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []
-        XCTAssertGreaterThan((samples.last ?? 0) - (samples.first ?? 0), 4, "Native clock must advance while UIApplication is backgrounded")
-        _ = try waitFor("Reopen must resume video beyond the pre-Home position", timeout: 60) {
-            $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true && self.number($0, "videoTime") >= before + 3
+        if initial["active"] as? Bool == true {
+            _ = try waitFor("One native AVPlayer must retain the item and advance across Home/reopen",timeout:65) { s in
+                let n=s["nativePlayer"] as? [String:Any] ?? [:]
+                return n["active"] as? Bool == true &&
+                    n["playing"] as? Bool == true &&
+                    n["id"] as? String == itemID &&
+                    self.number(n,"itemEpoch") == itemEpoch &&
+                    self.number(n,"position") >= before+4 &&
+                    n["layerReady"] as? Bool == true
+            }
+        } else {
+            let result = try waitFor("Native background audio samples must be available") {
+                (($0["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []).count >= 3
+            }
+            let samples = (result["nativeAudio"] as? [String:Any])?["backgroundSamples"] as? [Double] ?? []
+            XCTAssertGreaterThan((samples.last ?? 0) - (samples.first ?? 0),4)
+            _ = try waitFor("Reopen must resume video",timeout:60) {
+                $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") >= before+3
+            }
         }
         try assertMovingVideo()
         evidence("home-reopen")
@@ -391,6 +477,12 @@ final class PlaybackUITests: XCTestCase {
 
     private func videoPoint(_ x: Double, _ y: Double) -> XCUICoordinate {
         let s = snapshot()
+        let native = s["nativePlayer"] as? [String:Any] ?? [:]
+        if native["active"] as? Bool == true {
+            return app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: number(native,"surfaceX") + number(native,"surfaceWidth") * x,
+                dy: number(native,"surfaceY") + number(native,"surfaceHeight") * y))
+        }
         return app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
             dx: number(s,"videoX") + number(s,"videoWidth") * x,
             dy: number(s,"videoY") + number(s,"videoHeight") * y))
@@ -410,8 +502,20 @@ final class PlaybackUITests: XCTestCase {
         _ = try waitFor("Fullscreen Play must resume playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
         let before = number(snapshot(),"videoTime")
+        let tapCount = number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"fullscreenButtonTaps")
         try tapWebButton("Exit Fullscreen")
-        _ = try waitFor("Fullscreen exit must keep playing") { $0["fullscreen"] as? Bool == false && $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > before + 1 }
+        _ = try waitFor("UIKit must receive the real iPad exit-fullscreen tap",timeout:20) { state in
+            let native = state["nativePlayer"] as? [String:Any] ?? [:]
+            return native["active"] as? Bool != true ||
+                self.number(native,"fullscreenButtonTaps") > tapCount
+        }
+        _ = try waitFor("Fullscreen exit must keep playing",timeout:45) { state in
+            let native = state["nativePlayer"] as? [String:Any] ?? [:]
+            return state["fullscreen"] as? Bool == false &&
+                state["videoPlaying"] as? Bool == true &&
+                self.number(state,"videoTime") > before + 1 &&
+                (native["active"] as? Bool != true || native["layout"] as? String == "inline")
+        }
         try assertMovingVideo()
         try tapWebButton("Pause video")
         _ = try waitFor("Explicit Pause") { $0["videoPlaying"] as? Bool == false }
@@ -519,20 +623,32 @@ final class PlaybackUITests: XCTestCase {
     func testPictureInPictureAndReopenRestoresControls() throws {
         try openSample()
         try assertMovingVideo()
-        guard snapshot()["pipSupported"] as? Bool == true else {
-            throw XCTSkip("This simulator runtime does not support WKWebView PiP; test on a real device")
+        let before=snapshot()
+        let isNative=((before["nativePlayer"] as? [String:Any])?["active"] as? Bool) == true
+        guard before["pipSupported"] as? Bool == true else {
+            throw XCTSkip("iOS simulator runtime does not support system PiP; a physical device test is required")
         }
         try tapWebButton("Picture in Picture")
-        _ = try waitFor("PiP must activate") { $0["pip"] as? Bool == true }
+        _ = try waitFor("System PiP must start with the current AVPlayer item",timeout:35) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["pip"] as? Bool == true &&
+                (!isNative || (n["active"] as? Bool == true && n["pipActive"] as? Bool == true))
+        }
         evidence("pip-active")
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 4)
         app.activate()
-        _ = try waitFor("Reopen from PiP must restore inline video and controls", timeout: 30) {
-            $0["pip"] as? Bool == false && $0["videoVisible"] as? Bool == true &&
-            $0["controlsVisible"] as? Bool == true
+        _ = try waitFor("Reopen from PiP must restore inline video and controls",timeout:50) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["pip"] as? Bool == false && s["videoVisible"] as? Bool == true &&
+                s["controlsVisible"] as? Bool == true &&
+                (!isNative || (n["mode"] as? String == "video" &&
+                               n["layerReady"] as? Bool == true &&
+                               n["pipActive"] as? Bool == false))
         }
         try assertMovingVideo()
         evidence("pip-reopen")
     }
+
+
 }

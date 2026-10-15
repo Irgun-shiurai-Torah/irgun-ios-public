@@ -2,6 +2,7 @@ import Foundation
 import Capacitor
 import AVFoundation
 import AVKit
+import CoreVideo
 import MediaPlayer
 import UIKit
 
@@ -45,10 +46,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var nativeSeek: UISlider?
     private var nativeElapsed: UILabel?
     private var nativeDuration: UILabel?
+    private var fullscreenButtonTaps = 0
     private var qualityHeight: Int = 0
     private var availableHeights: [Int] = []
     private var isPiPRequested = false
+    private var pipResumeWanted = false
+    private var pipPausedByUser = false
     private var overlayOccluded = false
+    #if targetEnvironment(simulator)
+    private var simulatorFrameOutput: AVPlayerItemVideoOutput?
+    private var simulatorFrameCount: Int = 0
+    private var simulatorFrameTime: Double = 0
+    #endif
     private var itemID = ""
     private var itemURL = ""
     private var title = "Irgun Shiurai Torah"
@@ -199,6 +208,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
         add(controls.playCommand) { [weak self] _ in
             guard let self = self, self.active else { return .noSuchContent }
+            if self.isPiPRequested { self.pipPausedByUser = false; self.pipResumeWanted = true }
             self.playingWanted = true
             try? self.activateAudioSession()
             self.player.playImmediately(atRate: self.playbackRate)
@@ -206,6 +216,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
         add(controls.pauseCommand) { [weak self] _ in
             guard let self = self, self.active else { return .noSuchContent }
+            // An explicit background remote pause must survive PiP teardown;
+            // iOS also issues system pauses while returning to the foreground.
+            if self.isPiPRequested && UIApplication.shared.applicationState == .background {
+                self.pipPausedByUser = true
+            }
             self.playingWanted = false
             self.player.pause()
             return .success
@@ -241,8 +256,27 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         return seconds.isFinite ? max(0, seconds) : 0
     }
 
+    #if targetEnvironment(simulator)
+    private func inspectDecodedVideoFrame() {
+        guard let output = simulatorFrameOutput, active, mode == "video" else { return }
+        let at = output.itemTime(forHostTime: CACurrentMediaTime())
+        guard output.hasNewPixelBuffer(forItemTime: at) else { return }
+        var displayed = CMTime.invalid
+        if output.copyPixelBuffer(forItemTime: at, itemTimeForDisplay: &displayed) != nil {
+            let seconds = displayed.seconds.isFinite ? displayed.seconds : at.seconds
+            if seconds.isFinite, seconds > simulatorFrameTime {
+                simulatorFrameTime = seconds
+                simulatorFrameCount += 1
+            }
+        }
+    }
+    #endif
+
     private func snapshot() -> [String: Any] {
-        [
+        #if targetEnvironment(simulator)
+        inspectDecodedVideoFrame()
+        #endif
+        var data: [String: Any] = [
             "id": itemID,
             "active": active,
             "mode": mode,
@@ -259,6 +293,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "qualityHeight": qualityHeight,
             "qualities": availableHeights,
             "pipActive": pipController?.isPictureInPictureActive ?? false,
+            "pipSupported": AVPictureInPictureController.isPictureInPictureSupported(),
+            "pipPossible": pipController?.isPictureInPicturePossible ?? false,
+            "layerReady": videoLayer.isReadyForDisplay && !viewer.view.isHidden,
             "overlayOccluded": overlayOccluded,
             "pipRequested": isPiPRequested,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
@@ -268,8 +305,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "surfaceWidth": Double(viewer.view.frame.width),
             "surfaceHeight": Double(viewer.view.frame.height),
             "surfaceInteractive": viewer.view.isUserInteractionEnabled,
+            "fullscreenButtonTaps": fullscreenButtonTaps,
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
+        #if targetEnvironment(simulator)
+        data["decodedFrames"] = simulatorFrameCount
+        data["frameTime"] = simulatorFrameTime
+        #endif
+        return data
     }
 
     private func publishState() {
@@ -383,6 +426,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
+                #if targetEnvironment(simulator)
+                self.simulatorFrameCount = 0
+                self.simulatorFrameTime = 0
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+                ])
+                item.add(output)
+                self.simulatorFrameOutput = output
+                #endif
                 self.itemEpoch += 1
                 self.player.replaceCurrentItem(with: item)
                 self.itemObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
@@ -409,6 +461,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc public func play(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             guard self.active else { call.reject("No native item loaded"); return }
+            if self.isPiPRequested { self.pipPausedByUser = false; self.pipResumeWanted = true }
             self.playingWanted = true
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
@@ -420,6 +473,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     @objc public func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            if self.isPiPRequested { self.pipPausedByUser = true }
             self.playingWanted = false
             self.player.pause()
             self.publishState()
@@ -484,8 +538,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 call.reject("Unsupported native video layout")
                 return
             }
-            if next == "mini" && self.pipController?.isPictureInPictureActive == true {
-                self.pipController?.stopPictureInPicture()
+            if next == "mini" {
+                if self.pipController?.isPictureInPictureActive == true {
+                    self.pipController?.stopPictureInPicture()
+                }
                 self.isPiPRequested = false
                 self.notifyListeners("pipState", data:["active":false,"reason":"mini"])
             }
@@ -510,7 +566,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         result.layer.cornerRadius = 10
         result.addTarget(self, action: selector, for: .touchUpInside)
         result.widthAnchor.constraint(equalToConstant: width).isActive = true
-        result.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        // Native iPad fullscreen controls need Apple's minimum 44pt hit target.
+        // A 34pt button under the status-bar edge can be reported as hittable
+        // by XCTest without UIKit receiving its touchUpInside action.
+        result.heightAnchor.constraint(equalToConstant: 44).isActive = true
         return result
     }
 
@@ -532,7 +591,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let pip = button("PiP", width: 40, selector: #selector(tapPiP))
         let quality = button("Auto", width: 58, selector: #selector(tapQuality))
         let speed = button("1×", width: 52, selector: #selector(tapSpeed))
-        let full = button("⛶", width: 34, selector: #selector(tapFull))
+        let full = button("⛶", width: 44, selector: #selector(tapFull))
+        mini.accessibilityIdentifier = "irgun-native-mini"
+        mini.accessibilityLabel = "Keep playing at bottom of app"
+        pip.accessibilityIdentifier = "irgun-native-pip"
+        pip.accessibilityLabel = "Picture in Picture"
+        quality.accessibilityIdentifier = "irgun-native-quality"
+        quality.accessibilityLabel = "Video quality"
+        speed.accessibilityIdentifier = "irgun-native-speed"
+        speed.accessibilityLabel = "Playback speed"
+        full.accessibilityIdentifier = "irgun-native-fullscreen"
         nativeQuality = quality
         nativeSpeed = speed
         nativeFull = full
@@ -544,7 +612,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         top.alignment = .center
         overlay.addSubview(top)
         NSLayoutConstraint.activate([
-            top.topAnchor.constraint(equalTo: overlay.topAnchor, constant: 5),
+            // Never put the exit-fullscreen button inside the iPad status bar,
+            // camera housing, or the iPhone dynamic island.
+            top.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 7),
             top.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -6),
             top.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 4)
         ])
@@ -552,6 +622,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let back = button("↶ 15", width: 46, selector: #selector(tapBack))
         let play = button("▶", width: 52, selector: #selector(tapPlay))
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
+        back.accessibilityIdentifier = "irgun-native-back-15"
+        back.accessibilityLabel = "Back 15 seconds"
+        play.accessibilityIdentifier = "irgun-native-play"
+        forward.accessibilityIdentifier = "irgun-native-forward-15"
+        forward.accessibilityLabel = "Forward 15 seconds"
         play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
         play.layer.cornerRadius = 17
         // button() already establishes the actual touch height. Do not
@@ -627,6 +702,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     private func updateNativeControls() {
         nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
+        nativePlay?.accessibilityLabel = playingWanted ? "Pause video" : "Play video"
+        nativeFull?.accessibilityLabel = layout == "full" ? "Exit Fullscreen" : "Fullscreen"
         nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
         nativeSpeed?.setTitle(String(format: "%.2g×", Double(playbackRate)), for: .normal)
         nativeFull?.setTitle(layout == "full" ? "↙" : "⛶", for: .normal)
@@ -686,17 +763,24 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     @objc private func tapFull() {
+        fullscreenButtonTaps += 1
         layout = layout == "full" ? "inline" : "full"
         placeSurface(lastSurfaceRect)
         notifyListeners("requestFullscreen", data: ["fullscreen": layout == "full"])
         publishState()
     }
 
+    private func rememberPiPPlaybackIntent() {
+        pipResumeWanted = playingWanted && player.timeControlStatus == .playing
+        pipPausedByUser = false
+    }
+
     @objc private func tapPiP() {
         guard active, mode == "video", let pip = pipController else { return }
         if pip.isPictureInPicturePossible {
-            pip.startPictureInPicture()
+            rememberPiPPlaybackIntent()
             isPiPRequested = true
+            pip.startPictureInPicture()
             publishState()
         } else {
             notifyListeners("pipUnavailable", data: ["message": "Picture in Picture is not ready"])
@@ -792,6 +876,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                   pip.isPictureInPicturePossible else {
                 call.reject("System Picture in Picture is not ready");return
             }
+            self.rememberPiPPlaybackIntent()
             self.isPiPRequested=true
             pip.startPictureInPicture()
             self.publishState()
@@ -823,18 +908,36 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         placeSurface(lastSurfaceRect)
     }
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        if layout == "mini" || mode != "video" || !active {
+            pictureInPictureController.stopPictureInPicture()
+            isPiPRequested = false
+            notifyListeners("pipState", data:["active":false,"reason":"mini"])
+            return
+        }
         isPiPRequested = true
         notifyListeners("pipState", data:["active":true])
         placeSurface(lastSurfaceRect)
         publishState()
     }
     public func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        let shouldResume = pipResumeWanted && !pipPausedByUser && active && mode == "video"
+        pipResumeWanted = false
+        pipPausedByUser = false
         isPiPRequested = false
-        notifyListeners("pipState", data:["active":false])
         placeSurface(lastSurfaceRect)
+        // AVKit may pause while leaving system PiP. Resume the SAME AVPlayerItem
+        // only when video had been playing and no explicit pause was requested.
+        if shouldResume {
+            playingWanted = true
+            try? activateAudioSession()
+            player.playImmediately(atRate: playbackRate)
+        }
+        notifyListeners("pipState", data:["active":false])
         publishState()
     }
     public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        pipResumeWanted = false
+        pipPausedByUser = false
         isPiPRequested = false
         notifyListeners("pipState", data:["active":false])
         notifyListeners("pipUnavailable", data:["message":error.localizedDescription])
@@ -853,8 +956,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.pendingOpen = nil
             self.pendingOpenTimeout?.cancel()
             self.pendingOpenTimeout = nil
+            self.pipResumeWanted = false
+            self.pipPausedByUser = false
             self.playingWanted = false
             self.player.pause()
+            #if targetEnvironment(simulator)
+            self.simulatorFrameOutput = nil
+            self.simulatorFrameCount = 0
+            self.simulatorFrameTime = 0
+            #endif
             self.pipController?.stopPictureInPicture()
             self.isPiPRequested = false
             self.overlayOccluded = false

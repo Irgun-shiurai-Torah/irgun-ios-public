@@ -48,7 +48,7 @@ const syncIosBottomNavigation = createIosBottomNavigation({
   isIos: () => IS_IOS && Capacitor.isNativePlatform(),
   document,
   model: () => ({
-    root: iosNavigationRoot(state.screen, state.iosNavRoot),
+    root: state.iosNavPending || iosNavigationRoot(state.screen, state.iosNavRoot),
     language: currentLanguage()
   }),
   markup: bottomNavHtml,
@@ -101,6 +101,7 @@ const state = {
   offlineCacheSavedAt: 0,
   screen: 'home',
   iosNavRoot: 'home',
+  iosNavPending: '',
   videos: [],
   audioItems: [],
   videoById: new Map(),
@@ -291,15 +292,25 @@ audio.playbackRate = state.playbackSpeed;
 
 // All native iOS media, including purchased/regular audio and HLS video,
 // goes through this one Swift AVPlayer. No opt-in flag and no second player.
+// Native toolbar taps take priority over a delayed layout or orientation event.
+let iosManualFullscreenExitBlocked = false;
+let iosFullscreenLayoutOverride = '';
+let iosFullscreenLayoutOverrideUntil = 0;
 const iosUnified = createIosUnifiedAVPlayer({
   capacitor:Capacitor, registerPlugin,
   onState:onIosUnifiedState,
   onMinimize:()=>{void minimizeWatchToPersistent();},
   onFullscreen:data=>{
     const enabled=Boolean(data?.fullscreen);
+    iosManualFullscreenExitBlocked = !enabled;
+    iosFullscreenLayoutOverride = enabled ? 'full' : 'inline';
+    iosFullscreenLayoutOverrideUntil = Date.now() + 4000;
     document.body.classList.toggle('irgun-ios-video-fullscreen',enabled);
+    // A stale resize must not replay full layout after Exit Fullscreen.
+    void iosUnified.layout(iosFullscreenLayoutOverride,nativeVideoFrame(document)||{})
+      .then(()=>scheduleIosUnifiedSurface())
+      .catch(error=>console.warn('Native iOS fullscreen layout failed',error));
     IrgunVideoDisplay.setFullscreen({enabled}).catch(error=>console.warn('iOS fullscreen orientation failed',error));
-    if (!enabled) scheduleIosUnifiedSurface();
   },
   onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.'),
   onPiPState:data=>{state.watchPictureInPicture=Boolean(data?.active);syncIosVideoDisplay();if(!data?.active)scheduleIosUnifiedSurface();}
@@ -346,7 +357,7 @@ function scheduleIosUnifiedSurface() {
     if (!iosNativeActive()||!state.watchVideo||state.watchMode!=='video') return;
     const rect=nativeVideoFrame(document);
     if (rect) {
-      const mode=state.watchMinimized?'mini':iosUnified.state.layout==='full'?'full':'inline';
+      const mode=state.watchMinimized?'mini':Date.now()<iosFullscreenLayoutOverrideUntil?iosFullscreenLayoutOverride:iosUnified.state.layout==='full'?'full':'inline';
       void iosUnified.layout(mode,rect)
         .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
     }
@@ -676,6 +687,11 @@ function saveDestinationPresentation(kind, id) {
 function closePlaylistPickerInPlace() {
   state.playlistPickerItem = null;
   document.querySelectorAll('.playlist-picker-backdrop').forEach(node => node.remove());
+  // Save/Watch Later closes this sheet without calling render(). Restore the
+  // single native AVPlayerLayer now, otherwise the lecture stays black.
+  if (iosNativeActive()) void iosUnified.occlude(false)
+    .then(scheduleIosUnifiedSurface)
+    .catch(error=>console.warn('Native AVPlayer overlay restore failed',error));
 }
 
 function refreshSaveDestinationButtons(kind = '', id = '') {
@@ -3489,7 +3505,7 @@ function shell(content) {
       </div>
     </header>
     ${offlineBannerHtml()}
-    <main class="content">${content}</main>
+    <main class="content" data-screen="${esc(state.screen)}">${content}</main>
     ${state.current && !watchAudioOwnsUi && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
     ${IS_IOS ? '' : bottomNavHtml()}
@@ -3542,7 +3558,23 @@ async function bindIosVideoOrientation() {
     await IrgunVideoDisplay.addListener('orientation', ({fullscreen,direction}) => {
       if (document.hidden || !state.watchVideo || state.watchMode !== 'video' ||
           state.watchMinimized || state.watchPictureInPicture) return;
-      // Only direct HLS owns the page's element and custom fullscreen. Native
+      if (iosNativeActive()) {
+        // Rotate the AVPlayerLayer, never replace or seek its AVPlayerItem.
+        const landscape=Boolean(fullscreen);
+        // Respect a user's manual exit until the device is upright again.
+        if (landscape && iosManualFullscreenExitBlocked) return;
+        if (!landscape) iosManualFullscreenExitBlocked = false;
+        iosFullscreenLayoutOverride = landscape ? 'full' : 'inline';
+        iosFullscreenLayoutOverrideUntil = Date.now() + 4000;
+        document.body.classList.toggle('irgun-ios-video-fullscreen',landscape);
+        void iosUnified.layout(landscape?'full':'inline',nativeVideoFrame(document)||{})
+          .then(()=>{if(!landscape)scheduleIosUnifiedSurface();})
+          .catch(error=>console.warn('Native iOS rotation layout failed',error));
+        void IrgunVideoDisplay.setFullscreen({enabled:landscape,fromSensor:true,direction})
+          .catch(error=>console.warn('Native iOS orientation request failed',error));
+        return;
+      }
+      // Only direct HLS owns the page's element and custom fullscreen.
       // Vimeo fallback keeps its own presentation; do not replace that player.
       const direct = state.watchVimeo?.player;
       if (!direct || typeof direct.enterCustomFullscreen !== 'function') return;
@@ -3570,16 +3602,31 @@ async function bindIosVideoOrientation() {
     } else console.warn('Native iOS orientation listener unavailable', error);
   }
 }
+async function restoreIosUnifiedAfterForeground() {
+  if (!iosNativeActive() || !state.watchVideo || document.hidden) return;
+  try {
+    // Native PiP may remain active after iOS foregrounds the app. Reattach
+    // the same player layer and clock to its prior inline/mini presentation.
+    await iosUnified.snapshot();
+    if (iosUnified.state.pipActive || state.watchPictureInPicture) {
+      await iosUnified.exitPiP();
+      state.watchPictureInPicture = false;
+    }
+    if (state.watchMode === 'video') scheduleIosUnifiedSurface();
+  } catch (error) { console.warn('Native PiP foreground restoration failed',error); }
+}
 if (IS_IOS && Capacitor.isNativePlatform()) {
   void bindIosVideoOrientation();
   window.addEventListener('irgunNativeDidBecomeActive', () => {
     iosVideoDisplayKey = '';
     syncIosVideoDisplay();
     void bindIosVideoOrientation();
+    void restoreIosUnifiedAfterForeground();
   });
   document.addEventListener('visibilitychange', () => {
     iosVideoDisplayKey = '';
     syncIosVideoDisplay();
+    if(!document.hidden)void restoreIosUnifiedAfterForeground();
   });
 }
 
@@ -3628,7 +3675,8 @@ function enterIosPictureInPicture(event) {
   }
   if (iosNativeActive() && state.watchMode==='video') {
     void iosUnified.pip().then(()=>{
-      state.watchPictureInPicture=true;
+      // PiP activation is asynchronous. Only the AVPictureInPicture delegate's
+      // pipState event may report that system PiP really became active.
       state.watchResumeSeconds=iosNativePosition();
     }).catch(error=>{
       state.watchPictureInPicture=false;
@@ -6288,8 +6336,10 @@ async function navigateIosBottomTab(button) {
   if (!['home','shiurim','live','library','account'].includes(next)) return;
   const sequence = ++iosNavigationSequence;
   state.iosNavRoot = next;
-  // Move the visible highlight at tap time, even if Mini transition is async.
-  state.screen = next;
+  // Highlight the destination, but do not publish state.screen until the
+  // matching content has actually rendered. Otherwise a second swipe can
+  // start on the old DOM with a new tab ID and navigate to the wrong page.
+  state.iosNavPending = next;
   syncIosBottomNavigation();
   try {
     await prepareIosTabNavigation({
@@ -6313,6 +6363,7 @@ async function navigateIosBottomTab(button) {
   }
   if (sequence !== iosNavigationSequence) return;
   state.screen = next;
+  state.iosNavPending = '';
   if (next === 'library' && !state.user &&
       ['likes','later','history','following'].includes(state.librarySection)) {
     state.librarySection = 'downloads';
@@ -6326,7 +6377,9 @@ async function navigateIosBottomTab(button) {
 
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
-  document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
+  // The persistent iOS nav already delegates clicks on its stable mount.
+  // Rebinding it after each Live status render races backward tab swipes.
+  app.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
     state.screen = el.dataset.nav;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';
@@ -8752,7 +8805,8 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
     getTabs: () => Array.from(document.querySelectorAll('#iosBottomNavigationMount .bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
-    canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
+    canNavigate: () => !state.iosNavPending
+      && ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),

@@ -29,7 +29,7 @@ concurrency:
 jobs:
   playback:
     name: Real native AVPlayer on ${{ matrix.family }}
-    if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'feature/ios-single-native-avplayer-20261015' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' }}
     runs-on: macos-26
     timeout-minutes: 60
     strategy:
