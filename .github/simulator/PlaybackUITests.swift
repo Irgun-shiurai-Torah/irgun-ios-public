@@ -502,8 +502,20 @@ final class PlaybackUITests: XCTestCase {
         _ = try waitFor("Fullscreen Play must resume playback") { $0["fullscreen"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
         let before = number(snapshot(),"videoTime")
+        let tapCount = number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"fullscreenButtonTaps")
         try tapWebButton("Exit Fullscreen")
-        _ = try waitFor("Fullscreen exit must keep playing") { $0["fullscreen"] as? Bool == false && $0["videoPlaying"] as? Bool == true && self.number($0,"videoTime") > before + 1 }
+        _ = try waitFor("UIKit must receive the real iPad exit-fullscreen tap",timeout:20) { state in
+            let native = state["nativePlayer"] as? [String:Any] ?? [:]
+            return native["active"] as? Bool != true ||
+                self.number(native,"fullscreenButtonTaps") > tapCount
+        }
+        _ = try waitFor("Fullscreen exit must keep playing",timeout:45) { state in
+            let native = state["nativePlayer"] as? [String:Any] ?? [:]
+            return state["fullscreen"] as? Bool == false &&
+                state["videoPlaying"] as? Bool == true &&
+                self.number(state,"videoTime") > before + 1 &&
+                (native["active"] as? Bool != true || native["layout"] as? String == "inline")
+        }
         try assertMovingVideo()
         try tapWebButton("Pause video")
         _ = try waitFor("Explicit Pause") { $0["videoPlaying"] as? Bool == false }
