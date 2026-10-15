@@ -2,7 +2,7 @@
 // fullscreen/Mini/PiP surface, and background session controls the same
 // IrgunUnifiedPlayer Swift singleton and its AVPlayer (not a WKWebView media
 // element or a second background AVPlayer).
-export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = () => {}, onMinimize = () => {}, onFullscreen = () => {}, onPiPUnavailable = () => {}}) {
+export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = () => {}, onMinimize = () => {}, onFullscreen = () => {}, onPiPUnavailable = () => {}, onPiPState = () => {}}) {
   if (capacitor?.getPlatform?.() !== 'ios' || !capacitor?.isNativePlatform?.()) return null;
   const native = registerPlugin('IrgunUnifiedPlayer');
   let current = null;
@@ -25,7 +25,8 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
         native.addListener('state',emit),
         native.addListener('requestMinimize',onMinimize),
         native.addListener('requestFullscreen',onFullscreen),
-        native.addListener('pipUnavailable',onPiPUnavailable)
+        native.addListener('pipUnavailable',onPiPUnavailable),
+        native.addListener('pipState',onPiPState)
       ]).catch(error => {
         listenerPromise = null;
         throw error;
@@ -94,6 +95,8 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
       emit(await native.setQuality({height:Number(height)||0}));
       return current;
     },
+    async exitPiP() { if (!current?.active) return; emit(await native.exitPiP()); return current; },
+    async occlude(occluded) { if (!current?.active) return; emit(await native.setOverlayOccluded({occluded:Boolean(occluded)})); return current; },
     async pip() {
       if (!current?.active) return;
       if (typeof native.enterPiP !== 'function') throw new Error('Picture in Picture not available');
