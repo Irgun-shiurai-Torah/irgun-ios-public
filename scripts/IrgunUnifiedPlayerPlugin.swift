@@ -468,6 +468,303 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+
+    // Native controls modeled after the Android Media3 layout. Each control
+    // manipulates this AVPlayer only; these are not WebKit media commands.
+    private func button(_ text: String, width: CGFloat, selector: Selector) -> UIButton {
+        let result = UIButton(type: .system)
+        result.translatesAutoresizingMaskIntoConstraints = false
+        result.setTitle(text, for: .normal)
+        result.setTitleColor(.white, for: .normal)
+        result.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
+        result.backgroundColor = UIColor(red: 0.055, green: 0.11, blue: 0.18, alpha: 0.86)
+        result.layer.cornerRadius = 10
+        result.addTarget(self, action: selector, for: .touchUpInside)
+        result.widthAnchor.constraint(equalToConstant: width).isActive = true
+        result.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        return result
+    }
+
+    private func installNativeControls() {
+        guard controlsOverlay == nil else { return }
+        let overlay = UIView(frame: viewer.view.bounds)
+        overlay.backgroundColor = .clear
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        viewer.view.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: viewer.view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: viewer.view.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: viewer.view.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: viewer.view.bottomAnchor)
+        ])
+        controlsOverlay = overlay
+
+        let mini = button("⌄", width: 32, selector: #selector(tapMini))
+        let pip = button("PiP", width: 40, selector: #selector(tapPiP))
+        let quality = button("Auto", width: 58, selector: #selector(tapQuality))
+        let speed = button("1×", width: 52, selector: #selector(tapSpeed))
+        let full = button("⛶", width: 34, selector: #selector(tapFull))
+        nativeQuality = quality
+        nativeSpeed = speed
+        nativeFull = full
+        nativePiP = pip
+        let top = UIStackView(arrangedSubviews: [mini,pip,quality,speed,full])
+        top.translatesAutoresizingMaskIntoConstraints = false
+        top.axis = .horizontal
+        top.spacing = 5
+        top.alignment = .center
+        overlay.addSubview(top)
+        NSLayoutConstraint.activate([
+            top.topAnchor.constraint(equalTo: overlay.topAnchor, constant: 5),
+            top.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -6),
+            top.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 4)
+        ])
+
+        let back = button("↶ 15", width: 46, selector: #selector(tapBack))
+        let play = button("▶", width: 52, selector: #selector(tapPlay))
+        let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
+        play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
+        play.layer.cornerRadius = 17
+        play.heightAnchor.constraint(equalToConstant: 50).isActive = true
+        nativePlay = play
+        let center = UIStackView(arrangedSubviews: [back,play,forward])
+        center.translatesAutoresizingMaskIntoConstraints = false
+        center.axis = .horizontal
+        center.spacing = 22
+        center.alignment = .center
+        overlay.addSubview(center)
+        NSLayoutConstraint.activate([
+            center.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            center.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+            center.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 5),
+            center.trailingAnchor.constraint(lessThanOrEqualTo: overlay.trailingAnchor, constant: -5)
+        ])
+
+        let seek = UISlider()
+        seek.translatesAutoresizingMaskIntoConstraints = false
+        seek.minimumValue = 0
+        seek.maximumValue = 1
+        seek.minimumTrackTintColor = UIColor(red: 0.82, green: 0.69, blue: 0.42, alpha: 1)
+        seek.maximumTrackTintColor = UIColor(white: 1, alpha: 0.55)
+        seek.addTarget(self, action: #selector(tapSeek), for: .touchUpInside)
+        seek.addTarget(self, action: #selector(tapSeek), for: .touchUpOutside)
+        nativeSeek = seek
+
+        func timeLabel() -> UILabel {
+            let label=UILabel()
+            label.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+            label.textColor = .white
+            label.text = "00:00"
+            return label
+        }
+        let elapsed = timeLabel()
+        let total = timeLabel()
+        nativeElapsed = elapsed
+        nativeDuration = total
+        total.textAlignment = .right
+        let timeRow = UIStackView(arrangedSubviews: [elapsed, UIView(), total])
+        timeRow.translatesAutoresizingMaskIntoConstraints = false
+        timeRow.axis = .horizontal
+        timeRow.distribution = .fill
+        let bottom = UIStackView(arrangedSubviews: [seek,timeRow])
+        bottom.translatesAutoresizingMaskIntoConstraints = false
+        bottom.axis = .vertical
+        bottom.spacing = 0
+        overlay.addSubview(bottom)
+        NSLayoutConstraint.activate([
+            bottom.leadingAnchor.constraint(equalTo: overlay.leadingAnchor, constant: 9),
+            bottom.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -9),
+            bottom.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor, constant: -5)
+        ])
+
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
+        swipe.direction = .down
+        overlay.addGestureRecognizer(swipe)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(tapDoubleSeek(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.cancelsTouchesInView = false
+        overlay.addGestureRecognizer(doubleTap)
+        updateNativeControls()
+    }
+
+    private func formatTime(_ value: Double) -> String {
+        let seconds = max(0, Int(value.isFinite ? value : 0))
+        if seconds >= 3600 {
+            return String(format: "%d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        }
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func updateNativeControls() {
+        nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
+        nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
+        nativeSpeed?.setTitle(String(format: "%.2g×", Double(playbackRate)), for: .normal)
+        nativeFull?.setTitle(layout == "full" ? "↙" : "⛶", for: .normal)
+        nativeElapsed?.text = formatTime(position())
+        nativeDuration?.text = formatTime(duration())
+        if let slider = nativeSeek, !slider.isTracking {
+            slider.value = Float(duration() > 0 ? max(0,min(1,position() / duration())) : 0)
+            slider.isEnabled = duration() > 0
+        }
+        nativePiP?.isEnabled = AVPictureInPictureController.isPictureInPictureSupported()
+        nativePiP?.alpha = AVPictureInPictureController.isPictureInPictureSupported() ? 1 : 0.4
+    }
+
+    @objc private func tapPlay() {
+        guard active else { return }
+        playingWanted.toggle()
+        if playingWanted {
+            try? activateAudioSession()
+            player.playImmediately(atRate: playbackRate)
+        } else {
+            player.pause()
+        }
+        publishState()
+    }
+
+    @objc private func tapBack() { skip(seconds: -15); publishState() }
+    @objc private func tapForward() { skip(seconds: 15); publishState() }
+
+    @objc private func tapSeek() {
+        guard active, let slider = nativeSeek, duration() > 0 else { return }
+        let target = duration() * Double(slider.value)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+        publishState()
+    }
+
+    @objc private func tapDoubleSeek(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        let point = recognizer.location(in: viewer.view)
+        let w = viewer.view.bounds.width
+        if point.x < w * 0.35 { skip(seconds: -15) }
+        else if point.x > w * 0.65 { skip(seconds: 15) }
+        else { return }
+        publishState()
+    }
+
+    @objc private func tapMini() {
+        if layout == "full" {
+            layout = "inline"
+            placeSurface(lastSurfaceRect)
+            notifyListeners("requestFullscreen", data: ["fullscreen": false])
+        }
+        notifyListeners("requestMinimize", data: [:])
+    }
+
+    @objc private func tapFull() {
+        layout = layout == "full" ? "inline" : "full"
+        placeSurface(lastSurfaceRect)
+        notifyListeners("requestFullscreen", data: ["fullscreen": layout == "full"])
+        publishState()
+    }
+
+    @objc private func tapPiP() {
+        guard active, mode == "video", let pip = pipController else { return }
+        if pip.isPictureInPicturePossible {
+            pip.startPictureInPicture()
+            isPiPRequested = true
+            publishState()
+        } else {
+            notifyListeners("pipUnavailable", data: ["message": "Picture in Picture is not ready"])
+        }
+    }
+
+    @objc private func tapSpeed() {
+        guard active else { return }
+        let sheet=UIAlertController(title: "Playback speed", message: nil, preferredStyle: .actionSheet)
+        for value in [0.75,1,1.25,1.5,1.75,2] as [Double] {
+            let name=String(format:"%.2g×",value)
+            sheet.addAction(UIAlertAction(title:name,style:.default) { [weak self] _ in
+                guard let self = self else { return }
+                self.playbackRate = Float(value)
+                if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
+                self.publishState()
+            })
+        }
+        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel))
+        present(sheet, from:nativeSpeed)
+    }
+
+    @objc private func tapQuality() {
+        guard active else { return }
+        let sheet=UIAlertController(title:"Video quality",message:nil,preferredStyle:.actionSheet)
+        let choices=[0]+availableHeights
+        for height in choices {
+            sheet.addAction(UIAlertAction(title:height==0 ? "Auto" : "\(height)p",style:.default) { [weak self] _ in
+                self?.applyQuality(height)
+            })
+        }
+        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel))
+        present(sheet, from:nativeQuality)
+    }
+
+    private func present(_ alert: UIAlertController, from button: UIButton?) {
+        guard viewer.presentedViewController == nil else { return }
+        if let pop = alert.popoverPresentationController {
+            pop.sourceView = button ?? viewer.view
+            pop.sourceRect = button?.bounds ?? CGRect(x:10,y:10,width:1,height:1)
+        }
+        viewer.present(alert,animated:true)
+    }
+
+    private func applyQuality(_ height: Int) {
+        guard height == 0 || availableHeights.contains(height) else { return }
+        qualityHeight=height
+        // ABR remains Apple's; the cap limits the variant without replacing
+        // the AVPlayerItem, changing clock or creating a second decoder.
+        if height == 0 { player.currentItem?.preferredMaximumResolution = .zero }
+        else { player.currentItem?.preferredMaximumResolution = CGSize(width: CGFloat(height) * 16 / 9, height: CGFloat(height)) }
+        publishState()
+    }
+
+    private func loadAvailableVariants(_ source: URL) {
+        guard source.pathExtension.lowercased() == "m3u8" else { return }
+        let owner=generation
+        var request=URLRequest(url:source)
+        request.timeoutInterval=8
+        URLSession.shared.dataTask(with:request) { [weak self] data,_,_ in
+            guard let data = data, let manifest=String(data:data,encoding:.utf8),
+                  let regex=try? NSRegularExpression(pattern:"RESOLUTION=[0-9]+x([0-9]+)") else { return }
+            let ns=manifest as NSString
+            let matches=regex.matches(in:manifest,range:NSRange(location:0,length:ns.length))
+            let heights=Array(Set(matches.compactMap { match -> Int? in
+                guard match.numberOfRanges > 1 else { return nil }
+                return Int(ns.substring(with:match.range(at:1)))
+            })).sorted(by:>)
+            DispatchQueue.main.async {
+                guard let self = self, self.generation == owner else { return }
+                self.availableHeights=heights
+                self.updateNativeControls()
+            }
+        }.resume()
+    }
+
+    @objc public func setQuality(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard self.active else { call.reject("No native item loaded");return }
+            let height=max(0,call.getInt("height") ?? 0)
+            guard height == 0 || self.availableHeights.contains(height) else {
+                call.reject("Requested video quality was not advertised by this HLS stream");return
+            }
+            self.applyQuality(height)
+            call.resolve(self.snapshot())
+        }
+    }
+
+    @objc public func enterPiP(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard self.active, self.mode == "video",
+                  let pip=self.pipController,
+                  pip.isPictureInPicturePossible else {
+                call.reject("System Picture in Picture is not ready");return
+            }
+            self.isPiPRequested=true
+            pip.startPictureInPicture()
+            self.publishState()
+            call.resolve(self.snapshot())
+        }
+    }
+
     @objc public func getState(_ call: CAPPluginCall) {
         DispatchQueue.main.async { call.resolve(self.snapshot()) }
     }
