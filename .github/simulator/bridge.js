@@ -176,13 +176,23 @@ window.ISTSimulator = {
     const videoBox = video?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
-    const contentBox = document.querySelector('.content')?.getBoundingClientRect();
+    const contentRoot = document.querySelector('.content');
+    const contentBox = contentRoot?.getBoundingClientRect();
+    const renderedScreen = contentRoot?.dataset?.screen || '';
+    const tabSwipeReady = renderedScreen === state.screen &&
+      !state.iosNavPending && !state.loading && !state.error &&
+      !state.playerOpen && !state.filterDialog &&
+      (!state.watchVideo || state.watchMinimized) &&
+      !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop');
     let tabSwipeY = 0;
-    // Pick a real content row after layout; refuse header, input and carousel hits.
-    for (let y = Math.max(180, contentBox?.top + 24 || 180); y < innerHeight - 140; y += 20) {
+    // Test only a genuinely rendered and gesture-eligible page. Avoid the
+    // live section's title/header rows and any transient old DOM between tabs.
+    for (let y = Math.max(220, (contentBox?.top || 0) + 48);
+         tabSwipeReady && y < innerHeight - 140; y += 18) {
       const safe = [.2,.8].every(x => {
         const hit = document.elementFromPoint(innerWidth*x,y);
-        if (!hit?.closest('.content') || hit.closest('input,textarea,select,button,video,iframe,[role="dialog"]')) return false;
+        if (!hit?.closest('.content') ||
+            hit.closest('input,textarea,select,button,video,iframe,[role="dialog"],.direct-media-player,.watch-overlay,.mini-player,.sheet-backdrop,.bottom-nav')) return false;
         for(let node=hit;node && node.closest('.content');node=node.parentElement) {
           if (/auto|scroll/.test(getComputedStyle(node).overflowX) && node.scrollWidth>node.clientWidth+2) return false;
         }
@@ -219,7 +229,7 @@ window.ISTSimulator = {
     }
     return JSON.stringify({
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
-      screen: state.screen,
+      screen: state.screen, renderedScreen, tabSwipeReady,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
       gestures: simulatorGestures, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),
