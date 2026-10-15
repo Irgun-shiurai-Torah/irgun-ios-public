@@ -97,7 +97,8 @@ final class PlaybackUITests: XCTestCase {
                 "Exit Fullscreen": "irgun-native-fullscreen",
                 "Pause video": "irgun-native-play",
                 "Play video": "irgun-native-play",
-                "Picture in Picture": "irgun-native-pip"
+                "Picture in Picture": "irgun-native-pip",
+                "Keep playing at bottom of app": "irgun-native-mini"
             ]
             if let identifier = mappings[label] {
                 let control = app.buttons[identifier]
