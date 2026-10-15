@@ -6180,6 +6180,8 @@ async function navigateIosBottomTab(button) {
   if (!['home','shiurim','live','library','account'].includes(next)) return;
   const sequence = ++iosNavigationSequence;
   state.iosNavRoot = next;
+  // Move the visible highlight at tap time, even if Mini transition is async.
+  state.screen = next;
   syncIosBottomNavigation();
   try {
     await prepareIosTabNavigation({
