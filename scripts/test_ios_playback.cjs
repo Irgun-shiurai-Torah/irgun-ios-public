@@ -801,3 +801,49 @@ test('Google pill matches Apple visible dimensions and typography',()=>{
   assert.match(css,/\.auth-social-buttons \.google-auth-btn svg\{[\s\S]*?width:19px[\s\S]*?height:19px/);
   assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?max-width:356px[\s\S]*?height:52px!important/);
 });
+
+test('native Vimeo-only playback keeps the full unlisted privacy ID in the Worker lookup', async()=>{
+  const f=fixture(), opens=[];
+  f.state.watchVideo={id:'1233236785:585d5d53db',title:'Unlisted Vimeo-only shiur'};
+  f.state.playbackSpeed=1;
+  f.context.API='https://api.example.test';
+  f.context.loadIosDirectVideoSources=async()=>null;
+  f.context.nativeVideoFrame=()=>({x:0,y:0,width:300,height:180});
+  f.context.iosUnified={open:async value=>opens.push(value)};
+  f.context.createIosNativeVideoAdapter=()=>({isNativeAVPlayer:true});
+  vm.runInContext(extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,25,true);
+  assert.equal(result.backend,'native');
+  assert.equal(opens.length,1);
+  assert.equal(opens[0].url,'https://api.example.test/download/1233236785%3A585d5d53db?type=vimeo');
+  assert.equal(opens[0].position,25);
+});
+test('native video retries owned MP4 before Vimeo when HLS has failed',async()=>{
+  const f=fixture(),attempts=[];
+  f.state.watchVideo={id:'1233236785:585d5d53db',title:'Owned shiur'};
+  f.state.playbackSpeed=1;
+  f.context.API='https://api.example.test';
+  f.context.loadIosDirectVideoSources=async()=>({hls:'https://api.example.test/media/x/master.m3u8',mp4:'https://api.example.test/media/x/video.mp4'});
+  f.context.nativeVideoFrame=()=>({});
+  f.context.iosUnified={open:async value=>{
+    attempts.push(value.url);
+    if(value.url.endsWith('master.m3u8'))throw new Error('Native HLS timed out');
+  }};
+  f.context.createIosNativeVideoAdapter=()=>({isNativeAVPlayer:true});
+  vm.runInContext(extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,47,true);
+  assert.equal(result.backend,'native');
+  assert.deepEqual(attempts,[
+    'https://api.example.test/media/x/master.m3u8',
+    'https://api.example.test/media/x/video.mp4'
+  ]);
+});
+test('a Drive-only shiur without a native stream cannot be mistaken for Vimeo',async()=>{
+  const f=fixture();
+  f.state.watchVideo={id:'drivev-123',sourceType:'drive-library',directVideo:true};
+  f.context.loadIosDirectVideoSources=async()=>null;
+  f.context.iosUnified={open:async()=>{throw Error('No source should be opened');}};
+  f.context.API='https://api.example.test';
+  vm.runInContext(extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  await assert.rejects(f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,0,true),/No native video source/);
+});

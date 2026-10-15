@@ -5198,13 +5198,17 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
   if (iosUnified) {
     const sources = await loadIosDirectVideoSources(video);
     assertCurrent();
-    const directUrl = sources?.hls || sources?.mp4 || '';
-    // Vimeo-only shiurim have no Drive HLS or MP4 yet. Use the Worker-owned
-    // Vimeo file route as a stable AVPlayer URL; never start a WebKit iframe.
-    const vimeoId = String(video.vimeoId || videoKey).match(/^(\d+)/)?.[1] || '';
-    const vimeoUrl = video.sourceType !== 'drive-library' && vimeoId
+    // An unlisted Vimeo ID can be "123456:privacycode". Do not strip its
+    // privacy suffix: the Worker resolves this exact catalog ID at /download.
+    const vimeoId = String(videoKey || '').trim();
+    const vimeoUrl = !video.directVideo && video.sourceType !== 'drive-library' &&
+      /^\d+(?::[a-z0-9]+)?$/i.test(vimeoId)
       ? `${API}/download/${encodeURIComponent(vimeoId)}?type=vimeo` : '';
-    if (!directUrl && !vimeoUrl) throw new Error('No native video source is available for this shiur.');
+    // Prefer our own Drive HLS, then owned MP4, then Vimeo. A temporarily
+    // unplayable HLS item must not skip a working owned MP4 copy.
+    const urls = [...new Set([sources?.hls, sources?.mp4, vimeoUrl]
+      .map(url => String(url || '').trim()).filter(url => /^https:\/\//i.test(url)))];
+    if (!urls.length) throw new Error('No native video source is available for this shiur.');
     stopNativeBackgroundAudio();
     const openNative = url => iosUnified.open({
       id:`video:${videoKey}`,url,
@@ -5214,18 +5218,20 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
       rate:state.playbackSpeed,mode:'video',autoplay:Boolean(autoplay),
       rect:nativeVideoFrame(document)||{}
     });
-    if (directUrl) {
+    let lastError = null;
+    for (let index = 0; index < urls.length; index += 1) {
+      assertCurrent();
       try {
-        await openNative(directUrl);
+        await openNative(urls[index]);
+        lastError = null;
+        break;
       } catch (error) {
         assertCurrent();
-        if (!vimeoUrl) throw error;
-        console.warn('Native Drive/HLS video failed; retrying with Vimeo source',error);
-        await openNative(vimeoUrl);
+        lastError = error;
+        if (index + 1 < urls.length) console.warn('Native video source failed; trying the next stream', error);
       }
-    } else {
-      await openNative(vimeoUrl);
     }
+    if (lastError) throw lastError;
     assertCurrent();
     return {player:createIosNativeVideoAdapter(iosUnified,`video:${videoKey}`),backend:'native'};
   }
