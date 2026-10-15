@@ -676,6 +676,11 @@ function saveDestinationPresentation(kind, id) {
 function closePlaylistPickerInPlace() {
   state.playlistPickerItem = null;
   document.querySelectorAll('.playlist-picker-backdrop').forEach(node => node.remove());
+  // Save/Watch Later closes this sheet without calling render(). Restore the
+  // single native AVPlayerLayer now, otherwise the lecture stays black.
+  if (iosNativeActive()) void iosUnified.occlude(false)
+    .then(scheduleIosUnifiedSurface)
+    .catch(error=>console.warn('Native AVPlayer overlay restore failed',error));
 }
 
 function refreshSaveDestinationButtons(kind = '', id = '') {
