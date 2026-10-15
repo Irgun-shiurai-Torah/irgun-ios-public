@@ -11,7 +11,7 @@ import UIKit
 // Audio mode preserves the item and clock (video HLS bandwidth is not guaranteed
 // to drop). A single player layer supports inline, Mini, fullscreen and PiP.
 @objc(IrgunUnifiedPlayerPlugin)
-public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
+public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPictureInPictureControllerDelegate {
     public static weak var current: IrgunUnifiedPlayerPlugin?
     public func simulatorSnapshot() -> [String: Any] { return snapshot() }
     public let identifier = "IrgunUnifiedPlayerPlugin"
@@ -26,6 +26,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setLayout", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setQuality", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "enterPiP", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "exitPiP", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setOverlayOccluded", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise)
     ]
@@ -46,6 +48,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var qualityHeight: Int = 0
     private var availableHeights: [Int] = []
     private var isPiPRequested = false
+    private var overlayOccluded = false
     private var itemID = ""
     private var itemURL = ""
     private var title = "Irgun Shiurai Torah"
@@ -77,6 +80,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         installNativeControls()
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pipController = AVPictureInPictureController(playerLayer: videoLayer)
+            pipController?.delegate = self
+            if #available(iOS 14.2, *) {
+                pipController?.canStartPictureInPictureAutomaticallyFromInline = false
+            }
         }
 
         playerObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
@@ -174,10 +181,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         videoLayer.frame = viewer.view.bounds
         controlsOverlay?.frame = viewer.view.bounds
-        viewer.view.isHidden = mode == "audio" || viewer.view.frame.width < 20 || viewer.view.frame.height < 20
+        viewer.view.isHidden = mode == "audio" || overlayOccluded || viewer.view.frame.width < 20 || viewer.view.frame.height < 20
         // Mini video is visible but does not steal taps from the WebView's bar.
-        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !isPiPRequested
-        controlsOverlay?.isHidden = mode != "video" || layout == "mini" || isPiPRequested
+        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !overlayOccluded && !(pipController?.isPictureInPictureActive ?? false)
+        controlsOverlay?.isHidden = mode != "video" || layout == "mini" || overlayOccluded || (pipController?.isPictureInPictureActive ?? false)
         viewer.view.setNeedsLayout()
     }
 
@@ -252,6 +259,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             "qualityHeight": qualityHeight,
             "qualities": availableHeights,
             "pipActive": pipController?.isPictureInPictureActive ?? false,
+            "overlayOccluded": overlayOccluded,
+            "pipRequested": isPiPRequested,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
             "videoHeight": Double(player.currentItem?.presentationSize.height ?? 0),
             "surfaceX": Double(viewer.view.frame.minX),
@@ -457,6 +466,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             // Critical single-owner property: do not replace or seek the item.
+            if next == "audio", self.pipController?.isPictureInPictureActive == true {
+                self.pipController?.stopPictureInPicture()
+            }
             self.mode = next
             self.placeSurface(self.lastSurfaceRect)
             self.publishState()
@@ -471,6 +483,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             guard ["inline", "mini", "full"].contains(next) else {
                 call.reject("Unsupported native video layout")
                 return
+            }
+            if next == "mini" && self.pipController?.isPictureInPictureActive == true {
+                self.pipController?.stopPictureInPicture()
+                self.isPiPRequested = false
+                self.notifyListeners("pipState", data:["active":false,"reason":"mini"])
             }
             self.layout = next
             if let rect = call.getObject("rect") { self.lastSurfaceRect = rect }
@@ -656,6 +673,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc private func tapMini() {
+        if pipController?.isPictureInPictureActive == true {
+            pipController?.stopPictureInPicture()
+            isPiPRequested = false
+        }
         if layout == "full" {
             layout = "inline"
             placeSurface(lastSurfaceRect)
@@ -778,6 +799,49 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc public func exitPiP(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            if self.pipController?.isPictureInPictureActive == true {
+                self.pipController?.stopPictureInPicture()
+            }
+            self.isPiPRequested = false
+            self.placeSurface(self.lastSurfaceRect)
+            call.resolve(self.snapshot())
+        }
+    }
+
+    @objc public func setOverlayOccluded(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.overlayOccluded = call.getBool("occluded") ?? false
+            self.placeSurface(self.lastSurfaceRect)
+            call.resolve(self.snapshot())
+        }
+    }
+
+    public func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isPiPRequested = true
+        placeSurface(lastSurfaceRect)
+    }
+    public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isPiPRequested = true
+        notifyListeners("pipState", data:["active":true])
+        placeSurface(lastSurfaceRect)
+        publishState()
+    }
+    public func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isPiPRequested = false
+        notifyListeners("pipState", data:["active":false])
+        placeSurface(lastSurfaceRect)
+        publishState()
+    }
+    public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        isPiPRequested = false
+        notifyListeners("pipState", data:["active":false])
+        notifyListeners("pipUnavailable", data:["message":error.localizedDescription])
+        placeSurface(lastSurfaceRect)
+        publishState()
+    }
+
     @objc public func getState(_ call: CAPPluginCall) {
         DispatchQueue.main.async { call.resolve(self.snapshot()) }
     }
@@ -791,6 +855,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             self.pendingOpenTimeout = nil
             self.playingWanted = false
             self.player.pause()
+            self.pipController?.stopPictureInPicture()
+            self.isPiPRequested = false
+            self.overlayOccluded = false
             self.itemObserver = nil
             self.player.replaceCurrentItem(with: nil)
             self.active = false
