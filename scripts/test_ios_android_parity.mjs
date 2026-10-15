@@ -79,6 +79,31 @@ test('iOS bottom nav has one stable DOM mount and stable tab identity across sta
   state.language='he';sync();assert.equal(markupCalls,2);
 });
 
+
+test('iOS swipe publishes a tab only after media handoff and the matching DOM render', () => {
+  const start = app.indexOf('async function navigateIosBottomTab(button)');
+  const end = app.indexOf('\nfunction bind() {', start);
+  assert.ok(start >= 0 && end > start, 'Native iOS tab navigation must exist');
+  const navigate = app.slice(start, end);
+  const awaitPreparation = navigate.indexOf('await prepareIosTabNavigation(');
+  const commitScreen = navigate.indexOf('state.screen = next;');
+  assert.ok(awaitPreparation > 0 && commitScreen > awaitPreparation,
+    'Do not advertise a new tab in state until its asynchronous media handoff is finished');
+  assert.ok(navigate.indexOf('state.iosNavPending = next;') < awaitPreparation,
+    'Highlight the pending destination without changing the active content');
+  assert.ok(navigate.indexOf("state.iosNavPending = '';") > commitScreen,
+    'Clear pending state only after the tab identity has been committed');
+  assert.match(app,/data-screen="\$\{esc\(state\.screen\)\}"/,
+    'Real content must expose which screen it actually rendered');
+  assert.match(app,/canNavigate: \(\) => !state\.iosNavPending/,
+    'Prevent a second swipe while a tab is being prepared');
+  const observer = readFileSync(new URL('../.github/simulator/bridge.js',import.meta.url),'utf8');
+  assert.match(observer,/renderedScreen === state\.screen/,
+    'iOS UI tests must reject snapshots where state and rendered DOM disagree');
+  assert.match(observer,/tabSwipeReady && y < innerHeight/,
+    'The simulator must not use a stale hit-test row during a tab transition');
+});
+
 test('Android control layout is mirrored without replacing video/audio decoders',()=>{
   for(const id of ['dmMini','dmPip','dmQuality','dmSpeed','dmFull','dmBack','dmPlay','dmForward','dmSeek','dmNow','dmDur']) {
     assert.ok(direct.includes('id="'+id+'"'),'Missing player control '+id);
