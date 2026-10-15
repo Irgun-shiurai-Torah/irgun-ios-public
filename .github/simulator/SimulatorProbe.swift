@@ -133,6 +133,7 @@ final class SimulatorProbe {
             if let json = result as? String, let data = json.data(using: .utf8),
                var state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
+                state["nativePlayer"] = IrgunUnifiedPlayerPlugin.current?.simulatorSnapshot() ?? [:]
                 if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) {
                     self.status?.accessibilityValue = value
                     self.observationLock.lock()
