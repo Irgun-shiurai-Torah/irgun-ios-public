@@ -114,6 +114,90 @@ final class PlaybackUITests: XCTestCase {
 
     }
 
+
+    // This test reads the actual Swift AVPlayer state, never a mocked clock.
+    // All media transitions use physical iPhone/iPad taps or Home.
+    func testNativeSingleAVPlayerVideoAudioMiniHome() throws {
+        let button = app.buttons["ist-simulator-open"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15), "Native HLS launch button missing")
+        button.tap()
+        let opened = try waitFor("Native AVPlayer ready with actual decoded video", timeout: 140) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true &&
+                n["ready"] as? Bool == true &&
+                n["sameItem"] as? Bool == true &&
+                n["mode"] as? String == "video" &&
+                self.number(n,"videoWidth") > 0 &&
+                self.number(n,"itemEpoch") == 1
+        }
+        let first = opened["nativePlayer"] as? [String:Any] ?? [:]
+        let id = first["id"] as? String ?? ""
+        XCTAssertTrue(id.hasPrefix("video:"))
+        let start=self.number(first,"position")
+        _ = try waitFor("One AVPlayer video clock must advance", timeout: 45) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["id"] as? String == id &&
+                n["playing"] as? Bool == true &&
+                self.number(n,"position") > start + 1.5 &&
+                self.number(n,"itemEpoch") == 1
+        }
+        evidence("native-video-moving-clock")
+        XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true,
+                       "WebKit audio must never play beside native video")
+        XCTAssertEqual(number(snapshot(),"playerCount"),0,accuracy:0,
+                       "No HTML video decoder should exist")
+
+        try tapWebButton("Audio")
+        let audioState = try waitFor("Audio mode shares AVPlayerItem without seek", timeout: 35) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["mode"] as? String == "audio" &&
+                n["mode"] as? String == "audio" &&
+                n["id"] as? String == id &&
+                n["sameItem"] as? Bool == true &&
+                self.number(n,"itemEpoch") == 1
+        }
+        let audioTime=self.number(audioState["nativePlayer"] as? [String:Any] ?? [:],"position")
+        _ = try waitFor("Actual native audio clock continues", timeout: 30) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["playing"] as? Bool == true &&
+                self.number(n,"position") > audioTime + 1 &&
+                self.number(n,"itemEpoch") == 1
+        }
+        XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true)
+        evidence("native-audio-same-item")
+
+        try tapWebButton("Video")
+        _ = try waitFor("Video returned on original native item", timeout: 35) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["mode"] as? String == "video" &&
+                n["mode"] as? String == "video" &&
+                n["id"] as? String == id &&
+                self.number(n,"itemEpoch") == 1 &&
+                n["playing"] as? Bool == true
+        }
+        let beforeHome=number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"position")
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 6)
+        app.activate()
+        _ = try waitFor("Same native AVPlayer continues after Home and reopening", timeout: 45) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["id"] as? String == id &&
+                n["active"] as? Bool == true &&
+                self.number(n,"itemEpoch") == 1 &&
+                self.number(n,"position") > beforeHome + 1
+        }
+        evidence("native-home-reopened")
+        try tapWebButton("Keep playing at bottom of app")
+        _ = try waitFor("Mini keeps identical AVPlayerItem", timeout: 30) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["minimized"] as? Bool == true &&
+                n["layout"] as? String == "mini" &&
+                n["id"] as? String == id &&
+                self.number(n,"itemEpoch") == 1
+        }
+        evidence("native-mini-one-player")
+    }
+
     func testAppleSignInButtonIsVisible() throws {
         try tapWebButton("Account")
         let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
