@@ -288,8 +288,16 @@ def patch_app_delegate():
     func irgunSetVideoOrientationMask(_ mask: UIInterfaceOrientationMask) {
         irgunVideoOrientationMask = mask
         if #available(iOS 16.0, *) {
-            window?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
-            if let scene = window?.windowScene {
+            // iOS 26 may host Capacitor in a UIWindowScene without the legacy
+            // AppDelegate window. Resolve the foreground scene explicitly.
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = window?.windowScene
+                ?? scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first
+            let root = window?.rootViewController
+                ?? scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            root?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let scene = scene {
                 scene.requestGeometryUpdate(UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)) { error in
                     NSLog("Irgun iOS orientation request not accepted: \\(error)")
                 }
