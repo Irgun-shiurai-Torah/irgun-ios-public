@@ -88,6 +88,29 @@ final class PlaybackUITests: XCTestCase {
     private func tapWebButton(_ label: String) throws {
         let hide = app.buttons["ist-simulator-hide-controls"]
         if hide.exists && hide.isHittable { hide.tap() }
+        // UI-only actions: native UIKit controls for the one AVPlayer, web
+        // controls only for the legacy non-native regression scenario.
+        let native = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+        if native["active"] as? Bool == true && native["mode"] as? String == "video" {
+            let mappings = [
+                "Fullscreen": "irgun-native-fullscreen",
+                "Exit Fullscreen": "irgun-native-fullscreen",
+                "Pause video": "irgun-native-play",
+                "Play video": "irgun-native-play",
+                "Picture in Picture": "irgun-native-pip"
+            ]
+            if let identifier = mappings[label] {
+                let control = app.buttons[identifier]
+                let ready = NSPredicate(format:"exists == true AND hittable == true")
+                guard XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:control)],timeout:20) == .completed else {
+                    evidence("missing-native-control-\(label)")
+                    XCTFail("Native AVPlayer control unavailable: \(label)")
+                    throw Failure.timedOut(label)
+                }
+                control.tap()
+                return
+            }
+        }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
         // visible DOM control, with a fresh hit test, rather than invoking JS.
         if ["Fullscreen", "Exit Fullscreen", "Pause video", "Play video", "Keep playing at bottom of app"].contains(label) {
@@ -244,48 +267,83 @@ final class PlaybackUITests: XCTestCase {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        // Native overlay taps can be missed during the first launch animation.
-        // Retry once only if JS has not accepted or failed the open request.
         let acceptanceDeadline = Date().addingTimeInterval(4)
         while Date() < acceptanceDeadline {
-            let current = snapshot()
-            if current["opening"] as? Bool == true || !(current["id"] as? String ?? "").isEmpty || !(current["error"] as? String ?? "").isEmpty { break }
+            let now = snapshot()
+            if now["opening"] as? Bool == true ||
+                !(now["id"] as? String ?? "").isEmpty ||
+                !(now["error"] as? String ?? "").isEmpty { break }
             Thread.sleep(forTimeInterval: 0.3)
         }
         let accepted = snapshot()
-        if accepted["opening"] as? Bool != true && (accepted["id"] as? String ?? "").isEmpty && (accepted["error"] as? String ?? "").isEmpty { button.tap() }
-        let state = try waitFor("Same-shiur direct HLS or MP4 must start visibly", timeout: 150) { s in
-            // Native HLS can fail source initialization and legitimately fall back
-            // directly to the same shiur's MP4, before any decoder-reload attempt.
-            // Still require the real local media URL, playback and correct identity;
-            // assertMovingVideo() separately proves decoded video frames advance.
+        if accepted["opening"] as? Bool != true &&
+            (accepted["id"] as? String ?? "").isEmpty &&
+            (accepted["error"] as? String ?? "").isEmpty { button.tap() }
+        let state = try waitFor("Same-shiur native HLS/MP4 video must become visible",timeout:150) { s in
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
             let source = s["videoSource"] as? String ?? ""
             let sameShiurMP4 = s["backend"] as? String == "mp4" &&
                 source.contains("/media/") && source.contains("/video.mp4")
+            if native["active"] as? Bool == true {
+                return s["mode"] as? String == "video" &&
+                    s["ready"] as? Bool == true &&
+                    ["hls-native","mp4"].contains(s["backend"] as? String ?? "") &&
+                    (s["id"] as? String) == (s["sampleId"] as? String) &&
+                    native["mode"] as? String == "video" &&
+                    native["ready"] as? Bool == true &&
+                    native["playing"] as? Bool == true &&
+                    native["layerReady"] as? Bool == true &&
+                    self.number(native,"videoWidth") > 0 &&
+                    self.number(native,"surfaceWidth") > 40 &&
+                    self.number(native,"surfaceHeight") > 30 &&
+                    self.number(native,"decodedFrames") >= 1 &&
+                    self.number(native,"position") >= 28
+            }
             return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
                 (s["backend"] as? String == "hls-native" || sameShiurMP4) &&
                 (s["id"] as? String) == (s["sampleId"] as? String) &&
-                s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
-                self.number(s, "videoTime") >= 28
+                s["videoPlaying"] as? Bool == true &&
+                s["videoVisible"] as? Bool == true &&
+                self.number(s,"videoTime") >= 28
         }
-        XCTAssertEqual(number(state, "speed"), 1, accuracy: 0.01)
-        XCTAssertEqual(number(state, "playerCount"), 1, "Exactly one video element should exist")
+        XCTAssertEqual(number(state,"speed"),1,accuracy:0.01)
+        let native=state["nativePlayer"] as? [String:Any] ?? [:]
+        XCTAssertEqual(number(state,"playerCount"), native["active"] as? Bool == true ? 0 : 1,
+                       "Native AVPlayer must not create an HTML video decoder")
         evidence("fresh-video")
     }
 
     private func assertMovingVideo() throws {
-        let before = try waitFor("Video must settle before frame sampling") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            $0["initializing"] as? Bool != true && $0["decoderLoading"] as? Bool != true &&
-            $0["nativeBackgroundPending"] as? Bool != true && $0["visualRecoveryPending"] as? Bool != true &&
-            self.number($0, "frames") >= 1 && self.number($0, "frameTime") > 0
+        let before = try waitFor("Video decoder must be presenting frames",timeout:45) { s in
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
+            if native["active"] as? Bool == true {
+                return native["mode"] as? String == "video" &&
+                    native["playing"] as? Bool == true &&
+                    native["ready"] as? Bool == true &&
+                    native["layerReady"] as? Bool == true &&
+                    self.number(native,"videoWidth") > 0 &&
+                    self.number(native,"decodedFrames") >= 1
+            }
+            return s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                s["initializing"] as? Bool != true && s["decoderLoading"] as? Bool != true &&
+                self.number(s,"frames") >= 1 && self.number(s,"frameTime") > 0
         }
-        XCTAssertTrue(before["frameApi"] as? Bool == true, "Simulator must expose video-frame callbacks")
-        _ = try waitFor("Video frames and media clock must advance") {
-            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            self.number($0, "frames") > self.number(before, "frames") + 2 &&
-            self.number($0, "frameTime") > self.number(before, "frameTime") + 0.5 &&
-            self.number($0, "videoTime") > self.number(before, "videoTime") + 0.5
+        let nativeBefore = before["nativePlayer"] as? [String:Any] ?? [:]
+        _ = try waitFor("Decoded frames and the media clock must advance",timeout:45) { s in
+            let n = s["nativePlayer"] as? [String:Any] ?? [:]
+            if nativeBefore["active"] as? Bool == true {
+                return n["id"] as? String == nativeBefore["id"] as? String &&
+                    n["playing"] as? Bool == true &&
+                    n["layerReady"] as? Bool == true &&
+                    self.number(n,"itemEpoch") == self.number(nativeBefore,"itemEpoch") &&
+                    self.number(n,"decodedFrames") >= self.number(nativeBefore,"decodedFrames") + 2 &&
+                    self.number(n,"frameTime") > self.number(nativeBefore,"frameTime") + 0.5 &&
+                    self.number(n,"position") > self.number(nativeBefore,"position") + 0.5
+            }
+            return s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
+                self.number(s,"frames") > self.number(before,"frames") + 2 &&
+                self.number(s,"frameTime") > self.number(before,"frameTime") + 0.5 &&
+                self.number(s,"videoTime") > self.number(before,"videoTime") + 0.5
         }
     }
 
@@ -391,6 +449,12 @@ final class PlaybackUITests: XCTestCase {
 
     private func videoPoint(_ x: Double, _ y: Double) -> XCUICoordinate {
         let s = snapshot()
+        let native = s["nativePlayer"] as? [String:Any] ?? [:]
+        if native["active"] as? Bool == true {
+            return app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: number(native,"surfaceX") + number(native,"surfaceWidth") * x,
+                dy: number(native,"surfaceY") + number(native,"surfaceHeight") * y))
+        }
         return app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
             dx: number(s,"videoX") + number(s,"videoWidth") * x,
             dy: number(s,"videoY") + number(s,"videoHeight") * y))
