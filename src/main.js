@@ -3467,8 +3467,10 @@ function syncIosVideoDisplay() {
     console.warn('iOS video orientation/idle-time policy unavailable', error);
   });
 }
+let iosVideoOrientationListenerAttached = false;
+let iosVideoOrientationListenerAttempts = 0;
 async function bindIosVideoOrientation() {
-  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  if (!IS_IOS || !Capacitor.isNativePlatform() || iosVideoOrientationListenerAttached) return;
   try {
     await IrgunVideoDisplay.addListener('orientation', ({fullscreen,direction}) => {
       if (document.hidden || !state.watchVideo || state.watchMode !== 'video' ||
@@ -3492,11 +3494,27 @@ async function bindIosVideoOrientation() {
         finally { iosSensorFullscreenDirection = ''; }
       }
     });
+    iosVideoOrientationListenerAttached = true;
   } catch (error) {
-    console.warn('Native iOS orientation listener unavailable', error);
+    // AppDelegate installs this manually bridged plugin shortly after iOS
+    // activation. Never leave orientation disabled after an early race.
+    if (++iosVideoOrientationListenerAttempts < 6) {
+      setTimeout(() => { void bindIosVideoOrientation(); }, iosVideoOrientationListenerAttempts * 500);
+    } else console.warn('Native iOS orientation listener unavailable', error);
   }
 }
-if (IS_IOS && Capacitor.isNativePlatform()) void bindIosVideoOrientation();
+if (IS_IOS && Capacitor.isNativePlatform()) {
+  void bindIosVideoOrientation();
+  window.addEventListener('irgunNativeDidBecomeActive', () => {
+    iosVideoDisplayKey = '';
+    syncIosVideoDisplay();
+    void bindIosVideoOrientation();
+  });
+  document.addEventListener('visibilitychange', () => {
+    iosVideoDisplayKey = '';
+    syncIosVideoDisplay();
+  });
+}
 
 function refreshPersistentMiniVideoChrome() {
   if (!persistentVideoMount) return;
