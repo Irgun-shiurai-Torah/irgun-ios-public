@@ -2,6 +2,7 @@ import Foundation
 import Capacitor
 import AVFoundation
 import AVKit
+import CoreVideo
 import MediaPlayer
 import UIKit
 
@@ -49,6 +50,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var availableHeights: [Int] = []
     private var isPiPRequested = false
     private var overlayOccluded = false
+    #if targetEnvironment(simulator)
+    private var simulatorFrameOutput: AVPlayerItemVideoOutput?
+    private var simulatorFrameCount: Int = 0
+    private var simulatorFrameTime: Double = 0
+    #endif
     private var itemID = ""
     private var itemURL = ""
     private var title = "Irgun Shiurai Torah"
@@ -241,8 +247,27 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         return seconds.isFinite ? max(0, seconds) : 0
     }
 
+    #if targetEnvironment(simulator)
+    private func inspectDecodedVideoFrame() {
+        guard let output = simulatorFrameOutput, active, mode == "video" else { return }
+        let at = output.itemTime(forHostTime: CACurrentMediaTime())
+        guard output.hasNewPixelBuffer(forItemTime: at) else { return }
+        var displayed = CMTime.invalid
+        if output.copyPixelBuffer(forItemTime: at, itemTimeForDisplay: &displayed) != nil {
+            let seconds = displayed.seconds.isFinite ? displayed.seconds : at.seconds
+            if seconds.isFinite, seconds > simulatorFrameTime {
+                simulatorFrameTime = seconds
+                simulatorFrameCount += 1
+            }
+        }
+    }
+    #endif
+
     private func snapshot() -> [String: Any] {
-        [
+        #if targetEnvironment(simulator)
+        inspectDecodedVideoFrame()
+        #endif
+        var data: [String: Any] = [
             "id": itemID,
             "active": active,
             "mode": mode,
@@ -259,6 +284,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "qualityHeight": qualityHeight,
             "qualities": availableHeights,
             "pipActive": pipController?.isPictureInPictureActive ?? false,
+            "pipSupported": AVPictureInPictureController.isPictureInPictureSupported(),
+            "layerReady": videoLayer.isReadyForDisplay && !viewer.view.isHidden,
             "overlayOccluded": overlayOccluded,
             "pipRequested": isPiPRequested,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
@@ -270,6 +297,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "surfaceInteractive": viewer.view.isUserInteractionEnabled,
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
+        #if targetEnvironment(simulator)
+        data["decodedFrames"] = simulatorFrameCount
+        data["frameTime"] = simulatorFrameTime
+        #endif
+        return data
     }
 
     private func publishState() {
@@ -383,6 +415,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
+                #if targetEnvironment(simulator)
+                self.simulatorFrameCount = 0
+                self.simulatorFrameTime = 0
+                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+                    kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+                ])
+                item.add(output)
+                self.simulatorFrameOutput = output
+                #endif
                 self.itemEpoch += 1
                 self.player.replaceCurrentItem(with: item)
                 self.itemObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
@@ -855,6 +896,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.pendingOpenTimeout = nil
             self.playingWanted = false
             self.player.pause()
+            #if targetEnvironment(simulator)
+            self.simulatorFrameOutput = nil
+            self.simulatorFrameCount = 0
+            self.simulatorFrameTime = 0
+            #endif
             self.pipController?.stopPictureInPicture()
             self.isPiPRequested = false
             self.overlayOccluded = false
