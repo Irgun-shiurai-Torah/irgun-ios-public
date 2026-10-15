@@ -3394,7 +3394,7 @@ function bottomNavHtml() {
     ['account', 'Account', 'account']
   ];
   const activeRoot = IS_IOS ? iosNavigationRoot(state.screen, state.iosNavRoot) : (state.screen.startsWith('live') ? 'live' : state.screen);
-  return `<nav class="bottom-nav${IS_IOS ? ' ios-floating-nav' : ''}" aria-label="${currentLanguage()==='he'?'ניווט ראשי':'Main navigation'}">${IS_IOS ? '<span class="nav-active-indicator" aria-hidden="true"></span>' : ''}${items.map(([key, label, icon]) => `
+  return `<nav class="bottom-nav${IS_IOS ? ' ios-floating-nav' : ''}" dir="${currentLanguage()==='he'?'rtl':'ltr'}" aria-label="${currentLanguage()==='he'?'ניווט ראשי':'Main navigation'}">${IS_IOS ? '<span class="nav-active-indicator" aria-hidden="true"></span>' : ''}${items.map(([key, label, icon]) => `
     <button type="button" class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${IS_IOS && activeRoot === key ? ' aria-current="page"' : ''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
