@@ -75,6 +75,19 @@ def patch_info_plist(ios_client, reversed_client):
     if 'audio' not in modes:
         modes.append('audio')
     data['UIBackgroundModes'] = modes
+    # Permit real iPhone/iPad landscape geometry when a user expands video.
+    # UIKit still manages portrait/landscape normally outside playback.
+    data['UISupportedInterfaceOrientations'] = [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+    ]
+    data['UISupportedInterfaceOrientations~ipad'] = [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationPortraitUpsideDown',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+    ]
 
     url_types = list(data.get('CFBundleURLTypes') or [])
     existing_schemes = set()
@@ -105,6 +118,7 @@ def write_analytics_plugin():
         die(f'Analytics plugin template is missing: {ANALYTICS_PLUGIN_TEMPLATE}')
     ANALYTICS_PLUGIN.write_text(ANALYTICS_PLUGIN_TEMPLATE.read_text())
     (IOS_APP / 'IrgunBackgroundAudioPlugin.swift').write_text((ROOT / 'scripts/IrgunBackgroundAudioPlugin.swift').read_text())
+    (IOS_APP / 'IrgunVideoDisplayPlugin.swift').write_text((ROOT / 'scripts/IrgunVideoDisplayPlugin.swift').read_text())
 
 def patch_app_delegate():
     app_delegate = IOS_APP / 'AppDelegate.swift'
@@ -137,6 +151,7 @@ def patch_app_delegate():
         let plugin = IrgunAnalyticsPlugin()
         capacitorBridge.registerPluginInstance(plugin)
         capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())
+        capacitorBridge.registerPluginInstance(IrgunVideoDisplayPlugin())
         irgunAnalyticsPlugin = plugin
     }
 
@@ -261,6 +276,29 @@ def patch_app_delegate():
         }
     }
 ''')
+
+    if 'func irgunSetVideoOrientationMask(_ mask: UIInterfaceOrientationMask)' not in text:
+        additions.append("""
+    private var irgunVideoOrientationMask: UIInterfaceOrientationMask = .all
+
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        return irgunVideoOrientationMask
+    }
+
+    func irgunSetVideoOrientationMask(_ mask: UIInterfaceOrientationMask) {
+        irgunVideoOrientationMask = mask
+        if #available(iOS 16.0, *) {
+            window?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let scene = window?.windowScene {
+                scene.requestGeometryUpdate(UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)) { error in
+                    NSLog("Irgun iOS orientation request not accepted: \\(error)")
+                }
+            }
+        } else {
+            UIViewController.attemptRotationToDeviceOrientation()
+        }
+    }
+""")
 
     if additions:
         idx = text.rfind('\n}')
