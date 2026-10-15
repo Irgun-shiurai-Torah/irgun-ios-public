@@ -55,6 +55,11 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             let direction = call.getString("direction") ?? ""
             let chosenDirection = direction.isEmpty && self.sensorCandidate.hasPrefix("landscape")
                 ? self.sensorCandidate : direction
+            // Ignore stale gravity events after a manual fullscreen exit.
+            if enabled && fromSensor && self.manualExitBlocked {
+                call.resolve()
+                return
+            }
             if !enabled && !fromSensor {
                 // A manual fullscreen exit must remain respected even if an
                 // earlier sensor callback already changed the orientation flag.

@@ -292,15 +292,25 @@ audio.playbackRate = state.playbackSpeed;
 
 // All native iOS media, including purchased/regular audio and HLS video,
 // goes through this one Swift AVPlayer. No opt-in flag and no second player.
+// Native toolbar taps take priority over a delayed layout or orientation event.
+let iosManualFullscreenExitBlocked = false;
+let iosFullscreenLayoutOverride = '';
+let iosFullscreenLayoutOverrideUntil = 0;
 const iosUnified = createIosUnifiedAVPlayer({
   capacitor:Capacitor, registerPlugin,
   onState:onIosUnifiedState,
   onMinimize:()=>{void minimizeWatchToPersistent();},
   onFullscreen:data=>{
     const enabled=Boolean(data?.fullscreen);
+    iosManualFullscreenExitBlocked = !enabled;
+    iosFullscreenLayoutOverride = enabled ? 'full' : 'inline';
+    iosFullscreenLayoutOverrideUntil = Date.now() + 4000;
     document.body.classList.toggle('irgun-ios-video-fullscreen',enabled);
+    // A stale resize must not replay full layout after Exit Fullscreen.
+    void iosUnified.layout(iosFullscreenLayoutOverride,nativeVideoFrame(document)||{})
+      .then(()=>scheduleIosUnifiedSurface())
+      .catch(error=>console.warn('Native iOS fullscreen layout failed',error));
     IrgunVideoDisplay.setFullscreen({enabled}).catch(error=>console.warn('iOS fullscreen orientation failed',error));
-    if (!enabled) scheduleIosUnifiedSurface();
   },
   onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.'),
   onPiPState:data=>{state.watchPictureInPicture=Boolean(data?.active);syncIosVideoDisplay();if(!data?.active)scheduleIosUnifiedSurface();}
@@ -347,7 +357,7 @@ function scheduleIosUnifiedSurface() {
     if (!iosNativeActive()||!state.watchVideo||state.watchMode!=='video') return;
     const rect=nativeVideoFrame(document);
     if (rect) {
-      const mode=state.watchMinimized?'mini':iosUnified.state.layout==='full'?'full':'inline';
+      const mode=state.watchMinimized?'mini':Date.now()<iosFullscreenLayoutOverrideUntil?iosFullscreenLayoutOverride:iosUnified.state.layout==='full'?'full':'inline';
       void iosUnified.layout(mode,rect)
         .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
     }
@@ -3551,6 +3561,11 @@ async function bindIosVideoOrientation() {
       if (iosNativeActive()) {
         // Rotate the AVPlayerLayer, never replace or seek its AVPlayerItem.
         const landscape=Boolean(fullscreen);
+        // Respect a user's manual exit until the device is upright again.
+        if (landscape && iosManualFullscreenExitBlocked) return;
+        if (!landscape) iosManualFullscreenExitBlocked = false;
+        iosFullscreenLayoutOverride = landscape ? 'full' : 'inline';
+        iosFullscreenLayoutOverrideUntil = Date.now() + 4000;
         document.body.classList.toggle('irgun-ios-video-fullscreen',landscape);
         void iosUnified.layout(landscape?'full':'inline',nativeVideoFrame(document)||{})
           .then(()=>{if(!landscape)scheduleIosUnifiedSurface();})
@@ -6362,7 +6377,9 @@ async function navigateIosBottomTab(button) {
 
 function bind() {
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
-  document.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
+  // The persistent iOS nav already delegates clicks on its stable mount.
+  // Rebinding it after each Live status render races backward tab swipes.
+  app.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => {
     state.screen = el.dataset.nav;
     if (el.dataset.openPurchased) state.librarySection = 'purchased';
     if (el.dataset.openHistory) state.librarySection = 'history';

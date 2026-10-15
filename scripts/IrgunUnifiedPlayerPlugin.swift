@@ -50,6 +50,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var qualityHeight: Int = 0
     private var availableHeights: [Int] = []
     private var isPiPRequested = false
+    private var pipResumeWanted = false
+    private var pipPausedByUser = false
     private var overlayOccluded = false
     #if targetEnvironment(simulator)
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
@@ -206,6 +208,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
         add(controls.playCommand) { [weak self] _ in
             guard let self = self, self.active else { return .noSuchContent }
+            if self.isPiPRequested { self.pipPausedByUser = false; self.pipResumeWanted = true }
             self.playingWanted = true
             try? self.activateAudioSession()
             self.player.playImmediately(atRate: self.playbackRate)
@@ -213,6 +216,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
         add(controls.pauseCommand) { [weak self] _ in
             guard let self = self, self.active else { return .noSuchContent }
+            // An explicit background remote pause must survive PiP teardown;
+            // iOS also issues system pauses while returning to the foreground.
+            if self.isPiPRequested && UIApplication.shared.applicationState == .background {
+                self.pipPausedByUser = true
+            }
             self.playingWanted = false
             self.player.pause()
             return .success
@@ -453,6 +461,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc public func play(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             guard self.active else { call.reject("No native item loaded"); return }
+            if self.isPiPRequested { self.pipPausedByUser = false; self.pipResumeWanted = true }
             self.playingWanted = true
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
@@ -464,6 +473,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     @objc public func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            if self.isPiPRequested { self.pipPausedByUser = true }
             self.playingWanted = false
             self.player.pause()
             self.publishState()
@@ -760,11 +770,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         publishState()
     }
 
+    private func rememberPiPPlaybackIntent() {
+        pipResumeWanted = playingWanted && player.timeControlStatus == .playing
+        pipPausedByUser = false
+    }
+
     @objc private func tapPiP() {
         guard active, mode == "video", let pip = pipController else { return }
         if pip.isPictureInPicturePossible {
-            pip.startPictureInPicture()
+            rememberPiPPlaybackIntent()
             isPiPRequested = true
+            pip.startPictureInPicture()
             publishState()
         } else {
             notifyListeners("pipUnavailable", data: ["message": "Picture in Picture is not ready"])
@@ -860,6 +876,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                   pip.isPictureInPicturePossible else {
                 call.reject("System Picture in Picture is not ready");return
             }
+            self.rememberPiPPlaybackIntent()
             self.isPiPRequested=true
             pip.startPictureInPicture()
             self.publishState()
@@ -903,12 +920,24 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         publishState()
     }
     public func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        let shouldResume = pipResumeWanted && !pipPausedByUser && active && mode == "video"
+        pipResumeWanted = false
+        pipPausedByUser = false
         isPiPRequested = false
-        notifyListeners("pipState", data:["active":false])
         placeSurface(lastSurfaceRect)
+        // AVKit may pause while leaving system PiP. Resume the SAME AVPlayerItem
+        // only when video had been playing and no explicit pause was requested.
+        if shouldResume {
+            playingWanted = true
+            try? activateAudioSession()
+            player.playImmediately(atRate: playbackRate)
+        }
+        notifyListeners("pipState", data:["active":false])
         publishState()
     }
     public func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        pipResumeWanted = false
+        pipPausedByUser = false
         isPiPRequested = false
         notifyListeners("pipState", data:["active":false])
         notifyListeners("pipUnavailable", data:["message":error.localizedDescription])
@@ -927,6 +956,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.pendingOpen = nil
             self.pendingOpenTimeout?.cancel()
             self.pendingOpenTimeout = nil
+            self.pipResumeWanted = false
+            self.pipPausedByUser = false
             self.playingWanted = false
             self.player.pause()
             #if targetEnvironment(simulator)

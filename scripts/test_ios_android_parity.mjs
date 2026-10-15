@@ -104,6 +104,26 @@ test('iOS swipe publishes a tab only after media handoff and the matching DOM re
     'The simulator must not use a stale hit-test row during a tab transition');
 });
 
+test('persistent iOS tabs never acquire a new direct listener during Live rerenders', () => {
+  const bind = app.slice(app.indexOf('\nfunction bind() {'));
+  assert.match(bind,/app\.querySelectorAll\('\[data-nav\]'\)/);
+  assert.doesNotMatch(bind,/document\.querySelectorAll\('\[data-nav\]'\)/);
+});
+
+test('manual iPad fullscreen exit wins over stale sensor and layout callbacks', () => {
+  assert.match(app,/iosManualFullscreenExitBlocked = !enabled/);
+  assert.match(app,/landscape && iosManualFullscreenExitBlocked/);
+  assert.match(app,/Date\.now\(\)<iosFullscreenLayoutOverrideUntil/);
+  assert.match(iosNative,/enabled && fromSensor && self\.manualExitBlocked/);
+});
+
+test('PiP recovery keeps playback intent without replacing the native item', () => {
+  const unified = readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(unified,/rememberPiPPlaybackIntent\(\)/);
+  assert.match(unified,/let shouldResume = pipResumeWanted && !pipPausedByUser/);
+  assert.match(unified,/player\.playImmediately\(atRate: playbackRate\)/);
+});
+
 test('Android control layout is mirrored without replacing video/audio decoders',()=>{
   for(const id of ['dmMini','dmPip','dmQuality','dmSpeed','dmFull','dmBack','dmPlay','dmForward','dmSeek','dmNow','dmDur']) {
     assert.ok(direct.includes('id="'+id+'"'),'Missing player control '+id);
