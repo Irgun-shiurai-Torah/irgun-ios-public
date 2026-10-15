@@ -2828,3 +2828,5 @@ body.irgun-ios #persistentVideoMount.watch-audio-parked .direct-media-center-con
   body.irgun-ios .direct-media-controls { padding:10px 12px 3px; }
   body.irgun-ios .direct-media-time-row .direct-media-time { font-size:10px; }
 }
+
+body.irgun-ios .ios-floating-nav[dir="rtl"] .nav-active-indicator { left:auto; right:calc(6px + (100% - 12px) / 5 * var(--nav-index, 0)); }
