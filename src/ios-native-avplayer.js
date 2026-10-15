@@ -2,7 +2,7 @@
 // fullscreen/Mini/PiP surface, and background session controls the same
 // IrgunUnifiedPlayer Swift singleton and its AVPlayer (not a WKWebView media
 // element or a second background AVPlayer).
-export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = () => {}}) {
+export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = () => {}, onMinimize = () => {}, onFullscreen = () => {}, onPiPUnavailable = () => {}}) {
   if (capacitor?.getPlatform?.() !== 'ios' || !capacitor?.isNativePlatform?.()) return null;
   const native = registerPlugin('IrgunUnifiedPlayer');
   let current = null;
@@ -21,7 +21,12 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
   };
   const ready = async () => {
     if (!listenerPromise) {
-      listenerPromise = Promise.resolve(native.addListener('state',emit)).catch(error => {
+      listenerPromise = Promise.all([
+        native.addListener('state',emit),
+        native.addListener('requestMinimize',onMinimize),
+        native.addListener('requestFullscreen',onFullscreen),
+        native.addListener('pipUnavailable',onPiPUnavailable)
+      ]).catch(error => {
         listenerPromise = null;
         throw error;
       });
