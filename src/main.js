@@ -301,7 +301,8 @@ const iosUnified = createIosUnifiedAVPlayer({
     IrgunVideoDisplay.setFullscreen({enabled}).catch(error=>console.warn('iOS fullscreen orientation failed',error));
     if (!enabled) scheduleIosUnifiedSurface();
   },
-  onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.')
+  onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.'),
+  onPiPState:data=>{state.watchPictureInPicture=Boolean(data?.active);syncIosVideoDisplay();if(!data?.active)scheduleIosUnifiedSurface();}
 });
 let iosNativeLastHistoryAt = 0;
 let iosNativeSurfacePending = false;
@@ -3768,6 +3769,12 @@ async function quickVimeoTime(fallback = 0, timeoutMs = 900) {
 
 async function minimizeWatchToPersistent() {
   if (!state.watchVideo || state.watchMode !== 'video' || state.watchMinimized) return;
+  if (iosNativeActive()) {
+    if (state.watchPictureInPicture || iosUnified.state.pipActive) {
+      await iosUnified.exitPiP().catch(error=>console.warn('PiP exit before Mini',error));
+      state.watchPictureInPicture=false;
+    }
+  }
   if (!state.watchHostedExternally && !hostCurrentWatchOverlay('mini')) return;
   state.watchMinimized = true;
   syncIosVideoDisplay();
@@ -6109,6 +6116,7 @@ function analyticsScreenLabel() {
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
   syncIosBottomNavigation();
+  if(iosNativeActive()) void iosUnified.occlude(Boolean(state.playlistPickerItem || state.deleteDialog || state.filterDialog)).catch(()=>{});
   syncIosVideoDisplay();
   if (IS_IOS && state.screen === 'library' && !state.user &&
       ['likes','later','history','following'].includes(state.librarySection)) {
@@ -8741,14 +8749,14 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
     onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
-    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+    getTabs: () => Array.from(document.querySelectorAll('#iosBottomNavigationMount .bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
     canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),
-    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+    navigate: tab => document.querySelector(`#iosBottomNavigationMount .bottom-nav [data-nav="${tab}"]`)?.click()
   });
 }
 
