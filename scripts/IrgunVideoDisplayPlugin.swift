@@ -35,7 +35,7 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             self.pip = call.getBool("pip") ?? false
             // A paused lecture does not hold the screen awake indefinitely.
             UIApplication.shared.isIdleTimerDisabled =
-                self.videoActive && self.playbackIntended && !self.mini && !self.pip
+                self.videoActive && self.playbackIntended && !self.pip
             if self.videoActive && !self.mini && !self.pip { self.startMotionIfNeeded() }
             else { self.motion.stopDeviceMotionUpdates(); self.sensorCandidate = ""; self.lastReported = "" }
             if !self.videoActive && self.fullscreen {
