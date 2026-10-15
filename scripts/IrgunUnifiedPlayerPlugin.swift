@@ -5,13 +5,11 @@ import AVKit
 import MediaPlayer
 import UIKit
 
-// EXPERIMENTAL and opt-in. This plugin is never opened by production code unless
-// the JavaScript native-player pilot flag is explicitly enabled. Do not register
-// a second player for the same lecture in the normal app playback path.
-//
-// A single AVPlayerItem owns video and audio. Audio mode hides the native video
-// surface without replacing the AVPlayerItem or seeking to an MP3. This preserves
-// the clock and speed; it does NOT imply reduced mobile-video data consumption.
+// One native AVPlayer for ALL iOS lectures, including video, ordinary audio and
+// protected owned audio. One AVPlayerItem survives Audio <-> Video for a shiur.
+// Loading a different lecture replaces that item, never the AVPlayer instance.
+// Audio mode preserves the item and clock (video HLS bandwidth is not guaranteed
+// to drop). A single player layer supports inline, Mini, fullscreen and PiP.
 @objc(IrgunUnifiedPlayerPlugin)
 public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "IrgunUnifiedPlayerPlugin"
@@ -24,12 +22,28 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setRate", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setMode", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setLayout", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setQuality", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "enterPiP", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise)
     ]
 
     private let player = AVPlayer()
-    private let viewer = AVPlayerViewController()
+    private let viewer = UIViewController()
+    private let videoLayer = AVPlayerLayer()
+    private var pipController: AVPictureInPictureController?
+    private var controlsOverlay: UIView?
+    private var nativePlay: UIButton?
+    private var nativeQuality: UIButton?
+    private var nativeSpeed: UIButton?
+    private var nativeFull: UIButton?
+    private var nativePiP: UIButton?
+    private var nativeSeek: UISlider?
+    private var nativeElapsed: UILabel?
+    private var nativeDuration: UILabel?
+    private var qualityHeight: Int = 0
+    private var availableHeights: [Int] = []
+    private var isPiPRequested = false
     private var itemID = ""
     private var itemURL = ""
     private var title = "Irgun Shiurai Torah"
@@ -53,15 +67,13 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
     override public func load() {
-        viewer.player = player
-        viewer.showsPlaybackControls = true
-        viewer.allowsPictureInPicturePlayback = true
-        viewer.entersFullScreenWhenPlaybackBegins = false
-        viewer.exitsFullScreenWhenPlaybackEnds = false
-        if #available(iOS 14.2, *) {
-            // The pilot never surprises users by starting PiP merely on Home.
-            // The system PiP button in AVPlayerViewController is supported.
-            viewer.canStartPictureInPictureAutomaticallyFromInline = false
+        viewer.view.backgroundColor = .black
+        videoLayer.player = player
+        videoLayer.videoGravity = .resizeAspect
+        viewer.view.layer.addSublayer(videoLayer)
+        installNativeControls()
+        if AVPictureInPictureController.isPictureInPictureSupported() {
+            pipController = AVPictureInPictureController(playerLayer: videoLayer)
         }
 
         playerObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
@@ -83,11 +95,20 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func playableURL(_ value: String) -> URL? {
-        guard let url = URL(string: value),
-              url.scheme?.lowercased() == "https",
+        guard let url = URL(string: value) else { return nil }
+        if url.isFileURL {
+            // Only managed offline MP3 recordings in this app's sandbox.
+            let path = url.standardizedFileURL.path
+            let dataRoot = NSHomeDirectory() + "/Documents/irgun-offline/"
+            guard path.hasPrefix(dataRoot), FileManager.default.fileExists(atPath: path) else { return nil }
+            return url.standardizedFileURL
+        }
+        guard url.scheme?.lowercased() == "https",
               let host = url.host?.lowercased(),
               host == "api.irgunshiuraitorah.com" || host == "irgunshiuraitorah.com" ||
-              host.hasSuffix(".irgunshiuraitorah.com") else { return nil }
+              host.hasSuffix(".irgunshiuraitorah.com") ||
+              host.hasSuffix(".cloudflarestream.com") ||
+              host.hasSuffix(".r2.dev") else { return nil }
         return url
     }
 
@@ -125,10 +146,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func placeSurface(_ box: [String: Any]?) {
-        if let box = box, let rect = frame(from: box), let root = viewer.parent?.view {
-            // The fullscreen watch controls live above the WebView video stage.
-            // Never let the native AVKit view overlap their tappable header
-            // after foreground/rotation on iPad.
+        if let root = viewer.parent?.view, layout == "full" {
+            viewer.view.frame = root.bounds
+        } else if let box = box, let rect = frame(from: box), let root = viewer.parent?.view {
             let safeHeaderBottom = max(72, root.safeAreaInsets.top + 56)
             let top = max(safeHeaderBottom, rect.minY)
             let right = min(root.bounds.maxX, rect.maxX)
@@ -137,15 +157,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             viewer.view.frame = CGRect(x: left, y: top,
                                        width: max(0, right - left),
                                        height: max(0, bottom - top))
-        } else if let root = viewer.parent?.view {
-            let size = root.bounds.size
-            let width = max(1, size.width)
-            viewer.view.frame = CGRect(x: 0, y: max(90, (size.height - width * 9 / 16) / 3),
-                                       width: width, height: width * 9 / 16)
+        } else {
+            viewer.view.frame = .zero
         }
+        videoLayer.frame = viewer.view.bounds
+        controlsOverlay?.frame = viewer.view.bounds
         viewer.view.isHidden = mode == "audio" || viewer.view.frame.width < 20 || viewer.view.frame.height < 20
-        // In mini mode the WebView's overlay owns the mini controls and video hit target.
-        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini"
+        // Mini video is visible but does not steal taps from the WebView's bar.
+        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !isPiPRequested
+        controlsOverlay?.isHidden = mode != "video" || layout == "mini" || isPiPRequested
         viewer.view.setNeedsLayout()
     }
 
@@ -217,6 +237,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
             "rate": Double(playbackRate),
             "sameItem": active && player.currentItem != nil,
             "itemEpoch": itemEpoch,
+            "qualityHeight": qualityHeight,
+            "qualities": availableHeights,
+            "pipActive": pipController?.isPictureInPictureActive ?? false,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
             "videoHeight": Double(player.currentItem?.presentationSize.height ?? 0),
             "surfaceX": Double(viewer.view.frame.minX),
@@ -239,6 +262,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let d = duration()
         if d > 0 { metadata[MPMediaItemPropertyPlaybackDuration] = d }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = metadata
+        updateNativeControls()
         notifyListeners("state", data: snapshot())
     }
 
@@ -348,6 +372,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
                 }
                 self.itemID = id
                 self.itemURL = source
+                self.qualityHeight = 0
+                self.availableHeights = []
+                self.loadAvailableVariants(url)
             }
             self.active = true
             self.installRemoteControls()
