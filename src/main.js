@@ -344,8 +344,11 @@ function scheduleIosUnifiedSurface() {
     iosNativeSurfacePending=false;
     if (!iosNativeActive()||!state.watchVideo||state.watchMode!=='video') return;
     const rect=nativeVideoFrame(document);
-    if (rect) void iosUnified.layout(state.watchMinimized?'mini':'inline',rect)
-      .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
+    if (rect) {
+      const mode=state.watchMinimized?'mini':iosUnified.state.layout==='full'?'full':'inline';
+      void iosUnified.layout(mode,rect)
+        .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
+    }
   });
 }
 window.addEventListener('resize',scheduleIosUnifiedSurface);
@@ -8006,7 +8009,11 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
-  if (iosNativeActive()) {scheduleIosUnifiedSurface();return;}
+  if (iosNativeActive()) {
+    void iosUnified.snapshot().catch(error=>console.warn('Native AVPlayer foreground snapshot failed',error));
+    scheduleIosUnifiedSurface();
+    return;
+  }
   restoreVideoAfterSystemPip();
   if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
