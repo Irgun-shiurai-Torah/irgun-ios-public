@@ -246,8 +246,12 @@ final class PlaybackUITests: XCTestCase {
         func swipe(_ left: Bool, to screen: String) throws {
             let current = snapshot()["screen"] as? String ?? ""
             let state = try waitFor("Settled content for swipe from \(current)") {
-                $0["screen"] as? String == current && $0["pageLoading"] as? Bool == false &&
-                self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 && self.number($0,"tabSwipeY") >= 180
+                $0["screen"] as? String == current &&
+                $0["renderedScreen"] as? String == current &&
+                $0["tabSwipeReady"] as? Bool == true &&
+                $0["pageLoading"] as? Bool == false &&
+                self.number($0,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
+                self.number($0,"tabSwipeY") >= 220
             }
             let y = number(state, "tabSwipeY")
             let web = app.webViews.firstMatch
@@ -255,7 +259,11 @@ final class PlaybackUITests: XCTestCase {
             let start = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.8 : 0.2), dy: y))
             let end = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.2 : 0.8), dy: y))
             start.press(forDuration: 0.05, thenDragTo: end)
-            _ = try waitFor("Swipe must open \(screen)") { $0["screen"] as? String == screen }
+            _ = try waitFor("Swipe must open \(screen)") {
+                $0["screen"] as? String == screen &&
+                $0["renderedScreen"] as? String == screen &&
+                $0["tabSwipeReady"] as? Bool == true
+            }
         }
         for screen in ["shiurim", "live", "library", "account"] { try swipe(true, to: screen) }
         try swipe(true, to: "account") // No wrapping past the last tab.
