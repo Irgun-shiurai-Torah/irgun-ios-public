@@ -25,6 +25,7 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
     private var sensorCandidate = ""
     private var sensorCandidateSince = Date.distantPast
     private var lastReported = ""
+    private var orientationGeneration = 0
 
     @objc public func playback(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
@@ -51,13 +52,15 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             let enabled = call.getBool("enabled") ?? false
             let fromSensor = call.getBool("fromSensor") ?? false
             let direction = call.getString("direction") ?? ""
+            let chosenDirection = direction.isEmpty && self.sensorCandidate.hasPrefix("landscape")
+                ? self.sensorCandidate : direction
             if !enabled && self.fullscreen && !fromSensor {
                 // Manual exit is respected until physically upright again.
                 self.manualExitBlocked = true
             }
             if enabled { self.manualExitBlocked = false }
             self.fullscreen = enabled
-            self.applyOrientation(landscape: enabled, direction: direction)
+            self.applyOrientation(landscape: enabled, direction: chosenDirection)
             call.resolve()
         }
     }
@@ -67,7 +70,18 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
         let mask: UIInterfaceOrientationMask = landscape
             ? (direction == "landscapeRight" ? .landscapeRight : .landscapeLeft)
             : .portrait
+        orientationGeneration += 1
+        let generation = orientationGeneration
         delegate.irgunSetVideoOrientationMask(mask)
+        if !landscape {
+            // Restore normal rotation rules after the portrait transition. A
+            // delayed old exit must never cancel a subsequent fullscreen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                guard let self = self, self.orientationGeneration == generation,
+                      !self.fullscreen else { return }
+                delegate.irgunSetVideoOrientationMask(.all)
+            }
+        }
     }
 
     private func startMotionIfNeeded() {
