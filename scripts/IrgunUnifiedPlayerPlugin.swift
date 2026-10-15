@@ -102,8 +102,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         if url.isFileURL {
             // Only managed offline MP3 recordings in this app's sandbox.
             let path = url.standardizedFileURL.path
-            let dataRoot = NSHomeDirectory() + "/Documents/irgun-offline/"
-            guard path.hasPrefix(dataRoot), FileManager.default.fileExists(atPath: path) else { return nil }
+            let sandboxRoot=NSHomeDirectory()
+            // Capacitor's Directory.Data uses Library/NoCloud on iOS.
+            // Existing app versions may have saved data under another
+            // sandbox data directory; never allow an arbitrary file URL.
+            let allowedFolders=[
+                sandboxRoot + "/Library/NoCloud/irgun-offline/",
+                sandboxRoot + "/Library/Application Support/irgun-offline/",
+                sandboxRoot + "/Documents/irgun-offline/"
+            ]
+            guard allowedFolders.contains(where: { path.hasPrefix($0) }),
+                  FileManager.default.fileExists(atPath: path) else { return nil }
             return url.standardizedFileURL
         }
         guard url.scheme?.lowercased() == "https",
@@ -528,7 +537,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin {
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
         play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
         play.layer.cornerRadius = 17
-        play.heightAnchor.constraint(equalToConstant: 50).isActive = true
+        // button() already establishes the actual touch height. Do not
+        // install a second conflicting height constraint on UIKit.
         nativePlay = play
         let center = UIStackView(arrangedSubviews: [back,play,forward])
         center.translatesAutoresizingMaskIntoConstraints = false
