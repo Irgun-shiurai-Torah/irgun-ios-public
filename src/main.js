@@ -293,7 +293,15 @@ audio.playbackRate = state.playbackSpeed;
 // goes through this one Swift AVPlayer. No opt-in flag and no second player.
 const iosUnified = createIosUnifiedAVPlayer({
   capacitor:Capacitor, registerPlugin,
-  onState:onIosUnifiedState
+  onState:onIosUnifiedState,
+  onMinimize:()=>{void minimizeWatchToPersistent();},
+  onFullscreen:data=>{
+    const enabled=Boolean(data?.fullscreen);
+    document.body.classList.toggle('irgun-ios-video-fullscreen',enabled);
+    IrgunVideoDisplay.setFullscreen({enabled}).catch(error=>console.warn('iOS fullscreen orientation failed',error));
+    if (!enabled) scheduleIosUnifiedSurface();
+  },
+  onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.')
 });
 let iosNativeLastHistoryAt = 0;
 let iosNativeSurfacePending = false;
@@ -3614,6 +3622,16 @@ function enterIosPictureInPicture(event) {
     event.preventDefault?.();
     event.stopPropagation?.();
   }
+  if (iosNativeActive() && state.watchMode==='video') {
+    void iosUnified.pip().then(()=>{
+      state.watchPictureInPicture=true;
+      state.watchResumeSeconds=iosNativePosition();
+    }).catch(error=>{
+      state.watchPictureInPicture=false;
+      setToast(error?.message||'Native Picture in Picture could not start.');
+    });
+    return;
+  }
   if (!IS_IOS || !Capacitor.isNativePlatform() || !state.watchVideo || state.watchMode !== 'video') return;
 
   const player = state.watchVimeo;
@@ -6267,8 +6285,14 @@ async function navigateIosBottomTab(button) {
       state,
       exitFullscreen: async () => {
         // Exit without replacing the current HLS/video element or source.
-        const player = state.watchVimeo?.player;
-        if (typeof player?.exitFullscreen === 'function') player.exitFullscreen();
+        if (iosNativeActive()) {
+          document.body.classList.remove('irgun-ios-video-fullscreen');
+          await IrgunVideoDisplay.setFullscreen({enabled:false}).catch(()=>{});
+          await iosUnified.layout('inline',nativeVideoFrame(document)||{}).catch(()=>{});
+        } else {
+          const player = state.watchVimeo?.player;
+          if (typeof player?.exitFullscreen === 'function') player.exitFullscreen();
+        }
       },
       minimizeVideo: () => minimizeWatchToPersistent(),
       closeAudioWatch: () => closeWatch(true)
