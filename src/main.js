@@ -2,6 +2,8 @@ import './style.css';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
+import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
+import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -12,7 +14,6 @@ import { Browser } from '@capacitor/browser';
 import { AppleSignIn, SignInScope } from '@capawesome/capacitor-apple-sign-in';
 import { GoogleSignIn } from '@capawesome/capacitor-google-sign-in';
 import { FirebaseMessaging } from '@capacitor-firebase/messaging';
-import { NativePurchases, PURCHASE_TYPE } from '@capgo/native-purchases';
 
 const API = 'https://api.irgunshiuraitorah.com';
 const WEBSITE = 'https://irgunshiuraitorah.com/';
@@ -36,26 +37,45 @@ const persistentVideoMount = document.getElementById('persistentVideoMount');
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
+const IrgunVideoDisplay = registerPlugin('IrgunVideoDisplay');
 const PLATFORM = Capacitor.getPlatform();
 const IS_IOS = PLATFORM === 'ios';
-const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
-const IOS_IAP_PRODUCT_BY_PAID_AUDIO = Object.freeze({
-  'pap-braunstein-married-woman':'org.irgunshiuraitorah.paid.braunstein.married.woman',
-  'pap-essence-jewish-home-set':'org.irgunshiuraitorah.paid.essence.jewish.home.set',
-  'pap-shalom-bayis-symposium-set':'org.irgunshiuraitorah.paid.shalom.bayis.symposium.set',
-  'pap-enhance-marriage-gruner':'org.irgunshiuraitorah.paid.enhance.marriage.gruner',
-  'pap-enhance-marriage-mermelstein':'org.irgunshiuraitorah.paid.enhance.marriage.mermelstein',
-  'pap-enhance-marriage-halberstadt':'org.irgunshiuraitorah.paid.enhance.marriage.halberstadt',
-  'pap-enhance-marriage-krishevsky':'org.irgunshiuraitorah.paid.enhance.marriage.krishevsky',
-  'pap-enhance-marriage-septimus':'org.irgunshiuraitorah.paid.enhance.marriage.septimus',
-  'pap-rav-and-doctor-viener':'org.irgunshiuraitorah.paid.rav.and.doctor.viener',
-  'pap-whats-halacha-vol1-belsky':'org.irgunshiuraitorah.paid.whats.halacha.vol1.belsky',
-  'pap-whats-halacha-vol2-belsky':'org.irgunshiuraitorah.paid.whats.halacha.vol2.belsky',
-  'pap-whats-daas-torah-kamenetsky':'org.irgunshiuraitorah.paid.whats.daas.torah.kamenetsky',
-  'pap-childrens-stories-complete':'org.irgunshiuraitorah.paid.childrens.stories.complete',
-  'pap-chinuch-concepts-brezak':'org.irgunshiuraitorah.paid.chinuch.concepts.brezak'
+if (IS_IOS) document.body.classList.add('irgun-ios');
+
+// One iOS navigation element stays outside #app as pages and Watch renders
+// change. The UI has an Android-style sliding active-tab indicator.
+const syncIosBottomNavigation = createIosBottomNavigation({
+  isIos: () => IS_IOS && Capacitor.isNativePlatform(),
+  document,
+  model: () => ({
+    root: iosNavigationRoot(state.screen, state.iosNavRoot),
+    language: currentLanguage()
+  }),
+  markup: bottomNavHtml,
+  navigate: navigateIosBottomTab
 });
-const IOS_PAID_AUDIO_BY_IAP_PRODUCT = Object.freeze(Object.fromEntries(Object.entries(IOS_IAP_PRODUCT_BY_PAID_AUDIO).map(([paidAudioId, productIdentifier]) => [productIdentifier, paidAudioId])));
+
+
+// Never load a payment SDK inside the iOS reader app. Browser/web checkout
+// remains available in non-iOS builds for the separate website experience.
+let webStripeSdkPromise = null;
+function ensureWebStripeSdk() {
+  if (IS_IOS) return Promise.reject(new Error('Checkout is not offered in the iOS app.'));
+  if (typeof window.Stripe === 'function') return Promise.resolve();
+  if (!webStripeSdkPromise) {
+    webStripeSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.async = true;
+      script.src = 'https://js.stripe.com/dahlia/stripe.js';
+      script.onload = () => typeof window.Stripe === 'function'
+        ? resolve() : reject(new Error('Secure payment form could not load.'));
+      script.onerror = () => reject(new Error('Secure payment form could not load.'));
+      document.head.appendChild(script);
+    }).catch(error => { webStripeSdkPromise = null; throw error; });
+  }
+  return webStripeSdkPromise;
+}
+const APP_PUSH_TOKEN_KEY = 'istAppFcmToken';
 const ADMIN_MODE_KEY = 'istAppAdminMode';
 const SPONSOR_DEDICATION_TYPES = [
   'Leilui Nishmat / In Memory Of', 'In Honor Of', 'Anonymous',
@@ -80,6 +100,7 @@ const state = {
   usingCachedLibrary: false,
   offlineCacheSavedAt: 0,
   screen: 'home',
+  iosNavRoot: 'home',
   videos: [],
   audioItems: [],
   videoById: new Map(),
@@ -144,10 +165,6 @@ const state = {
   paidCheckout: null,
   paidPaymentElement: null,
   paidCheckoutActions: null,
-  iosStoreProducts: new Map(),
-  iosStoreLoading: false,
-  iosPurchaseBusy: '',
-  iosRestoreBusy: false,
   paidProgressLastAt: 0,
   paidPlaySessionCache: new Map(),
   paidPlaySessionPrefetch: new Map(),
@@ -271,6 +288,72 @@ const state = {
 };
 
 audio.playbackRate = state.playbackSpeed;
+
+// All native iOS media, including purchased/regular audio and HLS video,
+// goes through this one Swift AVPlayer. No opt-in flag and no second player.
+const iosUnified = createIosUnifiedAVPlayer({
+  capacitor:Capacitor, registerPlugin,
+  onState:onIosUnifiedState,
+  onMinimize:()=>{void minimizeWatchToPersistent();},
+  onFullscreen:data=>{
+    const enabled=Boolean(data?.fullscreen);
+    document.body.classList.toggle('irgun-ios-video-fullscreen',enabled);
+    IrgunVideoDisplay.setFullscreen({enabled}).catch(error=>console.warn('iOS fullscreen orientation failed',error));
+    if (!enabled) scheduleIosUnifiedSurface();
+  },
+  onPiPUnavailable:data=>setToast(data?.message||'Native Picture in Picture is not available.'),
+  onPiPState:data=>{state.watchPictureInPicture=Boolean(data?.active);syncIosVideoDisplay();if(!data?.active)scheduleIosUnifiedSurface();}
+});
+let iosNativeLastHistoryAt = 0;
+let iosNativeSurfacePending = false;
+function iosNativeActive() { return Boolean(iosUnified?.active); }
+function iosNativePosition() { return Math.max(0,Number(iosUnified?.state?.position)||0); }
+function iosNativeDuration() { return Math.max(0,Number(iosUnified?.state?.duration)||0); }
+function iosNativePlaying() { return Boolean(iosUnified?.state?.playing); }
+function iosAudioUiActive() { return iosNativeActive() && iosUnified.state.mode==='audio'; }
+function iosAudioUiPosition() { return iosAudioUiActive()?iosNativePosition():Math.max(0,Number(audio.currentTime)||0); }
+function iosAudioUiDuration() { return iosAudioUiActive()?iosNativeDuration():(Number.isFinite(audio.duration)?audio.duration:0); }
+function iosAudioUiPaused() { return iosAudioUiActive()?!iosNativePlaying():audio.paused; }
+
+function onIosUnifiedState(snapshot) {
+  if (!snapshot?.active) return;
+  const position=Math.max(0,Number(snapshot.position)||0);
+  const duration=Math.max(0,Number(snapshot.duration)||0);
+  if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
+    state.watchResumeSeconds=position;
+    state.watchVideoPlaying=Boolean(snapshot.playing);
+  }
+  if (state.current && snapshot.mode==='audio') {
+    updatePlayerUi();
+    const id=String(state.current.id||'');
+    if (position>=30 && state.current.kind!=='paid-audio') recordPublicView(id,'audio');
+    if (state.user && Date.now()-iosNativeLastHistoryAt>15000) {
+      iosNativeLastHistoryAt=Date.now();
+      saveCurrentAudioHistory(false,false).catch(()=>{});
+    }
+  } else if (state.watchVideo && snapshot.mode==='video' && state.user &&
+             Date.now()-iosNativeLastHistoryAt>15000) {
+    iosNativeLastHistoryAt=Date.now();
+    saveHistory(videoId(state.watchVideo),'video',position,duration,false).catch(()=>{});
+  }
+}
+function scheduleIosUnifiedSurface() {
+  if (!iosNativeActive() || !state.watchVideo || state.watchMode!=='video' ||
+      iosNativeSurfacePending || state.watchPictureInPicture) return;
+  iosNativeSurfacePending=true;
+  requestAnimationFrame(()=>{
+    iosNativeSurfacePending=false;
+    if (!iosNativeActive()||!state.watchVideo||state.watchMode!=='video') return;
+    const rect=nativeVideoFrame(document);
+    if (rect) {
+      const mode=state.watchMinimized?'mini':iosUnified.state.layout==='full'?'full':'inline';
+      void iosUnified.layout(mode,rect)
+        .catch(error=>console.warn('Native AVPlayer video positioning failed',error));
+    }
+  });
+}
+window.addEventListener('resize',scheduleIosUnifiedSurface);
+window.addEventListener('scroll',scheduleIosUnifiedSurface,true);
 
 function tr(key, values = {}) {
   if (window.IST_I18N && typeof window.IST_I18N.t === 'function') {
@@ -2239,7 +2322,6 @@ async function bootstrap(options = {}) {
     await restoreSession();
     await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
     await handleAppReturn();
-    // App Store purchases are restored only when the user taps Restore Purchases.
   } catch (error) {
     console.error(error);
     if (!state.libraryReady) {
@@ -3378,9 +3460,9 @@ function bottomNavHtml() {
     ['library', 'Library', 'library'],
     ['account', 'Account', 'account']
   ];
-  const activeRoot = state.screen.startsWith('live') ? 'live' : state.screen;
-  return `<nav class="bottom-nav">${items.map(([key, label, icon]) => `
-    <button class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}">
+  const activeRoot = IS_IOS ? iosNavigationRoot(state.screen, state.iosNavRoot) : (state.screen.startsWith('live') ? 'live' : state.screen);
+  return `<nav class="bottom-nav${IS_IOS ? ' ios-floating-nav' : ''}" dir="${currentLanguage()==='he'?'rtl':'ltr'}" aria-label="${currentLanguage()==='he'?'ניווט ראשי':'Main navigation'}">${IS_IOS ? '<span class="nav-active-indicator" aria-hidden="true"></span>' : ''}${items.map(([key, label, icon]) => `
+    <button type="button" class="nav-btn ${activeRoot === key ? 'active' : ''}" data-nav="${key}"${IS_IOS && activeRoot === key ? ' aria-current="page"' : ''}>
       <span class="nav-icon">${svgIcon(icon)}</span><span>${tr(label)}</span>
     </button>`).join('')}</nav>`;
 }
@@ -3399,7 +3481,7 @@ function shell(content) {
         <div class="brand-logo-frame"><img src="/logo.png" alt="Irgun Shiurai Torah"></div>
         <div class="brand-copy"><strong>Irgun Shiurai Torah</strong><span>Torah lectures worldwide</span></div>
         <div class="top-actions">
-          <button class="top-store" data-nav="paid" aria-label="Paid Shiurim" title="Paid Shiurim">${svgIcon('store')}</button>
+          <button class="top-store" data-nav="paid" aria-label="${IS_IOS ? 'Audio Library' : 'Paid Shiurim'}" title="${IS_IOS ? 'Audio Library' : 'Paid Shiurim'}">${svgIcon(IS_IOS ? 'library' : 'store')}</button>
           <button class="top-contact" data-nav="contact" aria-label="Contact" title="Contact">${svgIcon('mail')}</button>
           <button class="app-language-button" data-language-toggle="1">${currentLanguage() === 'he' ? 'English' : 'עברית'}</button>
           <button class="top-account" data-nav="account">${state.user ? esc(state.user.name || 'Account') : tr('Sign In')}</button>
@@ -3410,7 +3492,7 @@ function shell(content) {
     <main class="content">${content}</main>
     ${state.current && !watchAudioOwnsUi && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
-    ${bottomNavHtml()}
+    ${IS_IOS ? '' : bottomNavHtml()}
     ${state.playerOpen && state.current ? fullPlayerHtml() : ''}
     ${state.watchVideo && !state.watchHostedExternally && !state.playerOpen ? watchHtml() : ''}
     <div id="downloadManagerMount">${downloadManagerHtml()}</div>
@@ -3429,6 +3511,76 @@ function clearPersistentVideoMount() {
   state.watchMinimized = false;
   document.body.classList.remove('irgun-watch-mini-hosted');
   document.body.classList.remove('irgun-system-pip-active');
+}
+
+let iosVideoDisplayKey = '';
+let iosSensorFullscreenDirection = '';
+function syncIosVideoDisplay() {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+  const active = Boolean(state.watchVideo && state.watchMode === 'video');
+  const direct = state.watchVimeo?.player;
+  const playing = active && Boolean(state.watchVideoPlaying ||
+    (direct?.autoplayWanted && !direct?.explicitlyPaused));
+  const presentation = {
+    active, playing,
+    mini: active && Boolean(state.watchMinimized),
+    pip: active && Boolean(state.watchPictureInPicture)
+  };
+  const key = JSON.stringify(presentation);
+  if (key === iosVideoDisplayKey) return;
+  iosVideoDisplayKey = key;
+  IrgunVideoDisplay.playback(presentation).catch(error => {
+    if (iosVideoDisplayKey === key) iosVideoDisplayKey = '';
+    console.warn('iOS video orientation/idle-time policy unavailable', error);
+  });
+}
+let iosVideoOrientationListenerAttached = false;
+let iosVideoOrientationListenerAttempts = 0;
+async function bindIosVideoOrientation() {
+  if (!IS_IOS || !Capacitor.isNativePlatform() || iosVideoOrientationListenerAttached) return;
+  try {
+    await IrgunVideoDisplay.addListener('orientation', ({fullscreen,direction}) => {
+      if (document.hidden || !state.watchVideo || state.watchMode !== 'video' ||
+          state.watchMinimized || state.watchPictureInPicture) return;
+      // Only direct HLS owns the page's element and custom fullscreen. Native
+      // Vimeo fallback keeps its own presentation; do not replace that player.
+      const direct = state.watchVimeo?.player;
+      if (!direct || typeof direct.enterCustomFullscreen !== 'function') return;
+      const landscape = Boolean(fullscreen);
+      if (landscape && direct.customFullscreen) {
+        void IrgunVideoDisplay.setFullscreen({enabled:true,fromSensor:true,direction}).catch(()=>{});
+        return;
+      }
+      if (landscape && !direct.customFullscreen) {
+        iosSensorFullscreenDirection = String(direction || 'landscapeLeft');
+        try { direct.enterCustomFullscreen(); }
+        finally { iosSensorFullscreenDirection = ''; }
+      } else if (!landscape && direct.customFullscreen) {
+        iosSensorFullscreenDirection = 'portrait';
+        try { direct.exitFullscreen(); }
+        finally { iosSensorFullscreenDirection = ''; }
+      }
+    });
+    iosVideoOrientationListenerAttached = true;
+  } catch (error) {
+    // AppDelegate installs this manually bridged plugin shortly after iOS
+    // activation. Never leave orientation disabled after an early race.
+    if (++iosVideoOrientationListenerAttempts < 6) {
+      setTimeout(() => { void bindIosVideoOrientation(); }, iosVideoOrientationListenerAttempts * 500);
+    } else console.warn('Native iOS orientation listener unavailable', error);
+  }
+}
+if (IS_IOS && Capacitor.isNativePlatform()) {
+  void bindIosVideoOrientation();
+  window.addEventListener('irgunNativeDidBecomeActive', () => {
+    iosVideoDisplayKey = '';
+    syncIosVideoDisplay();
+    void bindIosVideoOrientation();
+  });
+  document.addEventListener('visibilitychange', () => {
+    iosVideoDisplayKey = '';
+    syncIosVideoDisplay();
+  });
 }
 
 function refreshPersistentMiniVideoChrome() {
@@ -3474,6 +3626,16 @@ function enterIosPictureInPicture(event) {
     event.preventDefault?.();
     event.stopPropagation?.();
   }
+  if (iosNativeActive() && state.watchMode==='video') {
+    void iosUnified.pip().then(()=>{
+      state.watchPictureInPicture=true;
+      state.watchResumeSeconds=iosNativePosition();
+    }).catch(error=>{
+      state.watchPictureInPicture=false;
+      setToast(error?.message||'Native Picture in Picture could not start.');
+    });
+    return;
+  }
   if (!IS_IOS || !Capacitor.isNativePlatform() || !state.watchVideo || state.watchMode !== 'video') return;
 
   const player = state.watchVimeo;
@@ -3486,6 +3648,7 @@ function enterIosPictureInPicture(event) {
   // Mark the transition now so it cannot replace the video with audio at zero.
   state.watchResumeSeconds = currentVideoClockForBackground();
   state.watchPictureInPicture = true;
+  syncIosVideoDisplay();
 
   try {
     if (typeof player.preparePictureInPicture === 'function') player.preparePictureInPicture();
@@ -3569,9 +3732,11 @@ function hostCurrentWatchOverlay(mode = 'full') {
   state.watchHostedExternally = true;
   const mini = mode === 'mini';
   state.watchMinimized = mini;
+  syncIosVideoDisplay();
   persistentVideoMount.className = `persistent-video-mount watch-video-host ${mini ? 'watch-mini-host' : 'watch-full-host'}`;
   document.body.classList.toggle('irgun-watch-mini-hosted', mini);
   bindPersistentVideoChrome();
+  scheduleIosUnifiedSurface();
   return Boolean(persistentVideoMount.querySelector('#watchVimeoFrame'));
 }
 
@@ -3604,18 +3769,27 @@ async function quickVimeoTime(fallback = 0, timeoutMs = 900) {
 
 async function minimizeWatchToPersistent() {
   if (!state.watchVideo || state.watchMode !== 'video' || state.watchMinimized) return;
+  if (iosNativeActive()) {
+    if (state.watchPictureInPicture || iosUnified.state.pipActive) {
+      await iosUnified.exitPiP().catch(error=>console.warn('PiP exit before Mini',error));
+      state.watchPictureInPicture=false;
+    }
+  }
   if (!state.watchHostedExternally && !hostCurrentWatchOverlay('mini')) return;
   state.watchMinimized = true;
+  syncIosVideoDisplay();
   persistentVideoMount.classList.remove('watch-full-host');
   persistentVideoMount.classList.add('watch-mini-host');
   document.body.classList.add('irgun-watch-mini-hosted');
   bindPersistentVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  scheduleIosUnifiedSurface();
 }
 
 async function expandPersistentWatch() {
   if (!state.watchVideo || !state.watchMinimized) return;
   state.watchMinimized = false;
+  syncIosVideoDisplay();
   if (persistentVideoMount) {
     persistentVideoMount.classList.remove('watch-mini-host');
     persistentVideoMount.classList.add('watch-full-host');
@@ -3623,6 +3797,7 @@ async function expandPersistentWatch() {
   document.body.classList.remove('irgun-watch-mini-hosted');
   refreshPersistentMiniVideoChrome();
   state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0, 300);
+  scheduleIosUnifiedSurface();
 }
 
 function homeHtml() {
@@ -3644,7 +3819,7 @@ function homeHtml() {
 
     <section class="home-shortcuts" aria-label="Quick access">
       <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong><small>Upcoming Shiurim</small></div></button>
-      <button class="home-shortcut" data-nav="paid"><span>${svgIcon('store')}</span><div class="home-shortcut-copy"><strong>Paid Shiurim</strong><small>Premium collections</small></div></button>
+      <button class="home-shortcut" data-nav="paid"><span>${svgIcon(IS_IOS ? 'library' : 'store')}</span><div class="home-shortcut-copy"><strong>${IS_IOS ? 'My Audio Library' : 'Paid Shiurim'}</strong><small>${IS_IOS ? 'Your saved audio collections' : 'Premium collections'}</small></div></button>
       <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong><small>Donate or dedicate</small></div></button>
       <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong><small>Likes &amp; history</small></div></button>
     </section>
@@ -3766,6 +3941,8 @@ function paidMaterialsHtml(item) {
 }
 
 function paidProductCard(item) {
+  // The iOS reader experience displays entitlements only; never advertise unowned products.
+  if (IS_IOS && !item?.owned) return '';
   const id = String(item.id || '');
   const expanded = state.paidExpandedId === id;
   const images = paidProductImageUrls(item);
@@ -3775,11 +3952,11 @@ function paidProductCard(item) {
   return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''}">
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
-      <div class="paid-price-row"><strong>${IS_IOS ? (iosStorePrice(item) || (IOS_IAP_PRODUCT_BY_PAID_AUDIO[id] ? 'App Store' : money(item.priceCents,item.currency))) : money(item.priceCents,item.currency)}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>
-      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}" ${IS_IOS && state.iosPurchaseBusy===id?'disabled':''}>${svgIcon('store')} ${IS_IOS ? (state.iosPurchaseBusy===id?'Purchasing…':'Purchase') : 'Buy Securely'}</button>` : '<button class="paid-primary" disabled>Coming Soon</button>'}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
+      ${!IS_IOS ? `<div class="paid-price-row"><strong>${money(item.priceCents,item.currency)}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>` : ''}
+      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : !IS_IOS && item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : !IS_IOS ? '<button class="paid-primary" disabled>Coming Soon</button>' : ''}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
       <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>
       ${item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : ''}
-      ${state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
+      ${!IS_IOS && state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
     </div>
   </article>`;
 }
@@ -3792,6 +3969,18 @@ function paidCheckoutModalHtml() {
 }
 
 function paidShiurimHtml() {
+  if (IS_IOS) {
+    // Reader app: customers sign in to stream audio already attached to their Irgun account.
+    // No checkout, prices, product catalog or link to an external purchasing mechanism.
+    const he = currentLanguage() === 'he';
+    const heading = `<div class='page-title pro-page-title paid-page-title'><span class='page-kicker'>PERSONAL AUDIO LIBRARY</span><h1>${he ? 'ספריית השמע שלי' : 'My Audio Library'}</h1><p>${he ? 'כאן אפשר להאזין לאוספי השמע המשויכים לחשבון אירגון שלכם.' : 'Listen to audio collections already linked to your Irgun account.'}</p></div>`;
+    if (!state.user) return `${heading}<div class='store-login-note'><span>${svgIcon('account')}</span><div><strong>${he ? 'יש להתחבר לחשבון' : 'Sign in to your account'}</strong><p>${he ? 'לאחר ההתחברות יוצגו כאן אוספי השמע שלכם.' : 'Your existing audio collections will appear here after signing in.'}</p></div><button data-nav='account'>${he ? 'התחברות' : 'Sign In'}</button></div>`;
+    if (!state.paidLoaded && !state.paidError) return `${heading}<div class='loading'>${he ? 'טוען אוספי שמע…' : 'Loading your audio library…'}</div>`;
+    const items = state.paidCatalog.filter(item => item.owned);
+    const error = state.paidError ? `<div class='paid-retry-card'><strong>${he ? 'לא ניתן היה לטעון את ספריית השמע' : 'The audio library could not load'}</strong><span>${esc(state.paidError)}</span><button data-paid-retry='1'>${he ? 'נסו שוב' : 'Try Again'}</button></div>` : '';
+    const content = items.length ? `<div class='paid-grid ${items.length === 1 ? 'single-featured' : ''}'>${items.map(paidProductCard).join('')}</div>` : (state.paidError ? '' : `<div class='empty'>${he ? 'אין עדיין אוספי שמע המשויכים לחשבון זה.' : 'No audio collections are linked to this account yet.'}</div>`);
+    return `${heading}<div class='paid-title-actions'><button class='admin-inline-add' data-paid-retry='1'>${he ? 'רענון הספרייה' : 'Refresh Library'}</button></div>${error}${content}`;
+  }
   if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
@@ -3799,14 +3988,13 @@ function paidShiurimHtml() {
   const coming = ordered.filter(item => !item.available && !item.owned);
   const availableHtml = `<section class="paid-catalog-section"><div class="section-head paid-catalog-heading"><div><span class="section-kicker">${tr('Available Collections')}</span><h2>${tr('Available Collections')}</h2></div><small>${available.length ? `${available.length} ${available.length===1?'collection':'collections'}` : tr('More collections are being prepared')}</small></div>${available.length ? `<div class="paid-grid ${available.length===1?'single-featured':''}">${available.map(paidProductCard).join('')}</div>` : `<div class="empty">${tr('More collections are being prepared')}</div>`}</section>`;
   const comingHtml = (state.isAdmin && state.adminMode && coming.length) ? `<details class="paid-coming-wrap"><summary><span>${tr('Coming Soon Collections')} (Admin)</span><small>${coming.length}</small></summary><div class="paid-grid">${coming.map(paidProductCard).join('')}</div></details>` : '';
-  return `<div class="page-title pro-page-title paid-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'רכשו פעם אחת והאזינו מתוך חשבון אירגון שלכם. האוספים נשארים פרטיים וזמינים בחשבון.':'Purchase once and listen from your Irgun account. Purchased collections stay private and are streamed through protected access.'}</p><div class="paid-title-actions">${IS_IOS && state.user?`<button class="admin-inline-add" data-ios-restore-purchases="1" ${state.iosRestoreBusy?'disabled':''}>${state.iosRestoreBusy?'Restoring…':(currentLanguage()==='he'?'שחזר רכישות':'Restore Purchases')}</button>`:''}${state.isAdmin && state.adminMode ? '<button class="admin-inline-add" data-admin-paid-add="1">+ Add Paid Shiur</button>' : ''}</div></div>
+  return `<div class="page-title pro-page-title paid-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'רכשו פעם אחת והאזינו מתוך חשבון אירגון שלכם. האוספים נשארים פרטיים וזמינים בחשבון.':'Purchase once and listen from your Irgun account. Purchased collections stay private and are streamed through protected access.'}</p><div class="paid-title-actions">${state.isAdmin && state.adminMode ? '<button class="admin-inline-add" data-admin-paid-add="1">+ Add Paid Shiur</button>' : ''}</div></div>
     <div class="purchase-state-strip"><span>✓ ${currentLanguage()==='he'?'רכישה חד־פעמית':'One-time purchase'}</span><span>🔒 ${currentLanguage()==='he'?'גישה פרטית':'Private access'}</span><span>▶ ${currentLanguage()==='he'?'האזנה בתוך האפליקציה':'Listen in the app'}</span></div>
     ${state.user && owned ? `<div class="owned-summary"><span>${svgIcon('library')}</span><div><strong>${owned} purchased collection${owned === 1 ? '' : 's'}</strong><p>Available on this app and your Irgun account.</p></div><button data-nav="library" data-open-purchased="1">Your Purchases</button></div>` : ''}
     ${!state.user ? `<div class="store-login-note"><span>${svgIcon('account')}</span><div><strong>Sign in before purchasing</strong><p>Your purchase is tied securely to your Irgun account.</p></div><button data-nav="account">Sign In</button></div>` : ''}
     ${state.paidError ? `<div class="paid-retry-card"><strong>${currentLanguage()==='he'?'לא היה אפשר לטעון את החנות':'The purchase page could not load'}</strong><span>${esc(state.paidError)}</span><button data-paid-retry="1">${currentLanguage()==='he'?'נסה שוב':'Try Again'}</button></div>` : ''}
     ${state.paidCatalog.length ? availableHtml + comingHtml : '<div class="empty">Paid shiurim are not available right now.</div>'}`;
 }
-
 const SPONSOR_DEDICATION_HE = {
   'Select a dedication type':'בחרו סוג הקדשה','Leilui Nishmat / In Memory Of':'לעילוי נשמת / לזכר','In Honor Of':'לכבוד','Anonymous':'אנונימי',
   'Refuah Shelema / Speedy Recovery':'רפואה שלמה / רפואה מהירה','Shidduchim / Find a Soulmate':'שידוכים / מציאת זיווג','Blessing for Children':'ברכה לילדים',
@@ -4071,9 +4259,8 @@ function donationProviderPanelHtml() {
   return '';
 }
 
-function iosDonationWebsiteUrl(mode = 'donation') {
+function iosDonationWebsiteUrl() {
   const params = new URLSearchParams({ from:'ios-app', method:'stripe' });
-  if (mode === 'sponsor') params.set('mode', 'sponsor');
   if (currentLanguage() === 'he') params.set('lang', 'he');
   return `${WEBSITE}donate.html?${params.toString()}`;
 }
@@ -4084,10 +4271,9 @@ function donateHtml() {
   if (IS_IOS) {
     return `<div class="page-title pro-page-title"><span class="page-kicker">SUPPORT TORAH</span><h1>${hebrew?'תמכו באירגון שיעורי תורה':'Support Irgun Shiurai Torah'}</h1><p>${hebrew?'התרומות מתבצעות באתר המאובטח של אירגון שיעורי תורה.':'Donations are completed on the secure Irgun Shiurai Torah website.'}</p></div>
       <section class="donation-provider-panel-app ios-external-donation-card">
-        <div class="payment-frame-header-app"><div><h2>${hebrew?'תרומה באתר המאובטח':'Donate on Our Secure Website'}</h2><p>${hebrew?'מטעמי מדיניות App Store, לחיצה על אחד הכפתורים תפתח את אתר אירגון שיעורי תורה בדפדפן מאובטח. התשלום אינו מעובד בתוך האפליקציה.':'To comply with App Store nonprofit donation rules, these buttons open the Irgun Shiurai Torah website in a secure browser. No charitable payment is processed inside the app.'}</p></div></div>
+        <div class="payment-frame-header-app"><div><h2>${hebrew?'תרומה באתר המאובטח':'Donate on Our Secure Website'}</h2><p>${hebrew?'תרומות לצדקה תומכות בשיעורי תורה חינמיים. תרומה אינה מעניקה גישה לתוכן בתשלום או לתכונות נוספות באפליקציה.':'Charitable donations support free Torah lectures. Donating does not unlock paid audio or additional app features.'}</p></div></div>
         <div class="ios-external-donation-actions">
           <button class="stripe-inapp-primary" type="button" data-ios-donation-web="donation">${hebrew?'תרומה כללית באתר':'Donate on Website'}</button>
-          <button class="stripe-inapp-secondary" type="button" data-ios-donation-web="sponsor">${hebrew?'הקדשת לימוד התורה באתר':'Sponsor Online Learning on Website'}</button>
         </div>
         <small>${hebrew?'האתר ייפתח באמצעות דפדפן iOS המאובטח. ניתן לחזור לאפליקציה לאחר השלמת התרומה.':'The website opens using the secure iOS browser. You can return to the app after completing the donation.'}</small>
       </section>`;
@@ -4107,7 +4293,7 @@ function setDonationSetupMessage(message, error=false) {
 async function presentNativeIosDonation(_body, sponsor) {
   // Charitable donations are handed off to the secure website rather than
   // processed with a native Stripe/Apple Pay donation flow.
-  await openExternal(iosDonationWebsiteUrl(sponsor ? 'sponsor' : 'donation'));
+  await openExternal(iosDonationWebsiteUrl());
   return true;
 }
 
@@ -4143,6 +4329,7 @@ async function prepareDonationCheckout(event) {
   state.donationPaymentStage=true; state.donationCheckoutBusy=true; state.donationCheckoutMessage='Preparing secure payment...'; state.donationSuccess=''; render();
   try {
     const data=await apiJson('/stripe/donation-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    await ensureWebStripeSdk();
     if(!window.Stripe)throw new Error('Secure Stripe payment form could not load.');
     const stripe=window.Stripe(data.publishableKey,{locale:currentLanguage()==='he'?'he':'en'});
     const checkout=await stripe.initCheckoutElementsSdk({clientSecret:data.clientSecret});
@@ -4246,7 +4433,7 @@ function libraryHtml() {
   if (!state.user && !localSection) body = signedOutCard();
   else if (state.librarySection === 'downloads') body = downloadsLibraryHtml();
   else if (state.librarySection === 'playlists') body = playlistLibraryHtml();
-  else if (state.librarySection === 'purchased') body = `<div class="purchased-library"><div class="section-head"><div><h2>${he?'שיעורים שנרכשו':'Purchased Shiurim'}</h2><p>${he?'אוספי שמע פרטיים המחוברים לחשבון.':'Private audio collections connected to your account.'}</p></div><button class="section-link" data-nav="paid">${he?'לחנות':'Browse Store'}</button></div><div class="paid-grid">${state.paidCatalog.filter(item => item.owned).length ? state.paidCatalog.filter(item => item.owned).map(paidProductCard).join('') : `<div class="empty">${he?'אין עדיין שיעורים שנרכשו בחשבון הזה.':'You have no paid shiurim in this account yet.'}</div>`}</div></div>`;
+  else if (state.librarySection === 'purchased') body = `<div class="purchased-library"><div class="section-head"><div><h2>${he?'שיעורים שנרכשו':'Purchased Shiurim'}</h2><p>${he?'אוספי שמע פרטיים המחוברים לחשבון.':'Private audio collections connected to your account.'}</p></div><button class="section-link" data-nav="paid">${IS_IOS ? (he?'ספריית שמע':'Audio Library') : (he?'לחנות':'Browse Store')}</button></div><div class="paid-grid">${state.paidCatalog.filter(item => item.owned).length ? state.paidCatalog.filter(item => item.owned).map(paidProductCard).join('') : `<div class="empty">${he?'אין עדיין שיעורים שנרכשו בחשבון הזה.':'You have no paid shiurim in this account yet.'}</div>`}</div></div>`;
   else if (state.librarySection === 'following') body = `<div class="account-card following-library"><h2>${he?'במעקב':'Following'}</h2>${follows.length ? `<div class="follow-chips">${follows.map(item => `<button class="follow-chip active" data-follow-type="${esc(item.type)}" data-follow-key="${esc(item.key)}" data-follow-label="${esc(item.labelEn || item.labelHe || item.key)}">${esc(item.labelEn || item.labelHe || item.key)} <span>${he?'הפסק מעקב':'Unfollow'}</span></button>`).join('')}</div>` : `<div class="empty">${he?'אינכם עוקבים עדיין אחרי מרצים או נושאים.':'You are not following any speakers or topics yet.'}</div>`}<h2 class="subhead">${he?'חדש ממה שאתם עוקבים אחריו':'New From Speakers & Topics You Follow'}</h2><div class="list">${feed.length ? feed.map(v => compactItem({ ...v, _kind:'video' })).join('') : `<div class="empty">${he?'עקבו אחרי מרצה או נושא כדי לבנות את הפיד.':'Follow a speaker or topic from a shiur to build this feed.'}</div>`}</div></div>`;
   else body = `${state.librarySection === 'history' && state.history.length ? `<div class="history-toolbar"><button class="small-btn danger" data-clear-history="1">${he?'נקה היסטוריה':'Clear History'}</button></div>` : ''}<div class="list section">${items.length ? items.map(item => compactItem(item)).join('') : `<div class="empty">${he?'עדיין אין כאן כלום.':'Nothing here yet.'}</div>`}</div>`;
   return `<div class="page-title"><h1>${he?'הספרייה שלכם':'Your Library'}</h1><p>${esc(headerText)}</p></div><div class="segmented library-tabs library-tabs-scroll">${tabs.map(([key,label])=>`<button data-library-section="${key}" class="${state.librarySection===key?'active':''}">${label}</button>`).join('')}</div>${body}`;
@@ -4291,7 +4478,7 @@ function privacyHtml() {
       <p><strong>פעילות בחשבון:</strong> לייקים, שמירה להמשך, היסטוריית צפייה והאזנה ומיקום המשך, מעקב אחר מגידי שיעור ונושאים, תגובות, העדפות התראות ורכישות דיגיטליות המקושרות לחשבון.</p>
       <p><strong>מידע שימושי וטכני:</strong> אירועי צפייה/האזנה, מזהה אקראי לצמצום ספירה כפולה, ולוגים רגילים של שירות ואבטחה שעשויים לכלול כתובת IP, פרטי דפדפן/אפליקציה, זמנים ושגיאות.</p>
       <h2>תרומות, תרומות חודשיות ורכישות</h2>
-      <p>תרומות בכרטיס ותרומות חודשיות עשויות להיות מעובדות באמצעות <strong>Stripe</strong>. אפשרויות אחרות עשויות להשתמש ב־<strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong> או <strong>Matbia</strong>, לפי בחירתכם. רכישות דיגיטליות עשויות להשתמש גם במערכת הרכישות של חנות האפליקציות כאשר הדבר נדרש. אירגון שיעורי תורה אינו שומר מספרי כרטיס אשראי מלאים במסד הנתונים של החשבון.</p>
+      <p>תרומות בכרטיס ותרומות חודשיות עשויות להיות מעובדות באמצעות <strong>Stripe</strong>. אפשרויות אחרות עשויות להשתמש ב־<strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong> או <strong>Matbia</strong>, לפי בחירתכם. ב־iOS ניתן להאזין לאוספים שכבר משויכים לחשבון ללא רכישה מתוך האפליקציה. אירגון שיעורי תורה אינו שומר מספרי כרטיס אשראי מלאים במסד הנתונים של החשבון.</p>
       <p>בתרומה חודשית אנו עשויים לשמור את הסכום, יום החיוב שנבחר, סוג התקופה, מספר החודשים כאשר התקופה קבועה, מזהי ספק התשלום, סטטוס והחשבון שמנהל את התרומה כאשר אתם מחוברים.</p>
       <h2>כיצד אנו משתמשים במידע</h2><p>המידע משמש להפעלת החשבון ואבטחתו, שמירת ספרייה והיסטוריית צפייה/האזנה, מעקבים ותגובות, התראות, עיבוד תרומות ורכישות, מתן גישה לתוכן שנרכש, מענה לפניות, שליחת הודעות חשבון שביקשתם, פתרון תקלות, ספירת שימוש ושיפור השירות.</p>
       <h2>ספקי שירות</h2><p>אנו עשויים להשתמש ב־<strong>Cloudflare</strong> לתשתיות, API, מסדי נתונים ואחסון; <strong>Vimeo</strong> לווידאו ושידורים חיים; <strong>Google Drive</strong> לקבצים מוגנים; <strong>Firebase</strong> לשירותי התחברות/Push נתמכים; <strong>Google</strong> ו־<strong>Apple</strong> לשירותי התחברות או אפליקציה; <strong>Stripe</strong> וספקי התשלום האחרים המפורטים לעיל; ו־<strong>Resend</strong> לשליחת אימייל.</p>
@@ -4311,7 +4498,7 @@ function privacyHtml() {
       <p><strong>Account activity:</strong> likes, Watch Later selections, watch/listen history and resume position, followed speakers/topics, comments, notification preferences, and account-linked digital purchases.</p>
       <p><strong>Usage and technical information:</strong> watch/listen events, a randomly generated visitor identifier used to reduce duplicate counting, and ordinary service/security logs that may include IP address, browser/app information, timestamps and errors.</p>
       <h2>Donations, recurring donations and purchases</h2>
-      <p>Card donations and recurring donations may be processed by <strong>Stripe</strong>. Other donation methods may use <strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong>, or <strong>Matbia</strong>, depending on what you choose. Digital purchases may also use the applicable app-store purchase system where required. Irgun Shiurai Torah does not store full payment-card numbers in the Irgun account database.</p>
+      <p>Card donations and recurring donations may be processed by <strong>Stripe</strong>. Other donation methods may use <strong>Cardknox</strong>, <strong>PayPal</strong>, <strong>OJC Card Payment Site</strong>, <strong>The Donors’ Fund</strong>, or <strong>Matbia</strong>, depending on what you choose. In the iOS app, existing account holders can listen to collections they already own; the app does not offer checkout. Irgun Shiurai Torah does not store full payment-card numbers in the Irgun account database.</p>
       <p>For recurring donations we may store the amount, selected billing day, term type, number of months when fixed, payment-provider identifiers, status, and the Irgun account that manages the donation when you are signed in.</p>
       <h2>How we use information</h2><p>We use information to operate and secure accounts; remember library, follows and playback history; provide comments, saved shiurim and notifications; process donations and digital purchases; provide purchased listening access; respond to messages; send requested account or follow emails; troubleshoot problems; count usage; and improve the service.</p>
       <h2>Service providers</h2><p>Our service providers may include <strong>Cloudflare</strong> for delivery, APIs, databases and storage; <strong>Vimeo</strong> for video and live playback; <strong>Google Drive</strong> for protected media/files; <strong>Firebase</strong> for supported sign-in/push services; <strong>Google</strong> and <strong>Apple</strong> for supported sign-in or app services; <strong>Stripe</strong> and the other payment providers listed above; and <strong>Resend</strong> for email delivery.</p>
@@ -4444,7 +4631,7 @@ function accountPurchasesHtml() {
     : state.recurringError ? `<div class="error">${esc(state.recurringError)}</div>`
     : recurring.length ? `<div class="recurring-list">${recurring.map(recurringDonationCard).join('')}</div>`
     : `<div class="empty recurring-empty">You have no monthly Stripe donations in this account yet.<br><button data-nav="donate">Make a monthly donation</button></div>`;
-  return `<div class="account-card account-purchases"><div class="section-head"><div><h2>Purchased Shiurim</h2><p>Listen to collections owned by this account.</p></div><button class="section-link" data-nav="paid">Browse Store</button></div>${items.length ? `<div class="paid-grid compact-paid-grid">${items.map(paidProductCard).join('')}</div>` : '<div class="empty">No paid shiurim have been purchased on this account yet.</div>'}<div class="recurring-donations-section"><div class="section-head"><div><h2>Recurring Donations</h2><p>Manage monthly Stripe donations made while signed in to this account.</p></div><button class="section-link" data-nav="donate">Donate</button></div>${recurringHtml}</div></div>`;
+  return `<div class="account-card account-purchases"><div class="section-head"><div><h2>Purchased Shiurim</h2><p>Listen to collections owned by this account.</p></div><button class="section-link" data-nav="paid">${IS_IOS ? 'Audio Library' : 'Browse Store'}</button></div>${items.length ? `<div class="paid-grid compact-paid-grid">${items.map(paidProductCard).join('')}</div>` : '<div class="empty">No paid shiurim have been purchased on this account yet.</div>'}<div class="recurring-donations-section"><div class="section-head"><div><h2>Recurring Donations</h2><p>Manage monthly Stripe donations made while signed in to this account.</p></div><button class="section-link" data-nav="donate">Donate</button></div>${recurringHtml}</div></div>`;
 }
 
 
@@ -4812,6 +4999,13 @@ class IosDirectVideoAdapter {
       iframe,
       poster,
       apiBase: API,
+      speed: state.playbackSpeed,
+      onSpeedChange: rate => {
+        const speed = [0.75,1,1.25,1.5,1.75,2].includes(Number(rate)) ? Number(rate) : 1;
+        state.playbackSpeed = speed;
+        audio.playbackRate = speed;
+        localStorage.setItem(SPEED_KEY, String(speed));
+      },
       onTimeUpdate: state => this.emit('timeupdate', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPlay: state => this.emit('play', { seconds:state.position || 0, duration:state.duration || 0 }),
       onPause: state => this.emit('pause', { seconds:state.position || 0, duration:state.duration || 0 }),
@@ -4953,6 +5147,25 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     if (!isCurrent()) throw new Error('Video initialization cancelled');
   };
   const videoKey = videoId(video);
+  if (iosUnified) {
+    const sources = await loadIosDirectVideoSources(video);
+    assertCurrent();
+    const url = sources?.hls || sources?.mp4 || '';
+    if (!url) throw new Error('A native HLS/MP4 video stream is not available for this shiur yet.');
+    // There is no Vimeo/WKWebView fallback on native iOS: one audio/video
+    // player is a strict ownership invariant.
+    stopNativeBackgroundAudio();
+    await iosUnified.open({
+      id:`video:${videoKey}`,url,
+      title:displayShiurTitle(video.title,'Shiur'),
+      artist:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
+      position:Math.max(0,Number(startSeconds)||0),
+      rate:state.playbackSpeed,mode:'video',autoplay:Boolean(autoplay),
+      rect:nativeVideoFrame(document)||{}
+    });
+    assertCurrent();
+    return {player:createIosNativeVideoAdapter(iosUnified,`video:${videoKey}`),backend:'native'};
+  }
   if (
     IS_IOS &&
     Capacitor.isNativePlatform() &&
@@ -5288,7 +5501,7 @@ function watchHtml() {
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">Video</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">Audio</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${audio.paused ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</div></div>`}
+          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${Number.isFinite(iosAudioUiDuration()) ? iosAudioUiDuration() : 0}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -5336,8 +5549,8 @@ function miniPlayerHtml() {
     <div class="mini-progress"><span id="miniProgress"></span></div>
     <div class="mini-main">
       <button class="circle-btn" data-skip="-${state.skipSeconds}">-${state.skipSeconds}</button>
-      <div class="mini-copy"><strong>${esc(c.title || 'Shiur')}</strong><span id="miniTime">${fmtTime(audio.currentTime)} / ${fmtDurationOrUnknown(audio.duration)}</span></div>
-      <button class="circle-btn play" data-play-toggle="1">${audio.paused ? '&#9654;' : 'II'}</button>
+      <div class="mini-copy"><strong>${esc(c.title || 'Shiur')}</strong><span id="miniTime">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</span></div>
+      <button class="circle-btn play" data-play-toggle="1">${iosAudioUiPaused() ? '&#9654;' : 'II'}</button>
       <button class="circle-btn" data-skip="${state.skipSeconds}">+${state.skipSeconds}</button>
     </div>
   </div>`;
@@ -5360,9 +5573,9 @@ function fullPlayerHtml() {
       <div class="player-art ${c.thumbnail ? '' : 'audio-logo'}">${c.thumbnail ? `<img src="${esc(c.thumbnail)}" alt="">` : '<img src="/logo.png" alt="Irgun Shiurai Torah">'}</div>
       <div class="player-heading"><h2>${esc(c.title || '')}</h2><p>${esc(c.subtitle || '')}</p></div>
       ${followButtons ? `<div class="follow-bar player-follow-bar">${followButtons}</div>` : ''}
-      <input id="fullSeek" class="seek" type="range" min="0" max="${Number.isFinite(audio.duration) ? audio.duration : 0}" value="${audio.currentTime || 0}" step="1">
-      <div class="time-row"><span id="fullCurrent">${fmtTime(audio.currentTime)}</span><span id="fullDuration">${fmtDurationOrUnknown(audio.duration)}</span></div>
-      <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${audio.paused ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
+      <input id="fullSeek" class="seek" type="range" min="0" max="${Number.isFinite(iosAudioUiDuration()) ? iosAudioUiDuration() : 0}" value="${iosAudioUiPosition() || 0}" step="1">
+      <div class="time-row"><span id="fullCurrent">${fmtTime(iosAudioUiPosition())}</span><span id="fullDuration">${fmtDurationOrUnknown(iosAudioUiDuration())}</span></div>
+      <div class="big-controls"><button class="skip-control" data-skip="-${state.skipSeconds}" aria-label="Back ${state.skipSeconds} seconds">${svgIcon('back15')}</button><button class="main-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>'}</button><button class="skip-control" data-skip="${state.skipSeconds}" aria-label="Forward ${state.skipSeconds} seconds">${svgIcon('forward15')}</button></div>
       <div class="player-action-grid">
         ${isPaid ? `<button data-paid-bookmark-current="1">${svgIcon('bookmark')}<span>Bookmark</span></button>${Number(c.bookmarkSeconds) > 0 ? `<button data-paid-go-bookmark="1">${svgIcon('back15')}<span>Go to ${fmtTime(c.bookmarkSeconds)}</span></button>` : ''}<button data-nav="paid">${svgIcon('store')}<span>Paid Shiurim</span></button>` : `${canWatch ? `<button data-player-watch="${esc(c.id)}">${svgIcon('video')}<span>Watch</span></button>` : ''}<button class="${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span>${liked ? 'Liked' : 'Like'}</span></button><button class="${savePresentation?.cls || ''}" data-open-playlist-picker="1" data-playlist-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-playlist-id="${esc(c.id)}">${svgIcon('bookmark')}<span>${tr(savePresentation?.label || 'Save')}</span></button><button data-share-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-share-id="${esc(c.id)}">${svgIcon('share')}<span>Share</span></button><button data-download-kind="${c.kind === 'library-audio' ? 'audio' : 'video-audio'}" data-download-id="${esc(c.id)}">${svgIcon('download')}<span>Download</span></button><button data-save-offline-kind="${c.kind === 'library-audio' ? 'audio' : 'video'}" data-save-offline-id="${esc(c.id)}" class="${offlineState?.cls || ''}">${offlineIconHtml()}<span>${esc(offlineState?.label || (currentLanguage()==='he'?'האזנה ללא אינטרנט':'Listen Offline'))}</span>${offlineState?.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>`}
       </div>
@@ -5625,148 +5838,11 @@ async function updateRecurringDonation(id, action) {
   }
 }
 
-function iosStoreProductForItem(item) {
-  if (!IS_IOS) return null;
-  const productIdentifier = IOS_IAP_PRODUCT_BY_PAID_AUDIO[String(item?.id || '')];
-  return productIdentifier ? (state.iosStoreProducts.get(productIdentifier) || null) : null;
-}
-
-function iosStorePrice(item) {
-  const product = iosStoreProductForItem(item);
-  return String(product?.displayPrice || product?.priceString || '').trim();
-}
-
-function iosStoreTitle(item) {
-  // Irgun catalog titles are bilingual and editable by admins. StoreKit remains
-  // authoritative for the App Store price/purchase sheet, not the in-app catalog title.
-  return paidProductTitle(item);
-}
-
-let iosPurchaseListenersReady = false;
-async function initializeIosPurchaseListeners() {
-  if (!IS_IOS || iosPurchaseListenersReady) return;
-  iosPurchaseListenersReady = true;
-  try {
-    await NativePurchases.addListener('transactionUpdated', async transaction => {
-      if (!state.user) return;
-      const productIdentifier = String(transaction?.productIdentifier || '').trim();
-      const paidAudioId = IOS_PAID_AUDIO_BY_IAP_PRODUCT[productIdentifier];
-      if (!paidAudioId) return;
-      try {
-        const confirmed = await confirmApplePurchase(paidAudioId, productIdentifier, transaction);
-        if (!confirmed.pending) {
-          state.paidLoaded = false;
-          await loadPaidCatalog(true);
-          setToast('Your App Store purchase is available.');
-          render();
-        }
-      } catch (error) {
-        console.warn('Could not process StoreKit transaction update', error);
-      }
-    });
-    await NativePurchases.addListener('transactionVerificationFailed', payload => {
-      console.warn('StoreKit reported an unverified transaction', payload);
-    });
-  } catch (error) {
-    iosPurchaseListenersReady = false;
-    console.warn('Could not start StoreKit transaction listeners', error);
-  }
-}
-
-async function loadIosStoreProducts(force = false) {
-  if (!IS_IOS || state.iosStoreLoading) return;
-  if (state.iosStoreProducts.size && !force) return;
-  state.iosStoreLoading = true;
-  try {
-    const productIdentifiers = [...new Set(Object.values(IOS_IAP_PRODUCT_BY_PAID_AUDIO))];
-    const result = await NativePurchases.getProducts({ productIdentifiers, productType:PURCHASE_TYPE.INAPP });
-    const products = Array.isArray(result?.products) ? result.products : Array.isArray(result) ? result : [];
-    state.iosStoreProducts = new Map(products.map(product => [String(product.productIdentifier || product.identifier || ''), product]).filter(([id]) => id));
-  } catch (error) {
-    console.warn('Could not load App Store products yet', error);
-  } finally {
-    state.iosStoreLoading = false;
-  }
-}
-
-async function confirmApplePurchase(paidAudioId, productIdentifier, transaction) {
-  const transactionId = String(transaction?.transactionId || transaction?.purchaseToken || '').trim();
-  if (!transactionId) throw new Error('Apple did not return a transaction ID.');
-  const result = await apiJson('/apple-iap/confirm', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ paidAudioId, productIdentifier, transactionId })
-  });
-  if (result?.pending) return { pending:true, transactionId };
-  if (!result?.entitled) throw new Error('Apple purchase could not be verified yet.');
-  await NativePurchases.acknowledgePurchase({ purchaseToken:transactionId }).catch(error => console.warn('Could not finish StoreKit transaction', error));
-  return { pending:false, transactionId };
-}
-
-async function purchasePaidAudioIos(item) {
-  await initializeIosPurchaseListeners();
-  const paidAudioId = String(item?.id || '');
-  const productIdentifier = IOS_IAP_PRODUCT_BY_PAID_AUDIO[paidAudioId];
-  if (!productIdentifier) throw new Error('This collection is not configured in the App Store yet.');
-  if (!iosStoreProductForItem(item)) await loadIosStoreProducts(true);
-  if (!iosStoreProductForItem(item)) throw new Error(`Apple has not made this purchase product available to the app yet (${productIdentifier}). Check the In-App Purchase in App Store Connect: product ID, price, localization, availability, agreements/tax/banking, and sandbox/TestFlight propagation.`);
-  state.iosPurchaseBusy = paidAudioId;
-  render();
-  try {
-    const transaction = await NativePurchases.purchaseProduct({ productIdentifier, productType:PURCHASE_TYPE.INAPP, quantity:1, autoAcknowledgePurchases:false });
-    let verified = await confirmApplePurchase(paidAudioId, productIdentifier, transaction);
-    if (verified.pending) {
-      setToast('Purchase received. Verifying with Apple…');
-      for (let attempt=0; attempt<3 && verified.pending; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 2500 + attempt * 1500));
-        verified = await confirmApplePurchase(paidAudioId, productIdentifier, transaction);
-      }
-    }
-    if (verified.pending) throw new Error('Your purchase was received. Apple verification is still processing; use Restore Purchases in a moment.');
-    state.paidLoaded = false;
-    await loadPaidCatalog(true);
-    state.paidExpandedId = paidAudioId;
-    setToast('Purchase complete. Your shiurim are unlocked.');
-  } finally {
-    state.iosPurchaseBusy = '';
-    render();
-  }
-}
-
-async function restoreIosPaidPurchases(showToast = true) {
-  if (!IS_IOS || !state.user || state.iosRestoreBusy) return;
-  await initializeIosPurchaseListeners();
-  state.iosRestoreBusy = true;
-  render();
-  let restored = 0;
-  try {
-    const result = await NativePurchases.restorePurchases();
-    const purchasesResult = await NativePurchases.getPurchases({ productType:PURCHASE_TYPE.INAPP });
-    const purchases = Array.isArray(purchasesResult?.purchases) ? purchasesResult.purchases : Array.isArray(purchasesResult) ? purchasesResult : [];
-    for (const tx of purchases) {
-      const productIdentifier = String(tx?.productIdentifier || '');
-      const paidAudioId = IOS_PAID_AUDIO_BY_IAP_PRODUCT[productIdentifier];
-      if (!paidAudioId) continue;
-      try {
-        const confirmed = await confirmApplePurchase(paidAudioId, productIdentifier, tx);
-        if (!confirmed.pending) restored++;
-      } catch (error) { console.warn('Could not restore one Apple purchase', productIdentifier, error); }
-    }
-    state.paidLoaded = false;
-    await loadPaidCatalog(true);
-    if (showToast) setToast(restored ? `Restored ${restored} purchase${restored===1?'':'s'}.` : 'Your App Store purchases are up to date.');
-    return result;
-  } catch (error) {
-    if (showToast) alert(error?.message || 'Could not restore App Store purchases.');
-  } finally {
-    state.iosRestoreBusy = false;
-    render();
-  }
-}
-
 async function loadPaidCatalog(force = false, options = {}) {
   const silent = Boolean(options?.silent);
   if (state.paidLoading) return;
   if (state.paidLoaded && !force) return;
+  if (IS_IOS && !state.user) { state.paidCatalog = []; state.paidLoaded = true; state.paidError = ''; return; }
   state.paidLoading = true;
   state.paidError = '';
   if (!silent && ['paid','library','account'].includes(state.screen)) render();
@@ -5775,10 +5851,10 @@ async function loadPaidCatalog(force = false, options = {}) {
       ? apiJson(`/paid-audio?v=${Date.now()}`)
       : publicJson(`/paid-audio?v=${Date.now()}`);
     const data = await promiseWithTimeout(paidRequest, 12000, currentLanguage()==='he' ? 'טעינת החנות ארכה זמן רב מדי. נסו שוב.' : 'The purchase page took too long to load. Please try again.');
-    state.paidCatalog = Array.isArray(data.items) ? data.items : [];
+    const fetchedItems = Array.isArray(data.items) ? data.items : [];
+    // A reader app displays only signed-in entitlements, not the shop's inventory.
+    state.paidCatalog = IS_IOS ? fetchedItems.filter(item => item.owned === true) : fetchedItems;
     state.paidLoaded = true;
-    if (IS_IOS && state.user) await initializeIosPurchaseListeners();
-    if (IS_IOS) await loadIosStoreProducts();
     if (Capacitor.isNativePlatform() && state.user) setTimeout(warmPaidPurchases, 120);
   } catch (error) {
     state.paidError = error.message || 'Could not load paid shiurim.';
@@ -5817,6 +5893,8 @@ function closePaidCheckout() {
 }
 
 async function initPaidCheckout(productId) {
+  // Native iOS is a reader-only app: even synthetic checkout actions must be blocked.
+  if (IS_IOS) return;
   const item = state.paidCatalog.find(entry => String(entry.id) === String(productId));
   if (!item || !item.available) return;
   if (!state.user) {
@@ -5828,11 +5906,6 @@ async function initPaidCheckout(productId) {
   if (item.owned) {
     state.paidExpandedId = String(item.id);
     render();
-    return;
-  }
-  if (IS_IOS) {
-    try { await purchasePaidAudioIos(item); }
-    catch (error) { alert(error?.message || 'App Store purchase could not be completed.'); }
     return;
   }
   state.paidCheckoutItemId = String(item.id);
@@ -5850,6 +5923,7 @@ async function initPaidCheckout(productId) {
       render();
       return;
     }
+    await ensureWebStripeSdk();
     if (!window.Stripe) throw new Error('Secure Stripe payment form could not load.');
     const stripe = window.Stripe(data.publishableKey, { locale: currentLanguage() === 'he' ? 'he' : 'en' });
     const checkout = stripe.initCheckoutElementsSdk({
@@ -5978,8 +6052,8 @@ async function savePaidAudioProgress(bookmark = false, force = false) {
   const payload = {
     paidAudioId:current.paidAudioId,
     trackId:current.trackId,
-    positionSeconds:Number(audio.currentTime)||0,
-    durationSeconds:Number.isFinite(audio.duration) ? audio.duration : 0
+    positionSeconds:iosAudioUiPosition(),
+    durationSeconds:iosAudioUiDuration()
   };
   try {
     const data = await apiJson(bookmark ? '/paid-audio/bookmark' : '/paid-audio/progress', {
@@ -5996,6 +6070,7 @@ async function savePaidAudioProgress(bookmark = false, force = false) {
 function goToPaidBookmark() {
   const current = state.current;
   if (!current || current.kind !== 'paid-audio' || !(Number(current.bookmarkSeconds) > 0)) return;
+  if (iosAudioUiActive()) {void iosUnified.seek(Number(current.bookmarkSeconds)).then(()=>iosUnified.play()).catch(error=>console.warn('Native bookmark seek failed',error));return;}
   try { audio.currentTime = Number(current.bookmarkSeconds); audio.play().catch(()=>{}); } catch (_) {}
 }
 
@@ -6004,6 +6079,15 @@ async function handleAppReturn() {
   const kind = params.get('app_return');
   const sessionId = params.get('stripe_session_id');
   if (!kind) return;
+  if (IS_IOS && kind === 'paid') {
+    // Old checkout deep links cannot initiate or resume payment inside this reader app.
+    state.screen = 'paid';
+    state.paidLoaded = false;
+    await loadPaidCatalog(true);
+    try { history.replaceState(null, '', location.pathname); } catch (_) {}
+    render();
+    return;
+  }
   try {
     if (sessionId) {
       const data = await apiJson(`/stripe/session-status?session_id=${encodeURIComponent(sessionId)}`);
@@ -6024,13 +6108,20 @@ async function handleAppReturn() {
 
 function analyticsScreenLabel() {
   if (state.watchVideo) return 'Watch page';
-  const names = { home:'Home', shiurim:'Search', live:'Live', 'live-boro':'Live', 'live-flatbush':'Live', schedule:'Schedule', paid:'Purchases', donate:'Donate', contact:'Contact', privacy:'Privacy', library:'Library', account:'Account' };
+  const names = { home:'Home', shiurim:'Search', live:'Live', 'live-boro':'Live', 'live-flatbush':'Live', schedule:'Schedule', paid:'Audio Library', donate:'Donate', contact:'Contact', privacy:'Privacy', library:'Library', account:'Account' };
   return names[String(state.screen || '')] || String(state.screen || 'Home');
 }
 
 // Preserve the current touch target until an eligible tab gesture completes.
 function render() {
   if (tabSwipeRenderGate.shouldDefer()) return;
+  syncIosBottomNavigation();
+  if(iosNativeActive()) void iosUnified.occlude(Boolean(state.playlistPickerItem || state.deleteDialog || state.filterDialog)).catch(()=>{});
+  syncIosVideoDisplay();
+  if (IS_IOS && state.screen === 'library' && !state.user &&
+      ['likes','later','history','following'].includes(state.librarySection)) {
+    state.librarySection = 'downloads';
+  }
   usageAnalytics.setScreen(analyticsScreenLabel());
   if (['live','live-boro','live-flatbush'].includes(state.screen)) usageAnalytics.event('livestream_opened', { dedupeKey:'livestream-open', cooldownMs:60000 });
   if (state.loading) {
@@ -6063,6 +6154,7 @@ function render() {
   syncLivePlaybackAnalytics();
   updatePlayerUi();
   refreshOfflineButtonsForKey();
+  if (iosNativeActive()) setTimeout(scheduleIosUnifiedSurface,0);
   if (state.watchVideo && state.watchMode === 'video') setTimeout(initWatchVimeo, 0);
   if (['home','schedule','live','live-boro','live-flatbush'].includes(state.screen) && !state.scheduleDataLoaded && !state.scheduleDataLoading) setTimeout(loadScheduleData, 0);
   if (['home','live','live-boro','live-flatbush'].includes(state.screen) && !state.liveStatusLoaded) setTimeout(loadLiveStatus, 0);
@@ -6154,8 +6246,7 @@ function bindDonationControls(root=document) {
   const qs=selector=>root.querySelector(selector);
 
   qsa('[data-ios-donation-web]').forEach(el => el.addEventListener('click', async () => {
-    const mode = el.dataset.iosDonationWeb === 'sponsor' ? 'sponsor' : 'donation';
-    try { await openExternal(iosDonationWebsiteUrl(mode)); }
+    try { await openExternal(iosDonationWebsiteUrl()); }
     catch (error) { console.warn('Could not open donation website', error); }
   }));
 
@@ -6188,6 +6279,49 @@ function bindDonationControls(root=document) {
   qs('#donationStripeForm')?.addEventListener('submit', prepareDonationCheckout);
   qs('#donationPayButton')?.addEventListener('click', confirmDonationCheckout);
   qsa('[data-donation-back]').forEach(el => el.addEventListener('click', () => closeDonationCheckout(true)));
+}
+
+let iosNavigationSequence = 0;
+async function navigateIosBottomTab(button) {
+  if (!IS_IOS) return;
+  const next = button.dataset.nav;
+  if (!['home','shiurim','live','library','account'].includes(next)) return;
+  const sequence = ++iosNavigationSequence;
+  state.iosNavRoot = next;
+  // Move the visible highlight at tap time, even if Mini transition is async.
+  state.screen = next;
+  syncIosBottomNavigation();
+  try {
+    await prepareIosTabNavigation({
+      state,
+      exitFullscreen: async () => {
+        // Exit without replacing the current HLS/video element or source.
+        if (iosNativeActive()) {
+          document.body.classList.remove('irgun-ios-video-fullscreen');
+          await IrgunVideoDisplay.setFullscreen({enabled:false}).catch(()=>{});
+          await iosUnified.layout('inline',nativeVideoFrame(document)||{}).catch(()=>{});
+        } else {
+          const player = state.watchVimeo?.player;
+          if (typeof player?.exitFullscreen === 'function') player.exitFullscreen();
+        }
+      },
+      minimizeVideo: () => minimizeWatchToPersistent(),
+      closeAudioWatch: () => closeWatch(true)
+    });
+  } catch (error) {
+    console.warn('iOS tab player presentation failed', error);
+  }
+  if (sequence !== iosNavigationSequence) return;
+  state.screen = next;
+  if (next === 'library' && !state.user &&
+      ['likes','later','history','following'].includes(state.librarySection)) {
+    state.librarySection = 'downloads';
+  }
+  if (next === 'live') { state.scheduleDataLoaded = false; state.liveStatusLoaded = false; }
+  state.libraryLimit = 48;
+  state.filterDialog = '';
+  render();
+  window.scrollTo({ top:0, behavior:'smooth' });
 }
 
 function bind() {
@@ -6307,7 +6441,6 @@ function bind() {
   document.querySelectorAll('[data-paid-attachment-download]').forEach(el=>el.addEventListener('click',()=>openPaidAttachment(el.dataset.paidProduct,el.dataset.paidAttachmentDownload,true)));
   document.querySelectorAll('[data-paid-track]').forEach(el => { el.addEventListener('pointerdown', () => prefetchPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack), {passive:true}); el.addEventListener('click', () => playPaidTrack(el.dataset.paidProduct, el.dataset.paidTrack)); });
   document.querySelectorAll('[data-paid-purchase]').forEach(el => el.addEventListener('click', () => initPaidCheckout(el.dataset.paidPurchase)));
-  document.querySelectorAll('[data-ios-restore-purchases]').forEach(el => el.addEventListener('click', () => restoreIosPaidPurchases(true)));
   document.querySelectorAll('[data-paid-checkout-close]').forEach(el => el.addEventListener('click', closePaidCheckout));
   document.querySelectorAll('[data-paid-modal-backdrop]').forEach(el => el.addEventListener('click', event => { if (event.target === el) closePaidCheckout(); }));
   document.getElementById('paidPayButton')?.addEventListener('click', confirmPaidCheckout);
@@ -6637,19 +6770,24 @@ function bind() {
 
   const seek = document.getElementById('fullSeek');
   if (seek) seek.addEventListener('input', () => {
-    audio.currentTime = Number(seek.value) || 0;
+    if(iosAudioUiActive())void iosUnified.seek(Number(seek.value)||0).catch(()=>{});
+    else audio.currentTime = Number(seek.value) || 0;
     updatePlayerUi();
   });
   document.querySelectorAll('[data-speed-choice]').forEach(el => el.addEventListener('click', () => {
     state.playbackSpeed = Number(el.dataset.speedChoice) || 1;
     audio.playbackRate = state.playbackSpeed;
+    if(iosNativeActive())void iosUnified.speed(state.playbackSpeed).catch(error=>console.warn('Native speed failed',error));
     localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
-    render();
+    // Updating one setting should not rebuild or scroll the playing sheet.
+    document.querySelectorAll('[data-speed-choice]').forEach(button =>
+      button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
   }));
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {
-    audio.currentTime = Number(watchAudioSeek.value) || 0;
+    if(iosAudioUiActive())void iosUnified.seek(Number(watchAudioSeek.value)||0).catch(()=>{});
+    else audio.currentTime = Number(watchAudioSeek.value) || 0;
     updatePlayerUi();
   });
 
@@ -7190,6 +7328,55 @@ function prepareIosAudioPlaybackSurface(item) {
 }
 
 async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
+  if (iosUnified) {
+    // All standalone audio—including saved lectures and existing purchases—
+    // goes into the SAME AVPlayer instance used by HLS video. The HTML audio
+    // element is never opened, and the legacy background plugin is stopped.
+    if (!item?.url || !item?.id) throw new Error('No native audio source available');
+    const old=state.watchVimeo;
+    if (old?.isIrgunUnifiedNativeAVPlayer) await old.destroy();
+    state.watchVimeo=null;
+    state.watchVimeoReady=false;
+    state.watchVideo=null;
+    state.watchHostedExternally=false;
+    state.watchMinimized=false;
+    state.watchPictureInPicture=false;
+    state.watchMode='audio';
+    state.videoOwnsPlayback=false;
+    state.watchVimeoGeneration += 1;
+    clearPersistentVideoMount();
+    if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
+    state.pendingAudioSeek=null;
+    stopNativeBackgroundAudio();
+    try { audio.pause();audio.removeAttribute('src');audio.load(); } catch (_) {}
+    const offlineRecord=offlineRecordForAudioItem(item);
+    const url=offlineRecord?.uri || item.networkUrl || item.url;
+    const effective={...item, url:String(url),networkUrl:String(item.networkUrl||item.url),
+      offline:Boolean(offlineRecord),offlineKey:offlineRecord?.key||'',native:true};
+    const previous=state.current;
+    state.current=effective;
+    if (!state.queueStarting) {state.playQueue=[];state.playQueueIndex=-1;}
+    iosNativeLastHistoryAt=0;
+    try {
+      await iosUnified.open({
+        id:`audio:${effective.kind}:${effective.id}`,url:String(url),mode:'audio',
+        title:effective.title,artist:effective.subtitle||'Irgun Shiurai Torah',
+        position:Math.max(0,Number(resumeAt)||0),rate:state.playbackSpeed,autoplay:true
+      });
+      usageAnalytics.event('shiur_opened',{shiurId:String(item.id),mediaType:'audio',
+        dedupeKey:`shiur-open:${item.id}`,cooldownMs:60000});
+      usageAnalytics.setMedia({isPlaying:iosNativePlaying(),mediaType:'audio',
+        playerState:iosNativePlaying()?'playing':'paused',shiurId:String(item.id)});
+    } catch (error) {
+      state.current=previous;
+      console.error('Unified AVPlayer could not open audio',error);
+      setToast('This audio could not open in the native player.');
+      throw error;
+    }
+    render();
+    updatePlayerUi();
+    return;
+  }
   if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
   state.pendingAudioSeek = null;
   state.videoOwnsPlayback = false;
@@ -7262,12 +7449,14 @@ async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
 
 function togglePlay() {
   if (!state.current) return;
+  if (iosAudioUiActive()) { void (iosNativePlaying()?iosUnified.pause():iosUnified.play()).catch(error=>console.warn('Native Play/Pause failed',error));return; }
   if (audio.paused) audio.play().catch(() => {}); else audio.pause();
   updatePlayerUi();
 }
 
 function skip(seconds) {
   if (!state.current) return;
+  if (iosAudioUiActive()) {void iosUnified.seek(Math.max(0,Math.min(iosNativeDuration()||Infinity,iosNativePosition()+seconds))).catch(error=>console.warn('Native seek failed',error));return;}
   const max = Number.isFinite(audio.duration) ? audio.duration : Infinity;
   audio.currentTime = Math.max(0, Math.min(max, (audio.currentTime || 0) + seconds));
   updatePlayerUi();
@@ -7286,7 +7475,8 @@ function setSleepTimer(value) {
   if (!minutes) return;
   state.sleepEndsAt = Date.now() + minutes * 60000;
   state.sleepTimer = setTimeout(() => {
-    audio.pause();
+    if(iosAudioUiActive())void iosUnified.pause().catch(()=>{});
+    else audio.pause();
     state.sleepTimer = null;
     state.sleepEndsAt = null;
     state.sleepMode = 'off';
@@ -7327,6 +7517,7 @@ function stopNativeBackgroundAudio() {
   if (nativeBackgroundAudioAvailable()) IrgunBackgroundAudio.stop({clear:true}).catch(() => {});
 }
 function prepareNativeBackgroundAudio(item, isPlaying, position, mediaType = 'video', force = false) {
+  if (iosNativeActive()) return; // The same AVPlayer already handles background.
   if (!nativeBackgroundAudioAvailable() || mediaType !== 'video' || document.hidden || state.nativeBackgroundPending) return;
   if (!state.watchVideo || state.watchMode !== 'video' || String(videoId(state.watchVideo)) !== String(item.id || videoId(item))) return;
   const player = state.watchVimeo;
@@ -7444,8 +7635,8 @@ function syncLoadedLibraryAudioDuration() {
 
 function updatePlayerUi() {
   if (!state.current) return;
-  const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-  const position = Math.max(0, audio.currentTime || 0);
+  const duration = iosAudioUiDuration();
+  const position = iosAudioUiPosition();
   const percent = duration > 0 ? Math.min(100, position / duration * 100) : 0;
   const miniProgress = document.getElementById('miniProgress');
   if (miniProgress) miniProgress.style.width = `${percent}%`;
@@ -7462,9 +7653,9 @@ function updatePlayerUi() {
   const total = document.getElementById('fullDuration');
   if (total) total.textContent = fmtDurationOrUnknown(duration);
   document.querySelectorAll('[data-play-toggle]').forEach(button => {
-    if (button.classList.contains('watch-audio-play')) button.innerHTML = audio.paused ? '&#9654; Play' : 'II Pause';
-    else if (button.classList.contains('main-play')) button.innerHTML = audio.paused ? svgIcon('play') : '<span class="pause-mark">II</span>';
-    else button.innerHTML = audio.paused ? '&#9654;' : 'II';
+    if (button.classList.contains('watch-audio-play')) button.innerHTML = iosAudioUiPaused() ? '&#9654; Play' : 'II Pause';
+    else if (button.classList.contains('main-play')) button.innerHTML = iosAudioUiPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>';
+    else button.innerHTML = iosAudioUiPaused() ? '&#9654;' : 'II';
   });
   if ('mediaSession' in navigator && duration > 0) {
     try { navigator.mediaSession.setPositionState({ duration, playbackRate: audio.playbackRate || 1, position: Math.min(position, duration) }); } catch (_) {}
@@ -7481,7 +7672,7 @@ async function saveCurrentAudioHistory(force = false, completed = false) {
   const now = Date.now();
   if (!force && now - state.audioLastHistoryAt < 15000) return;
   state.audioLastHistoryAt = now;
-  await saveHistory(state.current.id, 'audio', audio.currentTime || 0, Number.isFinite(audio.duration) ? audio.duration : 0, completed);
+  await saveHistory(state.current.id, 'audio', iosAudioUiPosition(), iosAudioUiDuration(), completed);
 }
 
 audio.addEventListener('timeupdate', () => {
@@ -7641,6 +7832,7 @@ async function openWatch(id, requestedTime = null, options = {}) {
 }
 
 function currentVideoClockForBackground() {
+  if (iosNativeActive()) return iosNativePosition();
   const player = state.watchVimeo;
   const directVideo = player?.video || player?.player?.v || null;
   const directTime = Number(directVideo?.currentTime);
@@ -7737,6 +7929,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
+  if (iosNativeActive()) return; // Native AVPlayer has no WebKit -> background handoff.
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
@@ -7824,6 +8017,11 @@ function restoreVideoAfterSystemPip(force = false) {
 }
 
 function restoreVideoAfterBackgroundAudio() {
+  if (iosNativeActive()) {
+    void iosUnified.snapshot().catch(error=>console.warn('Native AVPlayer foreground snapshot failed',error));
+    scheduleIosUnifiedSurface();
+    return;
+  }
   restoreVideoAfterSystemPip();
   if (nativeBackgroundAudioAvailable() && state.watchMode === 'video' && state.watchVimeo) { void restoreNativeBackgroundVideo(); return; }
   if (!state.backgroundVideoReturnToVideo || document.hidden || !state.watchVideo || state.watchMode !== 'audio') return;
@@ -7837,12 +8035,50 @@ async function preserveWatchTime() {
   if (state.watchMode === 'video') {
     state.watchResumeSeconds = await quickVimeoTime(state.watchResumeSeconds || 0);
   } else if (state.watchMode === 'audio' && state.current && state.current.id === videoId(state.watchVideo)) {
-    state.watchResumeSeconds = state.pendingAudioSeek?.target || audio.currentTime || 0;
+    state.watchResumeSeconds = iosAudioUiActive() ? iosNativePosition() : (state.pendingAudioSeek?.target || audio.currentTime || 0);
   }
 }
 
 async function closeWatch(save = true) {
   if (!state.watchVideo) return;
+  if (iosNativeActive() && String(iosUnified.id)===`video:${videoId(state.watchVideo)}`) {
+    const wasAudio=state.watchMode==='audio';
+    const lecture=state.watchVideo;
+    const at=iosNativePosition(),duration=iosNativeDuration();
+    if (save && state.user) {
+      await saveHistory(videoId(lecture),wasAudio?'audio':'video',at,duration,false).catch(()=>{});
+    }
+    if (wasAudio) {
+      // Same AVPlayer keeps playing in the Library's Mini audio presentation.
+      state.current=state.current||{
+        kind:'video-audio',id:String(videoId(lecture)),
+        title:displayShiurTitle(lecture.title,'Shiur'),
+        subtitle:lecture._speakerLabel||lecture.speaker||'',
+        url:audioUrl(mediaApiId(lecture,videoId(lecture))),native:true
+      };
+    } else {
+      await iosUnified.stop().catch(error=>console.warn('Native video close failed',error));
+      state.current=null;
+    }
+    try { await state.watchVimeo?.destroy?.(); } catch (_) {}
+    state.watchVimeo=null;
+    state.watchVimeoReady=false;
+    state.watchVimeoGeneration+=1;
+    clearPersistentVideoMount();
+    state.watchVideo=null;
+    state.watchMinimized=false;
+    state.watchHostedExternally=false;
+    state.watchPictureInPicture=false;
+    state.videoOwnsPlayback=false;
+    state.playerOpen=false;
+    state.watchComments=[];
+    state.watchCommentsError='';
+    state.editingCommentId='';
+    state.watchMode=wasAudio?'audio':'video';
+    syncIosVideoDisplay();
+    render();
+    return;
+  }
   stopNativeBackgroundAudio();
   if (save) await preserveWatchTime();
   if (state.watchMode === 'video' && state.watchVideo && save) {
@@ -7857,6 +8093,7 @@ async function closeWatch(save = true) {
   state.watchVimeoGeneration += 1;
   clearPersistentVideoMount();
   state.watchVideo = null;
+  syncIosVideoDisplay();
   state.backgroundVideoReturnToVideo = false;
   state.pipBackgroundReturnPending = false;
   state.pipWasBackgrounded = false;
@@ -7939,6 +8176,49 @@ async function destroyWatchVideoOwner() {
 async function switchWatchMode(mode) {
   if (!state.watchVideo || state.mediaSwitchBusy) return;
   if (!['video', 'audio'].includes(mode) || mode === state.watchMode) return;
+
+  if (iosNativeActive() && state.watchVimeo?.isIrgunUnifiedNativeAVPlayer) {
+    const video=state.watchVideo;
+    const id=videoId(video);
+    if (mode==='audio' && !video.hasAudio) return;
+    state.mediaSwitchBusy=true;
+    try {
+      // Swift setMode only hides/shows the same AVPlayerLayer. It never
+      // replaces or seeks its AVPlayerItem, so the audio clock cannot reset.
+      const previous=state.watchResumeSeconds;
+      const snapshot=await iosUnified.mode(mode);
+      state.watchMode=mode;
+      state.watchResumeSeconds=Math.max(0,Number(snapshot?.position)||previous||0);
+      state.watchVideoPlaying=Boolean(snapshot?.playing);
+      state.playerOpen=false;
+      if (mode==='audio') {
+        state.videoOwnsPlayback=false;
+        state.current={
+          kind:'video-audio', id:String(id),sourceId:mediaApiId(video,id),
+          title:displayShiurTitle(video.title,'Shiur'),
+          subtitle:[video.showcase,video._speakerLabel,video._topicLabel].filter(Boolean).join(' - '),
+          thumbnail:video.thumbnail||'', url:audioUrl(mediaApiId(video,id)),
+          networkUrl:audioUrl(mediaApiId(video,id)),native:true
+        };
+        clearPersistentVideoMount();
+      } else {
+        state.videoOwnsPlayback=true;
+        state.current=null;
+        state.watchMinimized=false;
+      }
+      render();
+      if (mode==='video') {
+        hostCurrentWatchOverlay('full');
+        scheduleIosUnifiedSurface();
+      }
+    } catch(error) {
+      console.error('One AVPlayer Video/Audio mode switch failed',error);
+      setToast('Could not switch player mode. Playback was not restarted.');
+    } finally {
+      state.mediaSwitchBusy=false;
+    }
+    return;
+  }
 
   const video = state.watchVideo;
   const id = videoId(video);
@@ -8073,6 +8353,19 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       return;
     }
     state.watchVimeo = player;
+    if (created.backend === 'native') {
+      state.watchVimeoReady = true;
+      state.watchResumeSeconds = iosNativePosition();
+      state.watchVideoPlaying = iosNativePlaying();
+      state.videoOwnsPlayback = true;
+      state.playerOpen = false;
+      usageAnalytics.setMedia({isPlaying:iosNativePlaying(),mediaType:'video',
+        playerState:iosNativePlaying()?'playing':'paused',shiurId:String(videoKey)});
+      if (iosNativePlaying()) usageAnalytics.event('video_start',
+        {shiurId:String(videoKey),mediaType:'video',dedupeKey:`video-start:${videoKey}`,cooldownMs:10000});
+      scheduleIosUnifiedSurface();
+      return;
+    }
     // A Watch tap can arrive after render has already started source discovery.
     // Promote that Play request, while preserving an explicit Pause during load.
     if (initialization.userInitiated && player.player && !player.player.explicitlyPaused) player.player.autoplayWanted = true;
@@ -8201,6 +8494,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       hardStopHtmlAudioForVideo();
       state.playerOpen = false;
       state.watchVideoPlaying = true;
+      syncIosVideoDisplay();
       refreshPersistentMiniVideoChrome();
       await setVimeoHandoffMuted(player, false);
       if (!isCurrentPlayer()) return;
@@ -8214,7 +8508,7 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchResumeSeconds = Math.max(0, Number(t) || state.watchResumeSeconds || 0);
       if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, true, t, d, 'video');
     });
-    player.on('pause', async () => { if (!isCurrentPlayer()) return; state.watchVideoPlaying = false; usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
+    player.on('pause', async () => { if (!isCurrentPlayer()) return; state.watchVideoPlaying = false; syncIosVideoDisplay(); usageAnalytics.setMedia({isPlaying:false,mediaType:'video',playerState:'paused',shiurId:String(videoKey)}); refreshPersistentMiniVideoChrome(); const t=await player.getCurrentTime().catch(()=>0); const d=await player.getDuration().catch(()=>Number(video.duration)||0); if (isCurrentPlayer()) syncNativeMediaSession(videoMediaItem, false, t, d, 'video'); });
     let resumeAfterPip = false;
     if (player.on) {
       player.on('pictureinpictureintent', data => {
@@ -8227,7 +8521,12 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
         prepareNativeBackgroundAudio(videoMediaItem, state.watchVideoPlaying, currentVideoClockForBackground(), 'video', true);
       });
       player.on('fullscreenchange', data => {
-        if (typeof setNativeVideoFullscreen === 'function') setNativeVideoFullscreen(Boolean(data && data.fullscreen));
+        if (!IS_IOS || !Capacitor.isNativePlatform()) return;
+        IrgunVideoDisplay.setFullscreen({
+          enabled: Boolean(data && data.fullscreen),
+          fromSensor: Boolean(iosSensorFullscreenDirection),
+          direction: iosSensorFullscreenDirection || ''
+        }).catch(error => console.warn('Native iOS fullscreen orientation unavailable', error));
       });
       player.on('enterpictureinpicture', () => {
         if (!isCurrentPlayer()) return;
@@ -8450,14 +8749,14 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
   bindTabSwipes(app, {
     onGestureState: active => tabSwipeRenderGate.setActive(active),
     getActiveTab: () => state.screen,
-    getTabs: () => Array.from(app.querySelectorAll('.bottom-nav [data-nav]'))
+    getTabs: () => Array.from(document.querySelectorAll('#iosBottomNavigationMount .bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
     canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),
-    navigate: tab => app.querySelector(`.bottom-nav [data-nav="${tab}"]`)?.click()
+    navigate: tab => document.querySelector(`#iosBottomNavigationMount .bottom-nav [data-nav="${tab}"]`)?.click()
   });
 }
 
@@ -8504,6 +8803,7 @@ window.addEventListener('irgunNativeDidBecomeActive', () => {
 
 let iosInterruptedPlayback = null;
 function rememberIosInterruptedPlayback() {
+  if (iosNativeActive()) return; // Native AVAudioSession owns interruptions and remote commands.
   if (state.watchVideo && state.watchMode === 'video' && state.watchVimeo?.video && !state.watchVimeo.video.paused) {
     iosInterruptedPlayback = { kind:'video', videoId:String(videoId(state.watchVideo)) };
     return;
@@ -8515,6 +8815,7 @@ function rememberIosInterruptedPlayback() {
   iosInterruptedPlayback = null;
 }
 function resumeIosInterruptedPlayback() {
+  if (iosNativeActive()) return;
   const interrupted = iosInterruptedPlayback;
   iosInterruptedPlayback = null;
   if (!interrupted) return;
@@ -8529,6 +8830,7 @@ function resumeIosInterruptedPlayback() {
 }
 function pauseForIosRouteLoss() {
   iosInterruptedPlayback = null;
+  if (iosNativeActive()) {void iosUnified.pause().catch(()=>{});return;}
   if (state.watchVideo && state.watchMode === 'video') {
     try { state.watchVimeo?.pause?.(); } catch (_) {}
   } else if (state.current) {

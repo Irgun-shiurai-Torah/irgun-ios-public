@@ -28,6 +28,11 @@ function fixture() {
   };
   const context = vm.createContext({
     state, console:{warn:()=>{}}, navigator:{}, audio:{paused:true}, IS_IOS:true,
+    // Legacy WebKit regressions intentionally exercise the web-only branch.
+    // The native AVPlayer branch has separate singleton tests and a native
+    // simulator workflow; native=false is not a fake success in these cases.
+    iosUnified:null, iosNativeActive:()=>false, iosNativePosition:()=>0,
+    iosAudioUiActive:()=>false, scheduleIosUnifiedSurface:()=>{},
     Capacitor:{isNativePlatform:()=>true},
     nativeBackgroundAudioAvailable:()=>false, stopNativeBackgroundAudio:()=>{}, prepareNativeBackgroundAudio:()=>{},
     document:{hidden:false, pictureInPictureElement:null, getElementById:()=>frame},
@@ -39,6 +44,9 @@ function fixture() {
     handoffPlayingVideoToBackgroundAudio:()=>{observations.handoffs++;},
     restoreWatchUiAfterSystemPip:()=>{observations.uiRestores++;},
     parkWatchUiForSystemPip:()=>{}, refreshPersistentMiniVideoChrome:()=>{},
+    // The VM extracts playback functions; presentation/idle-lock is provided by
+    // the actual native iOS plugin and has no effect on playback assertions.
+    syncIosVideoDisplay:()=>{},
     recordPublicView:()=>{},
     usageAnalytics:{event:()=>{},setMedia:()=>{}},
     saveCurrentAudioHistory:async()=>{}, preserveWatchTime:async()=>{}, saveHistory:async()=>{},

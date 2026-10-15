@@ -128,7 +128,7 @@ window.ISTAccountTest = { snapshot() {
     authSubmitCount:window.__ISTAccountLoginSubmissions||0,
     authInvalidFieldKey:window.__ISTAccountLastInvalidField||'',
     playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
-    videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
+    videoTime:iosNativeActive()?iosNativePosition():(Number(state.watchVimeo?.video?.currentTime)||0),videoPlaying:iosNativeActive()?iosNativePlaying():(!!state.watchVimeo?.video&&!state.watchVimeo.video.paused)};
 }};
 if(window.ISTSimulator){
   const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);

@@ -70,6 +70,8 @@ app_group ||= project.main_group.find_subpath('App', true)
   ['App.entitlements', false, false],
   ['IrgunAnalyticsPlugin.swift', false, true],
   ['IrgunBackgroundAudioPlugin.swift', false, true],
+  ['IrgunVideoDisplayPlugin.swift', false, true],
+  ['IrgunUnifiedPlayerPlugin.swift', false, true],
 ].each do |filename, add_to_resources, add_to_sources|
   absolute = File.join(root, 'ios', 'App', 'App', filename)
   abort("Missing required iOS file: #{absolute}") unless File.exist?(absolute)
@@ -92,7 +94,7 @@ target_attrs = attrs[target.uuid] ||= {}
 system_caps = target_attrs['SystemCapabilities'] ||= {}
 system_caps['com.apple.SignInWithApple'] = { 'enabled' => 1 }
 system_caps['com.apple.Push'] = { 'enabled' => 1 }
-system_caps['com.apple.InAppPurchase'] = { 'enabled' => 1 }
+system_caps.delete('com.apple.InAppPurchase')
 system_caps.delete('com.apple.ApplePay')
 
 project.save

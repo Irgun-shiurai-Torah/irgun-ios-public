@@ -75,6 +75,19 @@ def patch_info_plist(ios_client, reversed_client):
     if 'audio' not in modes:
         modes.append('audio')
     data['UIBackgroundModes'] = modes
+    # Permit real iPhone/iPad landscape geometry when a user expands video.
+    # UIKit still manages portrait/landscape normally outside playback.
+    data['UISupportedInterfaceOrientations'] = [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+    ]
+    data['UISupportedInterfaceOrientations~ipad'] = [
+        'UIInterfaceOrientationPortrait',
+        'UIInterfaceOrientationPortraitUpsideDown',
+        'UIInterfaceOrientationLandscapeLeft',
+        'UIInterfaceOrientationLandscapeRight',
+    ]
 
     url_types = list(data.get('CFBundleURLTypes') or [])
     existing_schemes = set()
@@ -105,6 +118,8 @@ def write_analytics_plugin():
         die(f'Analytics plugin template is missing: {ANALYTICS_PLUGIN_TEMPLATE}')
     ANALYTICS_PLUGIN.write_text(ANALYTICS_PLUGIN_TEMPLATE.read_text())
     (IOS_APP / 'IrgunBackgroundAudioPlugin.swift').write_text((ROOT / 'scripts/IrgunBackgroundAudioPlugin.swift').read_text())
+    (IOS_APP / 'IrgunVideoDisplayPlugin.swift').write_text((ROOT / 'scripts/IrgunVideoDisplayPlugin.swift').read_text())
+    (IOS_APP / 'IrgunUnifiedPlayerPlugin.swift').write_text((ROOT / 'scripts/IrgunUnifiedPlayerPlugin.swift').read_text())
 
 def patch_app_delegate():
     app_delegate = IOS_APP / 'AppDelegate.swift'
@@ -137,6 +152,8 @@ def patch_app_delegate():
         let plugin = IrgunAnalyticsPlugin()
         capacitorBridge.registerPluginInstance(plugin)
         capacitorBridge.registerPluginInstance(IrgunBackgroundAudioPlugin())
+        capacitorBridge.registerPluginInstance(IrgunVideoDisplayPlugin())
+        capacitorBridge.registerPluginInstance(IrgunUnifiedPlayerPlugin())
         irgunAnalyticsPlugin = plugin
     }
 
@@ -262,6 +279,37 @@ def patch_app_delegate():
     }
 ''')
 
+    if 'func irgunSetVideoOrientationMask(_ mask: UIInterfaceOrientationMask)' not in text:
+        additions.append("""
+    private var irgunVideoOrientationMask: UIInterfaceOrientationMask = .all
+
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        return irgunVideoOrientationMask
+    }
+
+    func irgunSetVideoOrientationMask(_ mask: UIInterfaceOrientationMask) {
+        irgunVideoOrientationMask = mask
+        if #available(iOS 16.0, *) {
+            // iOS 26 may host Capacitor in a UIWindowScene without the legacy
+            // AppDelegate window. Resolve the foreground scene explicitly.
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = window?.windowScene
+                ?? scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first
+            let root = window?.rootViewController
+                ?? scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+            root?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let scene = scene {
+                scene.requestGeometryUpdate(UIWindowScene.GeometryPreferences.iOS(interfaceOrientations: mask)) { error in
+                    NSLog("Irgun iOS orientation request not accepted: \\(error)")
+                }
+            }
+        } else {
+            UIViewController.attemptRotationToDeviceOrientation()
+        }
+    }
+""")
+
     if additions:
         idx = text.rfind('\n}')
         if idx < 0:
@@ -321,8 +369,8 @@ def write_build_metadata():
     meta.write_text(
         f'Bundle ID: {BUNDLE_ID}\nMarketing version: {MARKETING_VERSION}\nBuild number: {BUILD_NUMBER}\n'
         f'Firebase plist installed: {GOOGLE_PLIST.exists()}\n'
-        'Capabilities requested: Sign in with Apple, Push Notifications, In-App Purchase, Background Audio\n'
-        'Paid digital audio: App Store In-App Purchase / StoreKit 2\n'
+        'Capabilities requested: Sign in with Apple, Push Notifications, Background Audio\n'
+        'Paid audio: reader-only access to purchases linked to Irgun accounts\n'
     )
 
 def main():
