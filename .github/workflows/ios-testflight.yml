@@ -115,7 +115,7 @@ jobs:
         run: npm install
 
       - name: Verify Vimeo-only native playback and Home audio
-        run: node --test scripts/test_ios_vimeo_background.mjs
+        run: node --test scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs
 
       - name: Build Safari 15 / iPadOS 15-compatible web app
         run: |

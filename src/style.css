@@ -2830,3 +2830,15 @@ body.irgun-ios #persistentVideoMount.watch-audio-parked .direct-media-center-con
 }
 
 body.irgun-ios .ios-floating-nav[dir="rtl"] .nav-active-indicator { left:auto; right:calc(6px + (100% - 12px) / 5 * var(--nav-index, 0)); }
+
+
+/* Visible, finger-sized Follow / עקוב buttons on every identifiable lecture. */
+.lecture-follow-actions { display:flex; align-items:center; gap:8px; margin:12px 0 10px; flex-wrap:wrap; }
+.lecture-follow-actions .follow-chip, .player-follow-bar .follow-chip {
+  appearance:none; -webkit-appearance:none; display:inline-flex; align-items:center;
+  justify-content:center; min-height:40px; padding:9px 14px; max-width:100%;
+  font-size:12px; font-weight:800; line-height:1.4; text-align:center;
+  white-space:normal; overflow-wrap:anywhere; cursor:pointer; touch-action:manipulation;
+}
+body.irgun-ios .lecture-follow-actions { position:relative; z-index:4; }
+.lecture-follow-actions .follow-chip:focus-visible, .player-follow-bar .follow-chip:focus-visible { outline:2px solid #125f96; outline-offset:2px; }

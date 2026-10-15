@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies and add simulator-only observations
         run: |
           node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
-          node --test scripts/test_ios_unified_avplayer.mjs scripts/test_ios_vimeo_background.mjs
+          node --test scripts/test_ios_unified_avplayer.mjs scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs
           node --check src/main.js
           node scripts/test_ios_reader_mode.mjs
           node --test scripts/test_ios_android_parity.mjs
