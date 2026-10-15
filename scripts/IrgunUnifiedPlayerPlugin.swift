@@ -574,6 +574,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let quality = button("Auto", width: 58, selector: #selector(tapQuality))
         let speed = button("1×", width: 52, selector: #selector(tapSpeed))
         let full = button("⛶", width: 34, selector: #selector(tapFull))
+        mini.accessibilityIdentifier = "irgun-native-mini"
+        mini.accessibilityLabel = "Keep playing at bottom of app"
+        pip.accessibilityIdentifier = "irgun-native-pip"
+        pip.accessibilityLabel = "Picture in Picture"
+        quality.accessibilityIdentifier = "irgun-native-quality"
+        quality.accessibilityLabel = "Video quality"
+        speed.accessibilityIdentifier = "irgun-native-speed"
+        speed.accessibilityLabel = "Playback speed"
+        full.accessibilityIdentifier = "irgun-native-fullscreen"
         nativeQuality = quality
         nativeSpeed = speed
         nativeFull = full
@@ -593,6 +602,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let back = button("↶ 15", width: 46, selector: #selector(tapBack))
         let play = button("▶", width: 52, selector: #selector(tapPlay))
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
+        back.accessibilityIdentifier = "irgun-native-back-15"
+        back.accessibilityLabel = "Back 15 seconds"
+        play.accessibilityIdentifier = "irgun-native-play"
+        forward.accessibilityIdentifier = "irgun-native-forward-15"
+        forward.accessibilityLabel = "Forward 15 seconds"
         play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
         play.layer.cornerRadius = 17
         // button() already establishes the actual touch height. Do not
@@ -668,6 +682,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     private func updateNativeControls() {
         nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
+        nativePlay?.accessibilityLabel = playingWanted ? "Pause video" : "Play video"
+        nativeFull?.accessibilityLabel = layout == "full" ? "Exit Fullscreen" : "Fullscreen"
         nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
         nativeSpeed?.setTitle(String(format: "%.2g×", Double(playbackRate)), for: .normal)
         nativeFull?.setTitle(layout == "full" ? "↙" : "⛶", for: .normal)
