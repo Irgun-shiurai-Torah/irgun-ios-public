@@ -3542,7 +3542,18 @@ async function bindIosVideoOrientation() {
     await IrgunVideoDisplay.addListener('orientation', ({fullscreen,direction}) => {
       if (document.hidden || !state.watchVideo || state.watchMode !== 'video' ||
           state.watchMinimized || state.watchPictureInPicture) return;
-      // Only direct HLS owns the page's element and custom fullscreen. Native
+      if (iosNativeActive()) {
+        // Rotate the AVPlayerLayer, never replace or seek its AVPlayerItem.
+        const landscape=Boolean(fullscreen);
+        document.body.classList.toggle('irgun-ios-video-fullscreen',landscape);
+        void iosUnified.layout(landscape?'full':'inline',nativeVideoFrame(document)||{})
+          .then(()=>{if(!landscape)scheduleIosUnifiedSurface();})
+          .catch(error=>console.warn('Native iOS rotation layout failed',error));
+        void IrgunVideoDisplay.setFullscreen({enabled:landscape,fromSensor:true,direction})
+          .catch(error=>console.warn('Native iOS orientation request failed',error));
+        return;
+      }
+      // Only direct HLS owns the page's element and custom fullscreen.
       // Vimeo fallback keeps its own presentation; do not replace that player.
       const direct = state.watchVimeo?.player;
       if (!direct || typeof direct.enterCustomFullscreen !== 'function') return;
@@ -3570,16 +3581,31 @@ async function bindIosVideoOrientation() {
     } else console.warn('Native iOS orientation listener unavailable', error);
   }
 }
+async function restoreIosUnifiedAfterForeground() {
+  if (!iosNativeActive() || !state.watchVideo || document.hidden) return;
+  try {
+    // Native PiP may remain active after iOS foregrounds the app. Reattach
+    // the same player layer and clock to its prior inline/mini presentation.
+    await iosUnified.snapshot();
+    if (iosUnified.state.pipActive || state.watchPictureInPicture) {
+      await iosUnified.exitPiP();
+      state.watchPictureInPicture = false;
+    }
+    if (state.watchMode === 'video') scheduleIosUnifiedSurface();
+  } catch (error) { console.warn('Native PiP foreground restoration failed',error); }
+}
 if (IS_IOS && Capacitor.isNativePlatform()) {
   void bindIosVideoOrientation();
   window.addEventListener('irgunNativeDidBecomeActive', () => {
     iosVideoDisplayKey = '';
     syncIosVideoDisplay();
     void bindIosVideoOrientation();
+    void restoreIosUnifiedAfterForeground();
   });
   document.addEventListener('visibilitychange', () => {
     iosVideoDisplayKey = '';
     syncIosVideoDisplay();
+    if(!document.hidden)void restoreIosUnifiedAfterForeground();
   });
 }
 
