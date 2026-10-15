@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fix/ios-vimeo-native-background-20261016
     paths-ignore:
       - ".github/**"
       - "README*"
@@ -112,6 +113,9 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm install
+
+      - name: Verify Vimeo-only native playback and Home audio
+        run: node --test scripts/test_ios_vimeo_background.mjs
 
       - name: Build Safari 15 / iPadOS 15-compatible web app
         run: |
@@ -273,6 +277,10 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="ios-adhoc-latest"
+          if [ "$GITHUB_REF" = "refs/heads/fix/ios-vimeo-native-background-20261016" ]; then
+            # Do not replace the production iPad IPA with an unmerged PR build.
+            RELEASE_TAG="ios-adhoc-pr32-vimeo"
+          fi
           RELEASE_DIR="$RUNNER_TEMP/ota-release"
           SITE_DIR="$RUNNER_TEMP/ota-site"
           mkdir -p "$RELEASE_DIR" "$SITE_DIR"
@@ -331,13 +339,13 @@ jobs:
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
               --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
-              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --notes "Irgun iPad Ad Hoc build from $GITHUB_REF_NAME at $GITHUB_SHA. Preview builds use the manifest.plist release asset; production installs use https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be provisioned." \
               --prerelease
           else
             gh release edit "$TAG" \
               --target "$GITHUB_SHA" \
               --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
-              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --notes "Irgun iPad Ad Hoc build from $GITHUB_REF_NAME at $GITHUB_SHA. Preview builds use the manifest.plist release asset; production installs use https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be provisioned." \
               --prerelease
           fi
           gh release upload "$TAG" \
@@ -358,7 +366,7 @@ jobs:
 
   testflight:
     name: TestFlight
-    if: ${{ github.event_name == 'push' || inputs.target == 'both' || inputs.target == 'testflight' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'testflight')) }}
     runs-on: macos-26
     timeout-minutes: 120
 

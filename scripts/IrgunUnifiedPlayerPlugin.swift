@@ -906,7 +906,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     public func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        isPiPRequested = true
+        // Home should keep playing background audio, never create automatic PiP.
+        // Only the explicit toolbar PiP button sets isPiPRequested.
+        guard isPiPRequested else {
+            pictureInPictureController.stopPictureInPicture()
+            return
+        }
         placeSurface(lastSurfaceRect)
     }
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
