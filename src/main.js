@@ -48,7 +48,7 @@ const syncIosBottomNavigation = createIosBottomNavigation({
   isIos: () => IS_IOS && Capacitor.isNativePlatform(),
   document,
   model: () => ({
-    root: iosNavigationRoot(state.screen, state.iosNavRoot),
+    root: state.iosNavPending || iosNavigationRoot(state.screen, state.iosNavRoot),
     language: currentLanguage()
   }),
   markup: bottomNavHtml,
@@ -101,6 +101,7 @@ const state = {
   offlineCacheSavedAt: 0,
   screen: 'home',
   iosNavRoot: 'home',
+  iosNavPending: '',
   videos: [],
   audioItems: [],
   videoById: new Map(),
@@ -3494,7 +3495,7 @@ function shell(content) {
       </div>
     </header>
     ${offlineBannerHtml()}
-    <main class="content">${content}</main>
+    <main class="content" data-screen="${esc(state.screen)}">${content}</main>
     ${state.current && !watchAudioOwnsUi && !(state.watchVideo && state.watchMinimized && state.watchMode === 'video') ? miniPlayerHtml() : ''}
     ${donateFabHtml()}
     ${IS_IOS ? '' : bottomNavHtml()}
@@ -6320,8 +6321,10 @@ async function navigateIosBottomTab(button) {
   if (!['home','shiurim','live','library','account'].includes(next)) return;
   const sequence = ++iosNavigationSequence;
   state.iosNavRoot = next;
-  // Move the visible highlight at tap time, even if Mini transition is async.
-  state.screen = next;
+  // Highlight the destination, but do not publish state.screen until the
+  // matching content has actually rendered. Otherwise a second swipe can
+  // start on the old DOM with a new tab ID and navigate to the wrong page.
+  state.iosNavPending = next;
   syncIosBottomNavigation();
   try {
     await prepareIosTabNavigation({
@@ -6345,6 +6348,7 @@ async function navigateIosBottomTab(button) {
   }
   if (sequence !== iosNavigationSequence) return;
   state.screen = next;
+  state.iosNavPending = '';
   if (next === 'library' && !state.user &&
       ['likes','later','history','following'].includes(state.librarySection)) {
     state.librarySection = 'downloads';
@@ -8784,7 +8788,8 @@ if (IS_IOS && Capacitor.isNativePlatform()) {
     getTabs: () => Array.from(document.querySelectorAll('#iosBottomNavigationMount .bottom-nav [data-nav]'))
       .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)
       .map(button => button.dataset.nav),
-    canNavigate: () => ['home','shiurim','live','library','account'].includes(state.screen)
+    canNavigate: () => !state.iosNavPending
+      && ['home','shiurim','live','library','account'].includes(state.screen)
       && !state.loading && !state.error && !state.playerOpen && !state.filterDialog
       && (!state.watchVideo || state.watchMinimized)
       && !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop'),
