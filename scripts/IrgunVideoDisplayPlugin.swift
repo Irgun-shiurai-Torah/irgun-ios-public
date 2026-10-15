@@ -22,6 +22,7 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
     private var pip = false
     private var fullscreen = false
     private var manualExitBlocked = false
+    private var manualExitAt = Date.distantPast
     private var sensorCandidate = ""
     private var sensorCandidateSince = Date.distantPast
     private var lastReported = ""
@@ -54,9 +55,11 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             let direction = call.getString("direction") ?? ""
             let chosenDirection = direction.isEmpty && self.sensorCandidate.hasPrefix("landscape")
                 ? self.sensorCandidate : direction
-            if !enabled && self.fullscreen && !fromSensor {
-                // Manual exit is respected until physically upright again.
+            if !enabled && !fromSensor {
+                // A manual fullscreen exit must remain respected even if an
+                // earlier sensor callback already changed the orientation flag.
                 self.manualExitBlocked = true
+                self.manualExitAt = Date()
             }
             if enabled { self.manualExitBlocked = false }
             self.fullscreen = enabled
@@ -107,7 +110,13 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             if Date().timeIntervalSince(self.sensorCandidateSince) < 0.75 { return }
-            if candidate == "portrait" { self.manualExitBlocked = false }
+            if candidate == "portrait" &&
+                Date().timeIntervalSince(self.manualExitAt) >= 1.5 {
+                // Clear suppression only after the device has genuinely been
+                // observed upright following the manual exit. Forced UIKit
+                // rotation should not immediately re-enter landscape.
+                self.manualExitBlocked = false
+            }
             if candidate != "portrait" && self.manualExitBlocked { return }
             if candidate == self.lastReported { return }
             self.lastReported = candidate
