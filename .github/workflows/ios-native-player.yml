@@ -13,10 +13,10 @@ on:
       - .github/workflows/ios-native-player.yml
       - .github/simulator/**
       - scripts/IrgunUnifiedPlayerPlugin.swift
-      - scripts/test_ios_native_player_pilot.mjs
+      - scripts/test_ios_unified_avplayer.mjs
       - scripts/prepare_ios_cloud.py
       - scripts/patch_xcode_project.rb
-      - src/ios-native-player-pilot.js
+      - src/ios-native-avplayer.js
       - src/main.js
 
 permissions:
@@ -29,7 +29,7 @@ concurrency:
 jobs:
   playback:
     name: Real native AVPlayer on ${{ matrix.family }}
-    if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'experiment/ios-avplayer-single-owner-20261013' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.head_ref == 'feature/ios-single-native-avplayer-20261015' }}
     runs-on: macos-26
     timeout-minutes: 60
     strategy:
@@ -41,7 +41,6 @@ jobs:
       IOS_MARKETING_VERSION: "1.2.71"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
-      SIMULATOR_NATIVE_PILOT: '1'
       DEVICE_FAMILY: ${{ matrix.family }}
 
     steps:
@@ -56,7 +55,10 @@ jobs:
       - name: Install dependencies and add simulator-only observations
         run: |
           node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
-          node --test scripts/test_ios_native_player_pilot.mjs
+          node --test scripts/test_ios_unified_avplayer.mjs
+          node --check src/main.js
+          node scripts/test_ios_reader_mode.mjs
+          node --test scripts/test_ios_android_parity.mjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           npm run build
@@ -128,7 +130,7 @@ jobs:
             -resultBundlePath simulator-results/Playback.xcresult \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
-            -only-testing:SimulatorUITests/PlaybackUITests/testUnifiedNativePlayerRetainsClockAcrossAudioVideoAndHome \
+            -only-testing:SimulatorUITests/PlaybackUITests/testNativeSingleAVPlayerVideoAudioMiniHome \
             test 2>&1 | tee simulator-results/xcodebuild.log
 
       - name: Collect screenshots and simulator logs
