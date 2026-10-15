@@ -3654,7 +3654,8 @@ function enterIosPictureInPicture(event) {
   }
   if (iosNativeActive() && state.watchMode==='video') {
     void iosUnified.pip().then(()=>{
-      state.watchPictureInPicture=true;
+      // PiP activation is asynchronous. Only the AVPictureInPicture delegate's
+      // pipState event may report that system PiP really became active.
       state.watchResumeSeconds=iosNativePosition();
     }).catch(error=>{
       state.watchPictureInPicture=false;
