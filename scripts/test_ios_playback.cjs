@@ -39,6 +39,9 @@ function fixture() {
     handoffPlayingVideoToBackgroundAudio:()=>{observations.handoffs++;},
     restoreWatchUiAfterSystemPip:()=>{observations.uiRestores++;},
     parkWatchUiForSystemPip:()=>{}, refreshPersistentMiniVideoChrome:()=>{},
+    // The VM extracts playback functions; presentation/idle-lock is provided by
+    // the actual native iOS plugin and has no effect on playback assertions.
+    syncIosVideoDisplay:()=>{},
     recordPublicView:()=>{},
     usageAnalytics:{event:()=>{},setMedia:()=>{}},
     saveCurrentAudioHistory:async()=>{}, preserveWatchTime:async()=>{}, saveHistory:async()=>{},
