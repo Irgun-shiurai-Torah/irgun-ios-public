@@ -301,6 +301,11 @@ function iosNativeActive() { return Boolean(iosUnified?.active); }
 function iosNativePosition() { return Math.max(0,Number(iosUnified?.state?.position)||0); }
 function iosNativeDuration() { return Math.max(0,Number(iosUnified?.state?.duration)||0); }
 function iosNativePlaying() { return Boolean(iosUnified?.state?.playing); }
+function iosAudioUiActive() { return iosNativeActive() && iosUnified.state.mode==='audio'; }
+function iosAudioUiPosition() { return iosAudioUiActive()?iosNativePosition():Math.max(0,Number(audio.currentTime)||0); }
+function iosAudioUiDuration() { return iosAudioUiActive()?iosNativeDuration():(Number.isFinite(audio.duration)?audio.duration:0); }
+function iosAudioUiPaused() { return iosAudioUiActive()?!iosNativePlaying():audio.paused; }
+
 function onIosUnifiedState(snapshot) {
   if (!snapshot?.active) return;
   const position=Math.max(0,Number(snapshot.position)||0);
@@ -6019,8 +6024,8 @@ async function savePaidAudioProgress(bookmark = false, force = false) {
   const payload = {
     paidAudioId:current.paidAudioId,
     trackId:current.trackId,
-    positionSeconds:Number(audio.currentTime)||0,
-    durationSeconds:Number.isFinite(audio.duration) ? audio.duration : 0
+    positionSeconds:iosAudioUiPosition(),
+    durationSeconds:iosAudioUiDuration()
   };
   try {
     const data = await apiJson(bookmark ? '/paid-audio/bookmark' : '/paid-audio/progress', {
@@ -6037,6 +6042,7 @@ async function savePaidAudioProgress(bookmark = false, force = false) {
 function goToPaidBookmark() {
   const current = state.current;
   if (!current || current.kind !== 'paid-audio' || !(Number(current.bookmarkSeconds) > 0)) return;
+  if (iosAudioUiActive()) {void iosUnified.seek(Number(current.bookmarkSeconds)).then(()=>iosUnified.play()).catch(error=>console.warn('Native bookmark seek failed',error));return;}
   try { audio.currentTime = Number(current.bookmarkSeconds); audio.play().catch(()=>{}); } catch (_) {}
 }
 
@@ -6729,12 +6735,14 @@ function bind() {
 
   const seek = document.getElementById('fullSeek');
   if (seek) seek.addEventListener('input', () => {
-    audio.currentTime = Number(seek.value) || 0;
+    if(iosAudioUiActive())void iosUnified.seek(Number(seek.value)||0).catch(()=>{});
+    else audio.currentTime = Number(seek.value) || 0;
     updatePlayerUi();
   });
   document.querySelectorAll('[data-speed-choice]').forEach(el => el.addEventListener('click', () => {
     state.playbackSpeed = Number(el.dataset.speedChoice) || 1;
     audio.playbackRate = state.playbackSpeed;
+    if(iosNativeActive())void iosUnified.speed(state.playbackSpeed).catch(error=>console.warn('Native speed failed',error));
     localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
     // Updating one setting should not rebuild or scroll the playing sheet.
     document.querySelectorAll('[data-speed-choice]').forEach(button =>
@@ -6743,7 +6751,8 @@ function bind() {
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {
-    audio.currentTime = Number(watchAudioSeek.value) || 0;
+    if(iosAudioUiActive())void iosUnified.seek(Number(watchAudioSeek.value)||0).catch(()=>{});
+    else audio.currentTime = Number(watchAudioSeek.value) || 0;
     updatePlayerUi();
   });
 
@@ -7284,6 +7293,55 @@ function prepareIosAudioPlaybackSurface(item) {
 }
 
 async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
+  if (iosUnified) {
+    // All standalone audio—including saved lectures and existing purchases—
+    // goes into the SAME AVPlayer instance used by HLS video. The HTML audio
+    // element is never opened, and the legacy background plugin is stopped.
+    if (!item?.url || !item?.id) throw new Error('No native audio source available');
+    const old=state.watchVimeo;
+    if (old?.isIrgunUnifiedNativeAVPlayer) await old.destroy();
+    state.watchVimeo=null;
+    state.watchVimeoReady=false;
+    state.watchVideo=null;
+    state.watchHostedExternally=false;
+    state.watchMinimized=false;
+    state.watchPictureInPicture=false;
+    state.watchMode='audio';
+    state.videoOwnsPlayback=false;
+    state.watchVimeoGeneration += 1;
+    clearPersistentVideoMount();
+    if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
+    state.pendingAudioSeek=null;
+    stopNativeBackgroundAudio();
+    try { audio.pause();audio.removeAttribute('src');audio.load(); } catch (_) {}
+    const offlineRecord=offlineRecordForAudioItem(item);
+    const url=offlineRecord?.uri || item.networkUrl || item.url;
+    const effective={...item, url:String(url),networkUrl:String(item.networkUrl||item.url),
+      offline:Boolean(offlineRecord),offlineKey:offlineRecord?.key||'',native:true};
+    const previous=state.current;
+    state.current=effective;
+    if (!state.queueStarting) {state.playQueue=[];state.playQueueIndex=-1;}
+    iosNativeLastHistoryAt=0;
+    try {
+      await iosUnified.open({
+        id:`audio:${effective.kind}:${effective.id}`,url:String(url),mode:'audio',
+        title:effective.title,artist:effective.subtitle||'Irgun Shiurai Torah',
+        position:Math.max(0,Number(resumeAt)||0),rate:state.playbackSpeed,autoplay:true
+      });
+      usageAnalytics.event('shiur_opened',{shiurId:String(item.id),mediaType:'audio',
+        dedupeKey:`shiur-open:${item.id}`,cooldownMs:60000});
+      usageAnalytics.setMedia({isPlaying:iosNativePlaying(),mediaType:'audio',
+        playerState:iosNativePlaying()?'playing':'paused',shiurId:String(item.id)});
+    } catch (error) {
+      state.current=previous;
+      console.error('Unified AVPlayer could not open audio',error);
+      setToast('This audio could not open in the native player.');
+      throw error;
+    }
+    render();
+    updatePlayerUi();
+    return;
+  }
   if (state.pendingAudioSeek) state.pendingAudioSeek.cancel();
   state.pendingAudioSeek = null;
   state.videoOwnsPlayback = false;
@@ -7356,12 +7414,14 @@ async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
 
 function togglePlay() {
   if (!state.current) return;
+  if (iosAudioUiActive()) { void (iosNativePlaying()?iosUnified.pause():iosUnified.play()).catch(error=>console.warn('Native Play/Pause failed',error));return; }
   if (audio.paused) audio.play().catch(() => {}); else audio.pause();
   updatePlayerUi();
 }
 
 function skip(seconds) {
   if (!state.current) return;
+  if (iosAudioUiActive()) {void iosUnified.seek(Math.max(0,Math.min(iosNativeDuration()||Infinity,iosNativePosition()+seconds))).catch(error=>console.warn('Native seek failed',error));return;}
   const max = Number.isFinite(audio.duration) ? audio.duration : Infinity;
   audio.currentTime = Math.max(0, Math.min(max, (audio.currentTime || 0) + seconds));
   updatePlayerUi();
@@ -7380,7 +7440,8 @@ function setSleepTimer(value) {
   if (!minutes) return;
   state.sleepEndsAt = Date.now() + minutes * 60000;
   state.sleepTimer = setTimeout(() => {
-    audio.pause();
+    if(iosAudioUiActive())void iosUnified.pause().catch(()=>{});
+    else audio.pause();
     state.sleepTimer = null;
     state.sleepEndsAt = null;
     state.sleepMode = 'off';
@@ -7538,8 +7599,8 @@ function syncLoadedLibraryAudioDuration() {
 
 function updatePlayerUi() {
   if (!state.current) return;
-  const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
-  const position = Math.max(0, audio.currentTime || 0);
+  const duration = iosAudioUiDuration();
+  const position = iosAudioUiPosition();
   const percent = duration > 0 ? Math.min(100, position / duration * 100) : 0;
   const miniProgress = document.getElementById('miniProgress');
   if (miniProgress) miniProgress.style.width = `${percent}%`;
@@ -7556,9 +7617,9 @@ function updatePlayerUi() {
   const total = document.getElementById('fullDuration');
   if (total) total.textContent = fmtDurationOrUnknown(duration);
   document.querySelectorAll('[data-play-toggle]').forEach(button => {
-    if (button.classList.contains('watch-audio-play')) button.innerHTML = audio.paused ? '&#9654; Play' : 'II Pause';
-    else if (button.classList.contains('main-play')) button.innerHTML = audio.paused ? svgIcon('play') : '<span class="pause-mark">II</span>';
-    else button.innerHTML = audio.paused ? '&#9654;' : 'II';
+    if (button.classList.contains('watch-audio-play')) button.innerHTML = iosAudioUiPaused() ? '&#9654; Play' : 'II Pause';
+    else if (button.classList.contains('main-play')) button.innerHTML = iosAudioUiPaused() ? svgIcon('play') : '<span class="pause-mark">II</span>';
+    else button.innerHTML = iosAudioUiPaused() ? '&#9654;' : 'II';
   });
   if ('mediaSession' in navigator && duration > 0) {
     try { navigator.mediaSession.setPositionState({ duration, playbackRate: audio.playbackRate || 1, position: Math.min(position, duration) }); } catch (_) {}
@@ -7575,7 +7636,7 @@ async function saveCurrentAudioHistory(force = false, completed = false) {
   const now = Date.now();
   if (!force && now - state.audioLastHistoryAt < 15000) return;
   state.audioLastHistoryAt = now;
-  await saveHistory(state.current.id, 'audio', audio.currentTime || 0, Number.isFinite(audio.duration) ? audio.duration : 0, completed);
+  await saveHistory(state.current.id, 'audio', iosAudioUiPosition(), iosAudioUiDuration(), completed);
 }
 
 audio.addEventListener('timeupdate', () => {
