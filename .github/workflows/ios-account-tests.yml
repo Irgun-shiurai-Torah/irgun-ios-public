@@ -28,7 +28,6 @@ jobs:
       max-parallel: 1
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
-      IOS_MARKETING_VERSION: "1.2.71"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
@@ -46,6 +45,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+
+      - name: Resolve iOS marketing version from package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version.replace(/-ios$/, '')")"
+          if [ -z "$VERSION" ]; then
+            echo "Could not resolve iOS marketing version from package.json" >&2
+            exit 2
+          fi
+          echo "IOS_MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved iOS marketing version: $VERSION"
 
       - name: Build app and add account-test observations
         run: |
