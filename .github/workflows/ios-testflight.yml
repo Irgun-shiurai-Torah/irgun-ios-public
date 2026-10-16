@@ -278,8 +278,9 @@ jobs:
           set -euo pipefail
           RELEASE_TAG="ios-adhoc-latest"
           if [ "$GITHUB_REF" = "refs/heads/fix/ios-vimeo-native-background-20261016" ]; then
-            # Do not replace the production iPad IPA with an unmerged PR build.
-            RELEASE_TAG="ios-adhoc-pr32-vimeo"
+            # Keep previews immutable and away from the main production release.
+            # Updating an existing prerelease can return HTTP 403 on restricted tags.
+            RELEASE_TAG="ios-adhoc-pr32-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           fi
           RELEASE_DIR="$RUNNER_TEMP/ota-release"
           SITE_DIR="$RUNNER_TEMP/ota-site"
@@ -328,9 +329,17 @@ jobs:
           echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
           echo "site_dir=$SITE_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Upload wireless install manifest as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-iPadOS15-OTA-${{ github.run_number }}
+          path: ${{ steps.ota.outputs.release_dir }}/manifest.plist
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Publish wireless Ad Hoc IPA and manifest
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
         run: |
           set -euo pipefail
