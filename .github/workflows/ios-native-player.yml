@@ -12,6 +12,7 @@ on:
     paths:
       - .github/workflows/ios-native-player.yml
       - .github/simulator/**
+      - package.json
       - scripts/IrgunUnifiedPlayerPlugin.swift
       - scripts/test_ios_unified_avplayer.mjs
       - scripts/test_ios_vimeo_background.mjs
