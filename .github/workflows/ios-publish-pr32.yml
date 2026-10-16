@@ -101,6 +101,9 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.ota.outputs.tag }}"
+          # Only tag this workflow run's own head commit. GitHub's built-in token
+          # cannot tag an older branch commit that also changes workflow files.
+          # The IPA was signed at dbb4c07; changes since then are CI YAML only.
           # Never modify production or the existing preview prerelease.
           if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             echo "::error::Refusing to overwrite existing release $TAG"
@@ -110,7 +113,7 @@ jobs:
             --repo "$GH_REPO" \
             publish/IrgunShiuraiTorah-AdHoc.ipa \
             publish/manifest.plist \
-            --target dbb4c07cf1a45f3cfd228849b5b1b7c00c389b26 \
+            --target "$GITHUB_SHA" \
             --title "Irgun iPad PR32 signed preview (build 173)" \
             --notes "Signed iPad Ad Hoc test IPA from the successful archive and verification in Actions run 38824495284. Contains native Vimeo playback, Home background audio, and bilingual Follow buttons. Not the production website build. iPad UDID must be provisioned." \
             --prerelease; then
