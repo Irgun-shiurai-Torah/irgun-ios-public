@@ -20,12 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
+      GH_REPO: "Irgun-shiurai-Torah/irgun-ios-public"
       SOURCE_RUN: "38824495284"
       SIGNED_BUILD: "173"
       BUNDLE_ID: "org.irgunshiuraitorah.app"
       GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
 
     steps:
+      - name: Checkout repository for GitHub release context
+        uses: actions/checkout@v7
+
       - name: Download previously signed iPad IPA
         uses: actions/download-artifact@v4
         with:
@@ -98,11 +102,12 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.ota.outputs.tag }}"
           # Never modify production or the existing preview prerelease.
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
             echo "::error::Refusing to overwrite existing release $TAG"
             exit 1
           fi
           if ! gh release create "$TAG" \
+            --repo "$GH_REPO" \
             publish/IrgunShiuraiTorah-AdHoc.ipa \
             publish/manifest.plist \
             --target dbb4c07cf1a45f3cfd228849b5b1b7c00c389b26 \
@@ -120,7 +125,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.ota.outputs.tag }}"
-          gh release view "$TAG" --json assets --jq '.assets[].name' | tee names.txt
+          gh release view "$TAG" --repo "$GH_REPO" --json assets --jq '.assets[].name' | tee names.txt
           grep -qx 'IrgunShiuraiTorah-AdHoc.ipa' names.txt
           grep -qx 'manifest.plist' names.txt
           {
