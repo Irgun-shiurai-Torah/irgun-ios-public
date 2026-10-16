@@ -567,6 +567,7 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
+        github.ref == 'refs/heads/main' &&
         (needs.ipad15-adhoc.result == 'success' || needs.testflight.result == 'success') &&
         (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       }}
