@@ -6,7 +6,6 @@ on:
       - main
       - fix/ios-vimeo-native-background-20261016
     paths-ignore:
-      - ".github/**"
       - "README*"
       - "**/*.md"
       - "**/*.txt"
@@ -328,6 +327,10 @@ jobs:
           echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
           echo "site_dir=$SITE_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Note feature-branch install behavior
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: echo "Feature-branch builds keep the signed IPA and manifest as workflow artifacts; GitHub Release publishing is reserved for main."
+
       - name: Upload wireless install manifest as workflow artifact
         uses: actions/upload-artifact@v7
         with:
@@ -337,6 +340,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish wireless Ad Hoc IPA and manifest
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
           GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
