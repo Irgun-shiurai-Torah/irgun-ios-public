@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - '.github/account-tests/**'
+      - 'package.json'
       - '.github/workflows/ios-account-tests.yml'
       - 'src/main.js'
 
