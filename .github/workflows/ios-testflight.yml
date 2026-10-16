@@ -32,13 +32,12 @@ concurrency:
 
 env:
   BUNDLE_ID: org.irgunshiuraitorah.app
-  IOS_MARKETING_VERSION: "1.2.71"
   IOS_BUILD_OFFSET: "107"
   IOS_PRODUCT_NAME: IrgunShiuraiTorah
 
 jobs:
   source-package:
-    name: Full V1.2.71 Source ZIP
+    name: Full iOS Source ZIP
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -49,14 +48,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f Irgun-iOS-1.2.71-FULL.zip
-          zip -qr Irgun-iOS-1.2.71-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.71-FULL.zip"
+          rm -f Irgun-iOS-FULL.zip
+          zip -qr Irgun-iOS-FULL.zip . -x ".git/*" "Irgun-iOS-FULL.zip"
 
       - name: Upload full source package
         uses: actions/upload-artifact@v7
         with:
-          name: Irgun-iOS-1.2.71-FULL
-          path: Irgun-iOS-1.2.71-FULL.zip
+          name: Irgun-iOS-FULL
+          path: Irgun-iOS-FULL.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -562,3 +561,50 @@ jobs:
           api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
           wait-for-processing: "true"
+
+  advance-ios-version:
+    name: Advance iOS version after successful build
+    if: >-
+      ${{
+        !cancelled() &&
+        (needs.ipad15-adhoc.result == 'success' || needs.testflight.result == 'success') &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      }}
+    needs:
+      - ipad15-adhoc
+      - testflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: irgun-ios-version-advance
+      cancel-in-progress: false
+    steps:
+      - name: Checkout latest branch state
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Advance package.json patch version for the next build
+        run: python3 scripts/advance_ios_version.py
+
+      - name: Commit next iOS version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package.json; then
+            echo "No version change was needed."
+            exit 0
+          fi
+          VERSION="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path("package.json").read_text())["version"])
+          PY
+          )"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(ios): prepare ${VERSION} for next build"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
