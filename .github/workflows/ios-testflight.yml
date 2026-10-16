@@ -4,8 +4,8 @@ on:
   push:
     branches:
       - main
+      - fix/ios-vimeo-native-background-20261016
     paths-ignore:
-      - ".github/**"
       - "README*"
       - "**/*.md"
       - "**/*.txt"
@@ -31,13 +31,12 @@ concurrency:
 
 env:
   BUNDLE_ID: org.irgunshiuraitorah.app
-  IOS_MARKETING_VERSION: "1.2.71"
   IOS_BUILD_OFFSET: "107"
   IOS_PRODUCT_NAME: IrgunShiuraiTorah
 
 jobs:
   source-package:
-    name: Full V1.2.71 Source ZIP
+    name: Full iOS Source ZIP
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -48,14 +47,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f Irgun-iOS-1.2.71-FULL.zip
-          zip -qr Irgun-iOS-1.2.71-FULL.zip . -x ".git/*" "Irgun-iOS-1.2.71-FULL.zip"
+          rm -f Irgun-iOS-FULL.zip
+          zip -qr Irgun-iOS-FULL.zip . -x ".git/*" "Irgun-iOS-FULL.zip"
 
       - name: Upload full source package
         uses: actions/upload-artifact@v7
         with:
-          name: Irgun-iOS-1.2.71-FULL
-          path: Irgun-iOS-1.2.71-FULL.zip
+          name: Irgun-iOS-FULL
+          path: Irgun-iOS-FULL.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -112,6 +111,9 @@ jobs:
 
       - name: Install JavaScript dependencies
         run: npm install
+
+      - name: Verify Vimeo-only native playback and Home audio
+        run: node --test scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs
 
       - name: Build Safari 15 / iPadOS 15-compatible web app
         run: |
@@ -273,6 +275,11 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="ios-adhoc-latest"
+          if [ "$GITHUB_REF" = "refs/heads/fix/ios-vimeo-native-background-20261016" ]; then
+            # Keep previews immutable and away from the main production release.
+            # Updating an existing prerelease can return HTTP 403 on restricted tags.
+            RELEASE_TAG="ios-adhoc-pr32-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fi
           RELEASE_DIR="$RUNNER_TEMP/ota-release"
           SITE_DIR="$RUNNER_TEMP/ota-site"
           mkdir -p "$RELEASE_DIR" "$SITE_DIR"
@@ -320,9 +327,22 @@ jobs:
           echo "release_dir=$RELEASE_DIR" >> "$GITHUB_OUTPUT"
           echo "site_dir=$SITE_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Note feature-branch install behavior
+        if: ${{ github.ref != 'refs/heads/main' }}
+        run: echo "Feature-branch builds keep the signed IPA and manifest as workflow artifacts; GitHub Release publishing is reserved for main."
+
+      - name: Upload wireless install manifest as workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-iPadOS15-OTA-${{ github.run_number }}
+          path: ${{ steps.ota.outputs.release_dir }}/manifest.plist
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Publish wireless Ad Hoc IPA and manifest
+        if: ${{ github.ref == 'refs/heads/main' }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -331,13 +351,13 @@ jobs:
             gh release create "$TAG" \
               --target "$GITHUB_SHA" \
               --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
-              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --notes "Irgun iPad Ad Hoc build from $GITHUB_REF_NAME at $GITHUB_SHA. Preview builds use the manifest.plist release asset; production installs use https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be provisioned." \
               --prerelease
           else
             gh release edit "$TAG" \
               --target "$GITHUB_SHA" \
               --title "Irgun iPad wireless build ${BUILD_NUMBER}" \
-              --notes "Latest Ad Hoc iPad build. Install from https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be included in the Ad Hoc provisioning profile." \
+              --notes "Irgun iPad Ad Hoc build from $GITHUB_REF_NAME at $GITHUB_SHA. Preview builds use the manifest.plist release asset; production installs use https://irgunshiuraitorah.com/install-ios.html. The iPad UDID must be provisioned." \
               --prerelease
           fi
           gh release upload "$TAG" \
@@ -358,7 +378,7 @@ jobs:
 
   testflight:
     name: TestFlight
-    if: ${{ github.event_name == 'push' || inputs.target == 'both' || inputs.target == 'testflight' }}
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && (inputs.target == 'both' || inputs.target == 'testflight')) }}
     runs-on: macos-26
     timeout-minutes: 120
 
@@ -545,3 +565,51 @@ jobs:
           api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
           wait-for-processing: "true"
+
+  advance-ios-version:
+    name: Advance iOS version after successful build
+    if: >-
+      ${{
+        !cancelled() &&
+        github.ref == 'refs/heads/main' &&
+        (needs.ipad15-adhoc.result == 'success' || needs.testflight.result == 'success') &&
+        (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      }}
+    needs:
+      - ipad15-adhoc
+      - testflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: irgun-ios-version-advance
+      cancel-in-progress: false
+    steps:
+      - name: Checkout latest branch state
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Advance package.json patch version for the next build
+        run: python3 scripts/advance_ios_version.py
+
+      - name: Commit next iOS version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package.json; then
+            echo "No version change was needed."
+            exit 0
+          fi
+          VERSION="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path("package.json").read_text())["version"])
+          PY
+          )"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(ios): prepare ${VERSION} for next build"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

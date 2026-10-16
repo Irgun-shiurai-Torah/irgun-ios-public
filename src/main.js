@@ -4,6 +4,7 @@ import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
 import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
+import { lectureFollowTargets, followVerb, isFollowTargetActive } from './follow-controls.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
@@ -2033,14 +2034,25 @@ function resetUserState() {
 
 
 async function loadMetadata() {
-  try {
-    const response = await fetch('/library-metadata.json');
-    if (!response.ok) throw new Error('metadata');
-    state.metadata = await response.json();
-  } catch (_) {
-    const response = await fetch(`${WEBSITE}library-metadata.json`);
-    state.metadata = await response.json();
+  // Prefer the website's current speaker IDs; the bundled metadata is an offline fallback.
+  let freshMetadata = null;
+  let lastError = null;
+  for (const url of [WEBSITE + 'library-metadata.json', '/library-metadata.json']) {
+    const remote = url.startsWith(WEBSITE);
+    const controller = new AbortController();
+    const timer = remote ? setTimeout(() => controller.abort(), 3000) : null;
+    try {
+      const response = await fetch(url, { ...(remote ? {cache:'no-store'} : {}), signal:controller.signal });
+      if (!response.ok) throw new Error('Follow metadata request failed: ' + response.status);
+      const data = await response.json();
+      if (!Array.isArray(data?.speakers) || !data.lectures) throw new Error('Invalid follow metadata');
+      freshMetadata = data;
+      break;
+    } catch (error) { lastError = error; }
+    finally { if (timer) clearTimeout(timer); }
   }
+  if (!freshMetadata) throw lastError || new Error('No follow metadata available');
+  state.metadata = freshMetadata;
 
   state.speakerById = new Map((state.metadata.speakers || []).map(s => [String(s.id), s]));
   state.topicById = new Map((state.metadata.topics || []).map(t => [String(t.id), t]));
@@ -2725,17 +2737,24 @@ function requireLogin(message) {
   render();
 }
 
-async function toggleFollow(type, key, label) {
+async function toggleFollow(type, key, label, labelHe = label) {
   if (!state.user) return requireLogin('Sign in to follow speakers and topics.');
   try {
     const result = await apiJson('/follows/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, key, labelEn: label, labelHe: label })
+      body: JSON.stringify({ type, key, labelEn: label, labelHe })
     });
     const identity = `${type}:${key}`;
-    if (result.following) state.follows.set(identity, result.item || { type, key, labelEn: label, labelHe: label });
-    else state.follows.delete(identity);
+    // The server may turn a fallback speaker-name key into its canonical website ID.
+    const resultIdentity = String(result.id || (result.item ? type + ':' + result.item.key : identity));
+    if (result.following) {
+      state.follows.delete(identity);
+      state.follows.set(resultIdentity, result.item || {type,key,labelEn:label,labelHe});
+    } else {
+      state.follows.delete(identity);
+      state.follows.delete(resultIdentity);
+    }
     if (!state.watchVideo && state.screen === 'library' && state.librarySection === 'following') render();
     else refreshInteractiveUi();
   } catch (error) {
@@ -4510,7 +4529,7 @@ function followingFeed() {
     if (item.type === 'topic') topicKeys.add(item.key);
   }
   return state.videos
-    .filter(v => (v._speakerIds || []).some(id => speakerKeys.has(id)) || topicKeys.has(v._topicId))
+    .filter(v => (v._speakerIds || []).some(id => speakerKeys.has(id)) || topicKeys.has(v._topicId) || lectureFollowTargets(v,followTargetOptions()).some(target=>isFollowTargetActive(target,state.follows)))
     .sort((a, b) => itemDate(b) - itemDate(a))
     .slice(0, 30);
 }
@@ -4956,25 +4975,19 @@ function relatedVideos(video) {
   }).slice(0, 8);
 }
 
-function currentFollowButtons(video) {
-  if (!video) return '';
-  const buttons = [];
-  for (const speakerId of video._speakerIds || []) {
-    const label = speakerLabel(speakerId);
-    if (!label) continue;
-    const following = state.follows.has(`speaker:${speakerId}`);
-    buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="speaker" data-follow-key="${esc(speakerId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
-  }
-  if (video._topicId) {
-    const label = topicLabel(video._topicId);
-    if (label) {
-      const following = state.follows.has(`topic:${video._topicId}`);
-      buttons.push(`<button class="follow-chip ${following ? 'active' : ''}" data-follow-type="topic" data-follow-key="${esc(video._topicId)}" data-follow-label="${esc(label)}">${following ? 'Following' : 'Follow'} ${esc(label)}</button>`);
-    }
-  }
-  return buttons.join('');
+function followTargetOptions() {
+  return {speakerById:state.speakerById,topicById:state.topicById,speakerAliasToId:state.speakerAliasToId};
 }
 
+function currentFollowButtons(video) {
+  if (!video) return '';
+  const he=currentLanguage()==='he';
+  return lectureFollowTargets(video,followTargetOptions()).map(target=>{
+    const following=isFollowTargetActive(target,state.follows);
+    const label=he ? target.labelHe||target.labelEn : target.labelEn||target.labelHe;
+    return `<button type="button" class="follow-chip ${following?'active':''}" dir="auto" aria-pressed="${following?'true':'false'}" data-follow-type="${esc(target.type)}" data-follow-key="${esc(target.key)}" data-follow-label="${esc(label)}" data-follow-label-en="${esc(target.labelEn)}" data-follow-label-he="${esc(target.labelHe)}">${followVerb(following,he)} ${esc(label)}</button>`;
+  }).join('');
+}
 function commentsHtml() {
   if (state.watchCommentsLoading) return '<div class="loading-small">Loading comments...</div>';
   if (state.watchCommentsError) return `<div class="empty comment-error-state"><p>${esc(state.watchCommentsError)}</p><button type="button" class="small-btn primary" data-retry-comments="1">Try Again</button></div>`;
@@ -5198,12 +5211,19 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
   if (iosUnified) {
     const sources = await loadIosDirectVideoSources(video);
     assertCurrent();
-    const url = sources?.hls || sources?.mp4 || '';
-    if (!url) throw new Error('A native HLS/MP4 video stream is not available for this shiur yet.');
-    // There is no Vimeo/WKWebView fallback on native iOS: one audio/video
-    // player is a strict ownership invariant.
+    // An unlisted Vimeo ID can be "123456:privacycode". Do not strip its
+    // privacy suffix: the Worker resolves this exact catalog ID at /download.
+    const vimeoId = String(videoKey || '').trim();
+    const vimeoUrl = !video.directVideo && video.sourceType !== 'drive-library' &&
+      /^\d+(?::[a-z0-9]+)?$/i.test(vimeoId)
+      ? `${API}/download/${encodeURIComponent(vimeoId)}?type=vimeo` : '';
+    // Prefer our own Drive HLS, then owned MP4, then Vimeo. A temporarily
+    // unplayable HLS item must not skip a working owned MP4 copy.
+    const urls = [...new Set([sources?.hls, sources?.mp4, vimeoUrl]
+      .map(url => String(url || '').trim()).filter(url => /^https:\/\//i.test(url)))];
+    if (!urls.length) throw new Error('No native video source is available for this shiur.');
     stopNativeBackgroundAudio();
-    await iosUnified.open({
+    const openNative = url => iosUnified.open({
       id:`video:${videoKey}`,url,
       title:displayShiurTitle(video.title,'Shiur'),
       artist:video._speakerLabel||video.speaker||'Irgun Shiurai Torah',
@@ -5211,6 +5231,20 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
       rate:state.playbackSpeed,mode:'video',autoplay:Boolean(autoplay),
       rect:nativeVideoFrame(document)||{}
     });
+    let lastError = null;
+    for (let index = 0; index < urls.length; index += 1) {
+      assertCurrent();
+      try {
+        await openNative(urls[index]);
+        lastError = null;
+        break;
+      } catch (error) {
+        assertCurrent();
+        lastError = error;
+        if (index + 1 < urls.length) console.warn('Native video source failed; trying the next stream', error);
+      }
+    }
+    if (lastError) throw lastError;
     assertCurrent();
     return {player:createIosNativeVideoAdapter(iosUnified,`video:${videoKey}`),backend:'native'};
   }
@@ -5535,6 +5569,7 @@ function watchHtml() {
   const likeCount = Number(state.likeCounts[likeId]) || 0;
   const offlineState = v.hasAudio ? offlineActionState('video', id) : null;
   const related = relatedVideos(v);
+  const followButtons = currentFollowButtons(v);
   const miniSpeaker = v._speakerLabel || v.speaker || 'Irgun Shiurai Torah';
   return `<div class="watch-overlay">
     <div class="watch-host-mini-chrome" aria-hidden="true">
@@ -5554,6 +5589,7 @@ function watchHtml() {
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
         <div class="watch-meta">${esc([v.showcase, fmtDate(v.lectureDate || v.date || v.created), v.duration ? fmtTime(v.duration) : '', v._speakerLabel, v._topicLabel].filter(Boolean).join(' - '))}</div>
+        ${followButtons ? `<div class="follow-bar lecture-follow-actions" role="group" aria-label="Follow speakers and topics">${followButtons}</div>` : ''}
         <div class="watch-actions compact-watch-actions">
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
@@ -5562,7 +5598,6 @@ function watchHtml() {
           <button class="watch-action" data-download-kind="video" data-download-id="${esc(id)}">${svgIcon('download')}<span class="watch-action-text">Download</span></button>
           ${offlineState ? `<button class="watch-action ${offlineState.cls}" data-save-offline-kind="video" data-save-offline-id="${esc(id)}">${offlineIconHtml('watch-offline-icon')}<span class="watch-action-text">${esc(offlineState.label)}</span>${offlineState.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>` : ''}
         </div>
-        ${currentFollowButtons(v) ? `<div class="follow-bar">${currentFollowButtons(v)}</div>` : ''}
         ${v.description ? `<p class="watch-description">${esc(v.description)}</p>` : ''}
       </section>
       <section class="watch-section">
@@ -6765,7 +6800,7 @@ function bind() {
       const identity = `${type}:${key}`;
       if (pendingFollows.has(identity)) return;
       pendingFollows.add(identity);
-      Promise.resolve(toggleFollow(type, key, el.dataset.followLabel))
+      Promise.resolve(toggleFollow(type, key, el.dataset.followLabelEn || el.dataset.followLabel, el.dataset.followLabelHe || el.dataset.followLabel))
         .finally(() => pendingFollows.delete(identity));
     }, true);
   }
@@ -6898,13 +6933,15 @@ function refreshInteractiveUi() {
     }
   });
   document.querySelectorAll('[data-follow-type]').forEach(button => {
-    const identity = `${button.dataset.followType}:${button.dataset.followKey}`;
-    const following = state.follows.has(identity);
-    button.classList.toggle('active', following);
-    const label = button.dataset.followLabel || '';
-    button.innerHTML = `${following ? 'Following' : 'Follow'} ${esc(label)}`;
-  });
-}
+    const target={type:button.dataset.followType,key:button.dataset.followKey,
+      labelEn:button.dataset.followLabelEn||button.dataset.followLabel||'',
+      labelHe:button.dataset.followLabelHe||button.dataset.followLabel||''};
+    const following=isFollowTargetActive(target,state.follows);
+    button.classList.toggle('active',following);
+    button.setAttribute('aria-pressed',following?'true':'false');
+    const label=currentLanguage()==='he' ? target.labelHe||target.labelEn : target.labelEn||target.labelHe;
+    button.textContent=followVerb(following,currentLanguage()==='he')+' '+label;
+  });}
 
 function refreshCommentsUi() {
   const heading = document.getElementById('commentsHeading');

@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - '.github/account-tests/**'
+      - 'package.json'
       - '.github/workflows/ios-account-tests.yml'
       - 'src/main.js'
 
@@ -28,7 +29,6 @@ jobs:
       max-parallel: 1
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
-      IOS_MARKETING_VERSION: "1.2.71"
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
       IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
@@ -47,8 +47,21 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Resolve iOS marketing version from package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version.replace(/-ios$/, '')")"
+          if [ -z "$VERSION" ]; then
+            echo "Could not resolve iOS marketing version from package.json" >&2
+            exit 2
+          fi
+          echo "IOS_MARKETING_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved iOS marketing version: $VERSION"
+
       - name: Build app and add account-test observations
         run: |
+          node --test scripts/test_ios_account_observer.mjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           python3 .github/account-tests/prepare.py web

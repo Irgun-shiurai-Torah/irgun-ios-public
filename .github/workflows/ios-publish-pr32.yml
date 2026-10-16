@@ -1,0 +1,140 @@
+name: Irgun iPad PR32 - Publish Verified IPA
+
+# Publish the already signed and verified IPA from Actions run 38824495284.
+# Keep this preview separate from the production website installer.
+on:
+  push:
+    branches:
+      - fix/ios-vimeo-native-background-20261016
+    paths:
+      - .github/workflows/ios-publish-pr32.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release-preview:
+    name: Publish signed PR32 IPA without rebuilding
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GH_REPO: "Irgun-shiurai-Torah/irgun-ios-public"
+      SOURCE_RUN: "38824495284"
+      SIGNED_BUILD: "173"
+      BUNDLE_ID: "org.irgunshiuraitorah.app"
+      GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
+
+    steps:
+      - name: Checkout repository for GitHub release context
+        uses: actions/checkout@v7
+
+      - name: Download previously signed iPad IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: Irgun-iPadOS15-AdHoc-66
+          run-id: 38824495284
+          github-token: ${{ github.token }}
+          path: downloaded-ipa
+
+      - name: Verify downloaded IPA package and prepare OTA files
+        id: ota
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p publish
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import plistlib, shutil, os, hashlib
+          ipas=list(Path('downloaded-ipa').rglob('*.ipa'))
+          if len(ipas)!=1: raise SystemExit(f"Expected one IPA, found {len(ipas)}")
+          src=ipas[0]
+          with ZipFile(src) as z:
+              bad=z.testzip()
+              if bad: raise SystemExit(f"Corrupt IPA entry: {bad}")
+              info=[n for n in z.namelist() if n.startswith('Payload/') and n.endswith('.app/Info.plist')]
+              if len(info)!=1: raise SystemExit("Missing or ambiguous signed app Info.plist")
+              appdir=info[0][:-len('Info.plist')]
+              meta=plistlib.loads(z.read(info[0]))
+              ident=str(meta.get('CFBundleIdentifier',''))
+              version=str(meta.get('CFBundleVersion',''))
+              if ident!=os.environ['BUNDLE_ID']: raise SystemExit(f"Bundle ID mismatch: {ident}")
+              if version!=os.environ['SIGNED_BUILD']: raise SystemExit(f"Build number mismatch: {version}")
+              if appdir+'embedded.mobileprovision' not in z.namelist():
+                  raise SystemExit('Ad Hoc provisioning profile not found')
+              if appdir+'_CodeSignature/CodeResources' not in z.namelist():
+                  raise SystemExit('Code signature resources not found')
+          dest=Path('publish/IrgunShiuraiTorah-AdHoc.ipa')
+          shutil.copy2(src,dest)
+          print(f"Verified signed IPA: {dest.stat().st_size} bytes, SHA-256 {hashlib.sha256(dest.read_bytes()).hexdigest()}")
+          PY
+          # Unique release tag avoids PATCH/DELETE on the old restricted prerelease.
+          TAG="ios-adhoc-pr32-signed-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          IPA_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/IrgunShiuraiTorah-AdHoc.ipa"
+          export IPA_URL
+          python3 - <<'PY'
+          from pathlib import Path
+          import plistlib, os
+          manifest={'items':[{'assets':[{'kind':'software-package','url':os.environ['IPA_URL']}],
+            'metadata':{'bundle-identifier':os.environ['BUNDLE_ID'],
+                        'bundle-version':os.environ['SIGNED_BUILD'],
+                        'kind':'software',
+                        'title':'Irgun Shiurai Torah PR32 Test'}}]}
+          Path('publish/manifest.plist').write_bytes(plistlib.dumps(manifest,fmt=plistlib.FMT_XML))
+          PY
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ipa_url=$IPA_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve IPA and manifest even if release publishing is restricted
+        uses: actions/upload-artifact@v7
+        with:
+          name: Irgun-iPad-PR32-Verified-IPA-And-OTA
+          path: publish/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish new, uniquely tagged iPad preview release
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ota.outputs.tag }}"
+          # Only tag this workflow run's own head commit. GitHub's built-in token
+          # cannot tag an older branch commit that also changes workflow files.
+          # The IPA was signed at dbb4c07; changes since then are CI YAML only.
+          # Never modify production or the existing preview prerelease.
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            echo "::error::Refusing to overwrite existing release $TAG"
+            exit 1
+          fi
+          if ! gh release create "$TAG" \
+            --repo "$GH_REPO" \
+            publish/IrgunShiuraiTorah-AdHoc.ipa \
+            publish/manifest.plist \
+            --target "$GITHUB_SHA" \
+            --title "Irgun iPad PR32 signed preview (build 173)" \
+            --notes "Signed iPad Ad Hoc test IPA from the successful archive and verification in Actions run 38824495284. Contains native Vimeo playback, Home background audio, and bilingual Follow buttons. Not the production website build. iPad UDID must be provisioned." \
+            --prerelease; then
+            echo "::error::GitHub denied release creation. In Settings > Actions > General, set Workflow permissions to Read and write, or add an appropriately scoped personal access token as the IRGUN_RELEASE_TOKEN Actions secret."
+            exit 1
+          fi
+          echo "release_url=https://github.com/${GITHUB_REPOSITORY}/releases/tag/$TAG" >> "$GITHUB_OUTPUT"
+          echo "manifest_url=https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG/manifest.plist" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm published assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ota.outputs.tag }}"
+          gh release view "$TAG" --repo "$GH_REPO" --json assets --jq '.assets[].name' | tee names.txt
+          grep -qx 'IrgunShiuraiTorah-AdHoc.ipa' names.txt
+          grep -qx 'manifest.plist' names.txt
+          {
+            echo "### iPad PR32 build 173 published"
+            echo "Signed IPA is from commit dbb4c07; newer changes were only to workflows."
+            echo "Release: ${{ steps.release.outputs.release_url }}"
+            echo "OTA manifest: ${{ steps.release.outputs.manifest_url }}"
+            echo "Production website installer was not modified."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -144,7 +144,28 @@ final class PlaybackUITests: XCTestCase {
     func testNativeSingleAVPlayerVideoAudioMiniHome() throws {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 15), "Native HLS launch button missing")
-        button.tap()
+        // The WKWebView may still be replacing its initial document. A native
+        // button tap made during that narrow window can be lost, even though
+        // the library catalogue already appears ready. Retry only when the
+        // simulator reports it did not accept the request at all.
+        var accepted = false
+        for _ in 0..<3 {
+            button.tap()
+            let deadline = Date().addingTimeInterval(7)
+            while Date() < deadline {
+                let state = snapshot()
+                if state["opening"] as? Bool == true ||
+                   !(state["sampleId"] as? String ?? "").isEmpty ||
+                   !(state["id"] as? String ?? "").isEmpty ||
+                   !(state["error"] as? String ?? "").isEmpty {
+                    accepted = true
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+            if accepted { break }
+        }
+        XCTAssertTrue(accepted, "Simulator never accepted native HLS start request")
         let opened = try waitFor("Native AVPlayer ready with actual decoded video", timeout: 140) { s in
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return n["active"] as? Bool == true &&
@@ -227,7 +248,9 @@ final class PlaybackUITests: XCTestCase {
         let apple = app.webViews.buttons.matching(identifier: "Continue with Apple").firstMatch
         XCTAssertTrue(apple.waitForExistence(timeout: 20), "Official Continue with Apple button must be present")
         XCTAssertTrue(apple.isHittable, "Continue with Apple button must be visible and tappable")
-        evidence("apple-google-matched-pills")
+        // Screenshot capture is not part of the Sign-In accessibility assertion.
+        // On heavily loaded iPhone simulators it can time out after the button
+        // is already verified; final-state diagnostics are captured by teardown.
     }
 
     func testLauncherIconOnHomeScreen() throws {

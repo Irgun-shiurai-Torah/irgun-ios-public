@@ -84,6 +84,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         Self.current = self
         viewer.view.backgroundColor = .black
         videoLayer.player = player
+        // Home should continue audio without automatically opening system PiP.
+        if #available(iOS 15.0, *) { player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible }
         videoLayer.videoGravity = .resizeAspect
         viewer.view.layer.addSublayer(videoLayer)
         installNativeControls()
@@ -904,11 +906,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     public func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        isPiPRequested = true
+        // Home should keep playing background audio, never create automatic PiP.
+        // Only the explicit toolbar PiP button sets isPiPRequested.
+        guard isPiPRequested else {
+            pictureInPictureController.stopPictureInPicture()
+            return
+        }
         placeSurface(lastSurfaceRect)
     }
     public func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        if layout == "mini" || mode != "video" || !active {
+        if !isPiPRequested || layout == "mini" || mode != "video" || !active {
             pictureInPictureController.stopPictureInPicture()
             isPiPRequested = false
             notifyListeners("pipState", data:["active":false,"reason":"mini"])
