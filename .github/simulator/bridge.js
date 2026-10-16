@@ -142,9 +142,19 @@ window.ISTSimulator = {
     simulatorError = '';
     try {
       const selected = simulatorSampleId || this.selectedSampleId;
+      // This backed-up shiur decoded real HLS frames and continued background
+      // audio in the last green native AVPlayer run. Never use a Vimeo-only
+      // upload as the default simulator test sample.
+      const verifiedHlsId = '1235946832';
       const candidates = selected
         ? [state.videoById.get(String(selected))].filter(Boolean)
-        : state.videos.filter(video => video.hasAudio).slice(0, 12);
+        : [
+            state.videoById.get(verifiedHlsId),
+            ...state.videos.filter(video => video.hasAudio).slice(0, 12)
+          ].filter((video, index, list) =>
+            video && video.hasAudio &&
+            list.findIndex(item => videoId(item) === videoId(video)) === index
+          );
       if (!candidates.length) throw new Error('No sample available in the loaded library');
       for (const video of candidates) {
         let sources;
