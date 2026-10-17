@@ -2842,3 +2842,30 @@ body.irgun-ios .ios-floating-nav[dir="rtl"] .nav-active-indicator { left:auto; r
 }
 body.irgun-ios .lecture-follow-actions { position:relative; z-index:4; }
 .lecture-follow-actions .follow-chip:focus-visible, .player-follow-bar .follow-chip:focus-visible { outline:2px solid #125f96; outline-offset:2px; }
+
+/* iOS playback and informational catalog parity (Android-inspired). */
+body.irgun-ios .watch-audio-controls .skip-control,
+body.irgun-ios .big-controls .skip-control {
+  color:#fff !important; opacity:1; -webkit-text-fill-color:#fff;
+  filter:drop-shadow(0 1px 3px rgba(0,0,0,.52));
+}
+body.irgun-ios .watch-audio-controls .skip-control .skip-icon-modern,
+body.irgun-ios .big-controls .skip-control .skip-icon-modern {
+  color:#fff !important; opacity:1;
+}
+body.irgun-ios .watch-audio-controls .skip-control .skip-ring,
+body.irgun-ios .watch-audio-controls .skip-control .skip-arrowhead,
+body.irgun-ios .big-controls .skip-control .skip-ring,
+body.irgun-ios .big-controls .skip-control .skip-arrowhead {stroke:#fff !important;}
+body.irgun-ios .watch-audio-controls .skip-control .skip-text,
+body.irgun-ios .big-controls .skip-control .skip-text {fill:#fff !important;}
+body.irgun-ios .watch-audio-panel {background:linear-gradient(180deg,#122339,#08131f);border-radius:18px;}
+body.irgun-ios .watch-audio-controls {align-items:center;gap:clamp(8px,4vw,24px);}
+body.irgun-ios .watch-audio-controls .skip-control {min-width:56px;min-height:56px;}
+body.irgun-ios .paid-actions:has(> .paid-secondary:only-child) {grid-template-columns:1fr;}
+body.irgun-ios .paid-card-preview {font-size:12px;line-height:1.5;color:#56677b;margin:10px 0 0;overflow-wrap:anywhere;}
+body.irgun-ios .paid-catalog-facts {display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+body.irgun-ios .paid-catalog-facts span {font-size:10px;font-weight:750;color:#375269;background:#edf4fa;border-radius:999px;padding:5px 9px;}
+body.irgun-ios .ios-paid-section {margin-top:25px;}
+body.irgun-ios .ios-paid-section > .section-head p {margin:5px 0 0;font-size:12px;color:#617184;line-height:1.4;}
+body.irgun-ios .paid-card {height:100%;}

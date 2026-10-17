@@ -335,6 +335,7 @@ function onIosUnifiedState(snapshot) {
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
     state.watchVideoPlaying=Boolean(snapshot.playing);
+    refreshPersistentMiniVideoChrome();
   }
   if (state.current && snapshot.mode==='audio') {
     updatePlayerUi();
@@ -3654,8 +3655,10 @@ function refreshPersistentMiniVideoChrome() {
   if (!persistentVideoMount) return;
   const button = persistentVideoMount.querySelector('[data-mini-video-play-toggle]');
   if (!button) return;
-  button.setAttribute('aria-label', state.watchVideoPlaying ? 'Pause' : 'Play');
-  button.innerHTML = state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play');
+  const playing = iosNativeActive() && state.watchMode === 'video'
+    ? iosNativePlaying() : Boolean(state.watchVideoPlaying);
+  button.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  button.innerHTML = playing ? '<span class="pause-mark">II</span>' : svgIcon('play');
 }
 
 async function togglePersistentMiniVideoPlayback(event) {
@@ -3666,7 +3669,10 @@ async function togglePersistentMiniVideoPlayback(event) {
     const paused = await player.getPaused();
     if (paused) await player.play();
     else await player.pause();
-  } catch (_) {}
+    if (iosNativeActive()) state.watchVideoPlaying = iosNativePlaying();
+    else state.watchVideoPlaying = paused;
+    refreshPersistentMiniVideoChrome();
+  } catch (error) { console.warn('Mini video playback toggle failed', error); }
 }
 
 function parkWatchUiForSystemPip() {
@@ -4009,19 +4015,19 @@ function paidMaterialsHtml(item) {
 }
 
 function paidProductCard(item) {
-  // The iOS reader experience displays entitlements only; never advertise unowned products.
-  if (IS_IOS && !item?.owned) return '';
+  // On iOS catalog cards are informational only; no checkout or outbound purchase CTA.
   const id = String(item.id || '');
   const expanded = state.paidExpandedId === id;
   const images = paidProductImageUrls(item);
-  const status = item.owned ? tr('Purchased') : item.available ? tr('Available now') : tr('Coming Soon');
+  const status = item.owned ? tr('Purchased') : IS_IOS ? tr('Collection') : item.available ? tr('Available now') : tr('Coming Soon');
   const statusClass = item.owned ? 'owned' : item.available ? 'available' : 'coming';
+  const preview = String(item.description || '').replace(/\*\*/g, '').replace(/[_#]/g, '').replace(/\s+/g, ' ').trim().slice(0, 155);
   const coverHtml = images.length ? `<div class="paid-cover paid-cover-carousel" data-paid-carousel="${esc(id)}"><div class="paid-cover-track">${images.map((url,index)=>`<div class="paid-cover-slide" data-paid-slide="${index}"><img src="${esc(url)}" alt="${esc(paidProductTitle(item,'Paid shiur'))}${images.length>1?` ${index+1}`:''}" loading="${index===0?'eager':'lazy'}" ${index===0?'fetchpriority="high"':''} decoding="async"></div>`).join('')}</div>${images.length>1?`<div class="paid-cover-dots">${images.map((_,index)=>`<button type="button" class="paid-cover-dot ${index===0?'active':''}" data-paid-image-dot="${index}" aria-label="Show picture ${index+1}"></button>`).join('')}</div>`:''}<button type="button" class="paid-cover-zoom" data-paid-image-open="${esc(id)}">${tr('View')}</button>${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>` : `<div class="paid-cover">${logoArtworkHtml()}${item.featured ? '<span class="paid-featured">FEATURED</span>' : ''}${item.owned ? '<span class="paid-owned">PURCHASED</span>' : ''}</div>`;
   return `<article class="paid-card ${item.featured ? 'featured' : ''} ${item.owned ? 'owned' : ''}">
     ${coverHtml}
     <div class="paid-body"><div class="paid-card-topline"><span class="paid-category">${esc(item.category || 'Audio Collection')}</span><span class="paid-status-chip ${statusClass}">${esc(status)}</span></div><h2>${esc(paidProductTitle(item))}</h2>${item.speaker ? `<strong class="paid-speaker">${esc(item.speaker)}</strong>` : ''}<div class="paid-meta">${esc([item.catalogDetails, item.audience].filter(Boolean).join(' • '))}</div>
-      ${!IS_IOS ? `<div class="paid-price-row"><strong>${money(item.priceCents,item.currency)}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>` : ''}
-      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : !IS_IOS && item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : !IS_IOS ? '<button class="paid-primary" disabled>Coming Soon</button>' : ''}<button class="paid-secondary" data-paid-description="${esc(id)}">Details</button></div>
+      ${IS_IOS ? `<div class="paid-catalog-facts">${Number(item.trackCount) > 0 ? `<span>${Number(item.trackCount)} tracks</span>` : ''}${item.audience ? `<span>${esc(item.audience)}</span>` : ''}</div>${preview ? `<p class="paid-card-preview">${esc(preview)}${String(item.description||'').length>155?'…':''}</p>` : ''}` : `<div class="paid-price-row"><strong>${money(item.priceCents,item.currency)}</strong><span>${item.trackCount ? `${Number(item.trackCount)} tracks` : ''}</span></div>`}
+      <div class="paid-actions">${item.owned ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon('play')} ${expanded ? 'Close' : 'Listen'}</button>` : !IS_IOS && item.available ? `<button class="paid-primary" data-paid-purchase="${esc(id)}">${svgIcon('store')} Buy Securely</button>` : !IS_IOS ? '<button class="paid-primary" disabled>Coming Soon</button>' : ''}<button class="paid-secondary" data-paid-description="${esc(id)}">${IS_IOS ? 'View Details' : 'Details'}</button></div>
       <div class="paid-description paid-description-rich" data-paid-description-panel="${esc(id)}" hidden>${paidRichDescription(item.description)}</div>
       ${item.owned ? `<div class="paid-album" ${expanded ? '' : 'hidden'}><div class="paid-track-head"><strong>Your Audio</strong><span>Protected personal listening</span></div>${(item.tracks || []).length ? `<div class="paid-track-list">${item.tracks.map((track,index)=>`<button class="paid-track" data-paid-track="${esc(track.id)}" data-paid-product="${esc(id)}"><span>${index+1}</span><div><strong>${esc(track.title || `Track ${index+1}`)}</strong><small>${track.size ? `${Math.round(Number(track.size)/1024/1024)} MB` : 'Secure streaming'}</small></div>${svgIcon('play')}</button>`).join('')}</div>` : '<div class="empty">This purchase is connected, but its tracks are not available right now.</div>'}${paidMaterialsHtml(item)}</div>` : ''}
       ${!IS_IOS && state.isAdmin && state.adminMode ? `<div class="admin-card-tools"><button data-admin-paid-edit="${esc(id)}">Edit Product</button><button class="danger" data-admin-paid-delete="${esc(id)}">Delete</button></div>` : ''}
@@ -4038,16 +4044,17 @@ function paidCheckoutModalHtml() {
 
 function paidShiurimHtml() {
   if (IS_IOS) {
-    // Reader app: customers sign in to stream audio already attached to their Irgun account.
-    // No checkout, prices, product catalog or link to an external purchasing mechanism.
     const he = currentLanguage() === 'he';
-    const heading = `<div class='page-title pro-page-title paid-page-title'><span class='page-kicker'>PERSONAL AUDIO LIBRARY</span><h1>${he ? 'ספריית השמע שלי' : 'My Audio Library'}</h1><p>${he ? 'כאן אפשר להאזין לאוספי השמע המשויכים לחשבון אירגון שלכם.' : 'Listen to audio collections already linked to your Irgun account.'}</p></div>`;
-    if (!state.user) return `${heading}<div class='store-login-note'><span>${svgIcon('account')}</span><div><strong>${he ? 'יש להתחבר לחשבון' : 'Sign in to your account'}</strong><p>${he ? 'לאחר ההתחברות יוצגו כאן אוספי השמע שלכם.' : 'Your existing audio collections will appear here after signing in.'}</p></div><button data-nav='account'>${he ? 'התחברות' : 'Sign In'}</button></div>`;
-    if (!state.paidLoaded && !state.paidError) return `${heading}<div class='loading'>${he ? 'טוען אוספי שמע…' : 'Loading your audio library…'}</div>`;
-    const items = state.paidCatalog.filter(item => item.owned);
-    const error = state.paidError ? `<div class='paid-retry-card'><strong>${he ? 'לא ניתן היה לטעון את ספריית השמע' : 'The audio library could not load'}</strong><span>${esc(state.paidError)}</span><button data-paid-retry='1'>${he ? 'נסו שוב' : 'Try Again'}</button></div>` : '';
-    const content = items.length ? `<div class='paid-grid ${items.length === 1 ? 'single-featured' : ''}'>${items.map(paidProductCard).join('')}</div>` : (state.paidError ? '' : `<div class='empty'>${he ? 'אין עדיין אוספי שמע המשויכים לחשבון זה.' : 'No audio collections are linked to this account yet.'}</div>`);
-    return `${heading}<div class='paid-title-actions'><button class='admin-inline-add' data-paid-retry='1'>${he ? 'רענון הספרייה' : 'Refresh Library'}</button></div>${error}${content}`;
+    const heading = `<div class="page-title pro-page-title paid-page-title"><span class="page-kicker">IRGUN AUDIO COLLECTIONS</span><h1>${he ? 'אוספי שיעורים' : 'Audio Collections'}</h1><p>${he ? 'אוספים המשויכים לחשבונכם יופיעו כאן. אפשר לעיין גם באוספים נוספים.' : 'Purchased lectures linked to your account appear here. Browse additional collections below.'}</p></div>`;
+    if (!state.paidLoaded && !state.paidError) return heading + '<div class="loading">Loading audio collections…</div>';
+    const owned = state.paidCatalog.filter(item => item.owned);
+    const available = state.paidCatalog.filter(item => !item.owned);
+    const section = (name, description, items, empty) => `<section class="ios-paid-section"><div class="section-head paid-catalog-heading"><div><h2>${name}</h2><p>${description}</p></div></div>${items.length ? `<div class="paid-grid">${items.map(paidProductCard).join('')}</div>` : `<div class="empty">${empty}</div>`}</section>`;
+    const accountNotice = !state.user ? `<div class="store-login-note"><span>${svgIcon('account')}</span><div><strong>${he ? 'התחברו לחשבון' : 'Sign in to see your purchases'}</strong><p>${he ? 'אוספים המשויכים לחשבונכם יופיעו כאן.' : 'Your owned lecture collections will appear here.'}</p></div><button data-nav="account">${he ? 'התחברות' : 'Sign In'}</button></div>` : '';
+    const error = state.paidError ? `<div class="paid-retry-card"><strong>Could not load audio collections</strong><span>${esc(state.paidError)}</span><button data-paid-retry="1">Try Again</button></div>` : '';
+    return heading + `<div class="paid-title-actions"><button class="admin-inline-add" data-paid-retry="1">${he ? 'רענון' : 'Refresh'}</button></div>` + accountNotice + error +
+      section(he ? 'הרכישות שלכם' : 'Your Purchases', he ? 'אוספי שמע שרכשתם ומשויכים לחשבון אירגון שלכם.' : 'Lectures purchased online and linked to your Irgun account.', owned, he ? 'אין אוספים משויכים לחשבון זה.' : 'No purchased collections are linked to this account yet.') +
+      section(he ? 'אוספים זמינים' : 'Available Collections', he ? 'עיינו באוספי שיעורים נוספים.' : 'Browse additional lecture collections.', available, he ? 'אין כרגע אוספים נוספים להצגה.' : 'No additional collections are listed right now.');
   }
   if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
@@ -5926,7 +5933,6 @@ async function loadPaidCatalog(force = false, options = {}) {
   const silent = Boolean(options?.silent);
   if (state.paidLoading) return;
   if (state.paidLoaded && !force) return;
-  if (IS_IOS && !state.user) { state.paidCatalog = []; state.paidLoaded = true; state.paidError = ''; return; }
   state.paidLoading = true;
   state.paidError = '';
   if (!silent && ['paid','library','account'].includes(state.screen)) render();
@@ -5936,8 +5942,8 @@ async function loadPaidCatalog(force = false, options = {}) {
       : publicJson(`/paid-audio?v=${Date.now()}`);
     const data = await promiseWithTimeout(paidRequest, 12000, currentLanguage()==='he' ? 'טעינת החנות ארכה זמן רב מדי. נסו שוב.' : 'The purchase page took too long to load. Please try again.');
     const fetchedItems = Array.isArray(data.items) ? data.items : [];
-    // A reader app displays only signed-in entitlements, not the shop's inventory.
-    state.paidCatalog = IS_IOS ? fetchedItems.filter(item => item.owned === true) : fetchedItems;
+    // Reader-only iOS browsing: inventory is metadata, entitlements still gate playback.
+    state.paidCatalog = fetchedItems;
     state.paidLoaded = true;
     if (Capacitor.isNativePlatform() && state.user) setTimeout(warmPaidPurchases, 120);
   } catch (error) {
@@ -5952,7 +5958,7 @@ async function loadPaidCatalog(force = false, options = {}) {
 }
 
 function warmNativePaidCatalog() {
-  if (!Capacitor.isNativePlatform() || !state.user) return;
+  if (!Capacitor.isNativePlatform()) return;
   setTimeout(() => loadPaidCatalog(false, { silent:true }).catch(() => {}), 80);
 }
 

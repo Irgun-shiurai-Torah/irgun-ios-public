@@ -44,6 +44,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var nativeFull: UIButton?
     private var nativePiP: UIButton?
     private var nativeSeek: UISlider?
+    private var nativeSeekTarget: Double?
     private var nativeElapsed: UILabel?
     private var nativeDuration: UILabel?
     private var fullscreenButtonTaps = 0
@@ -448,6 +449,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.itemID = id
                 self.itemURL = source
                 self.qualityHeight = 0
+            self.nativeSeekTarget = nil
                 self.availableHeights = []
                 self.loadAvailableVariants(url)
             }
@@ -487,6 +489,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         DispatchQueue.main.async {
             guard self.active else { call.reject("No native item loaded"); return }
             let seconds = max(0, call.getDouble("position") ?? 0)
+            self.nativeSeekTarget = nil
             let request = self.generation
             self.player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
                              toleranceBefore: .zero, toleranceAfter: .zero) { finished in
@@ -624,6 +627,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let back = button("↶ 15", width: 46, selector: #selector(tapBack))
         let play = button("▶", width: 52, selector: #selector(tapPlay))
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
+        // Native SF Symbols stay white and legible over any video frame.
+        let skipSymbolStyle = UIImage.SymbolConfiguration(pointSize: 25, weight: .semibold)
+        if let backSymbol = UIImage(systemName: "gobackward.15", withConfiguration: skipSymbolStyle) {
+            back.setImage(backSymbol, for: .normal)
+            back.setTitle(nil, for: .normal)
+            back.tintColor = .white
+        }
+        if let forwardSymbol = UIImage(systemName: "goforward.15", withConfiguration: skipSymbolStyle) {
+            forward.setImage(forwardSymbol, for: .normal)
+            forward.setTitle(nil, for: .normal)
+            forward.tintColor = .white
+        }
         back.accessibilityIdentifier = "irgun-native-back-15"
         back.accessibilityLabel = "Back 15 seconds"
         play.accessibilityIdentifier = "irgun-native-play"
@@ -653,8 +668,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         seek.maximumValue = 1
         seek.minimumTrackTintColor = UIColor(red: 0.82, green: 0.69, blue: 0.42, alpha: 1)
         seek.maximumTrackTintColor = UIColor(white: 1, alpha: 0.55)
+        seek.accessibilityIdentifier = "irgun-native-seek"
+        seek.semanticContentAttribute = .forceLeftToRight
         seek.addTarget(self, action: #selector(tapSeek), for: .touchUpInside)
         seek.addTarget(self, action: #selector(tapSeek), for: .touchUpOutside)
+        // UISlider drag callbacks do not move the thumb when the track is tapped
+        // on every iOS version. Add a non-cancelling tap while retaining drag.
+        let seekTap = UITapGestureRecognizer(target: self, action: #selector(tapSeekTrack(_:)))
+        seekTap.cancelsTouchesInView = false
+        seek.addGestureRecognizer(seekTap)
         nativeSeek = seek
 
         func timeLabel() -> UILabel {
@@ -668,15 +690,21 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let total = timeLabel()
         nativeElapsed = elapsed
         nativeDuration = total
+        elapsed.textAlignment = .left
         total.textAlignment = .right
         let timeRow = UIStackView(arrangedSubviews: [elapsed, UIView(), total])
+        timeRow.semanticContentAttribute = .forceLeftToRight
         timeRow.translatesAutoresizingMaskIntoConstraints = false
         timeRow.axis = .horizontal
         timeRow.distribution = .fill
         let bottom = UIStackView(arrangedSubviews: [seek,timeRow])
         bottom.translatesAutoresizingMaskIntoConstraints = false
         bottom.axis = .vertical
-        bottom.spacing = 0
+        bottom.spacing = 1
+        bottom.backgroundColor = UIColor(red: 0.03, green: 0.065, blue: 0.11, alpha: 0.82)
+        bottom.layer.cornerRadius = 12
+        bottom.isLayoutMarginsRelativeArrangement = true
+        bottom.layoutMargins = UIEdgeInsets(top: 4, left: 9, bottom: 6, right: 9)
         overlay.addSubview(bottom)
         NSLayoutConstraint.activate([
             bottom.leadingAnchor.constraint(equalTo: overlay.leadingAnchor, constant: 9),
@@ -703,16 +731,24 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     private func updateNativeControls() {
-        nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
+        if let playSymbol = UIImage(systemName: playingWanted ? "pause.fill" : "play.fill",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 23, weight: .bold)) {
+            nativePlay?.setImage(playSymbol, for: .normal)
+            nativePlay?.setTitle(nil, for: .normal)
+            nativePlay?.tintColor = .white
+        } else {
+            nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
+        }
         nativePlay?.accessibilityLabel = playingWanted ? "Pause video" : "Play video"
         nativeFull?.accessibilityLabel = layout == "full" ? "Exit Fullscreen" : "Fullscreen"
         nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
         nativeSpeed?.setTitle(String(format: "%.2g×", Double(playbackRate)), for: .normal)
         nativeFull?.setTitle(layout == "full" ? "↙" : "⛶", for: .normal)
-        nativeElapsed?.text = formatTime(position())
+        let shownPosition = nativeSeekTarget ?? position()
+        nativeElapsed?.text = formatTime(shownPosition)
         nativeDuration?.text = formatTime(duration())
         if let slider = nativeSeek, !slider.isTracking {
-            slider.value = Float(duration() > 0 ? max(0,min(1,position() / duration())) : 0)
+            slider.value = Float(duration() > 0 ? max(0,min(1,shownPosition / duration())) : 0)
             slider.isEnabled = duration() > 0
         }
         nativePiP?.isEnabled = AVPictureInPictureController.isPictureInPictureSupported()
@@ -734,17 +770,46 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc private func tapBack() { skip(seconds: -15); publishState() }
     @objc private func tapForward() { skip(seconds: 15); publishState() }
 
+    private func seekFromNativeSlider(_ fraction: Double) {
+        guard active, duration() > 0 else { return }
+        let clamped = max(0, min(1, fraction))
+        let target = duration() * clamped
+        nativeSeekTarget = target
+        nativeSeek?.value = Float(clamped)
+        nativeElapsed?.text = formatTime(target)
+        let request = generation
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self, self.generation == request else { return }
+                // Earlier seeks may complete after the user has tapped again.
+                guard self.nativeSeekTarget == target else { return }
+                self.nativeSeekTarget = nil
+                self.publishState()
+            }
+        }
+    }
+
     @objc private func tapSeek() {
-        guard active, let slider = nativeSeek, duration() > 0 else { return }
-        let target = duration() * Double(slider.value)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
-        publishState()
+        guard let slider = nativeSeek else { return }
+        seekFromNativeSlider(Double(slider.value))
+    }
+
+    @objc private func tapSeekTrack(_ gesture: UITapGestureRecognizer) {
+        guard gesture.state == .ended, active,
+              let slider = nativeSeek, !slider.isTracking, duration() > 0 else { return }
+        let track = slider.trackRect(forBounds: slider.bounds)
+        guard track.width > 0 else { return }
+        let x = gesture.location(in: slider).x
+        seekFromNativeSlider(Double((x - track.minX) / track.width))
     }
 
     @objc private func tapDoubleSeek(_ recognizer: UITapGestureRecognizer) {
         guard recognizer.state == .ended else { return }
         let point = recognizer.location(in: viewer.view)
         let w = viewer.view.bounds.width
+        // Double-tap skipping is for the picture, never the progress bar.
+        guard point.y > viewer.view.bounds.height * 0.16 &&
+              point.y < viewer.view.bounds.height * 0.80 else { return }
         if point.x < w * 0.35 { skip(seconds: -15) }
         else if point.x > w * 0.65 { skip(seconds: 15) }
         else { return }
@@ -966,6 +1031,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.pipResumeWanted = false
             self.pipPausedByUser = false
             self.playingWanted = false
+            self.nativeSeekTarget = nil
             self.player.pause()
             #if targetEnvironment(simulator)
             self.simulatorFrameOutput = nil
