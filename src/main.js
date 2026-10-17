@@ -4055,12 +4055,6 @@ function paidShiurimHtml() {
       section(he ? 'הרכישות שלכם' : 'Your Purchases', he ? 'אוספי שמע שרכשתם ומשויכים לחשבון אירגון שלכם.' : 'Lectures purchased online and linked to your Irgun account.', owned, he ? 'אין אוספים משויכים לחשבון זה.' : 'No purchased collections are linked to this account yet.') +
       section(he ? 'אוספים זמינים' : 'Available Collections', he ? 'עיינו באוספי שיעורים נוספים.' : 'Browse additional lecture collections.', available, he ? 'אין כרגע אוספים נוספים להצגה.' : 'No additional collections are listed right now.');
   }
-  if (!state.paidLoaded && !state.paidError) return `${heading}<div class='loading'>${he ? 'טוען אוספי שמע…' : 'Loading your audio library…'}</div>`;
-    const items = state.paidCatalog.filter(item => item.owned);
-    const error = state.paidError ? `<div class='paid-retry-card'><strong>${he ? 'לא ניתן היה לטעון את ספריית השמע' : 'The audio library could not load'}</strong><span>${esc(state.paidError)}</span><button data-paid-retry='1'>${he ? 'נסו שוב' : 'Try Again'}</button></div>` : '';
-    const content = items.length ? `<div class='paid-grid ${items.length === 1 ? 'single-featured' : ''}'>${items.map(paidProductCard).join('')}</div>` : (state.paidError ? '' : `<div class='empty'>${he ? 'אין עדיין אוספי שמע המשויכים לחשבון זה.' : 'No audio collections are linked to this account yet.'}</div>`);
-    return `${heading}<div class='paid-title-actions'><button class='admin-inline-add' data-paid-retry='1'>${he ? 'רענון הספרייה' : 'Refresh Library'}</button></div>${error}${content}`;
-  }
   if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
   const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
