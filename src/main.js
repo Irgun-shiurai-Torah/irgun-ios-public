@@ -1,4 +1,5 @@
 import './style.css';
+import { clearCommentComposerAfterPost } from './comment-draft.js';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
@@ -8725,10 +8726,12 @@ async function postComment() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId: postedVideoId, text })
     });
-    // Do not erase newer typing or a draft on another shiur.
-    if (document.getElementById('commentText') === field && field.value === draft) {
-      field.value = '';
-    }
+    clearCommentComposerAfterPost({
+      document,
+      currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
+      postedVideoId,
+      postedText: text
+    });
   } catch (error) {
     alert(error.message || 'Could not post comment.');
     return;
