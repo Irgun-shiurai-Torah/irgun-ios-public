@@ -113,6 +113,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                   item === self.player.currentItem else { return }
             self.playingWanted = false
             self.publishState()
+            // A real current-item completion drives same-folder audio advance.
+            // Pause, buffering and layout changes must never look like EOF.
+            self.notifyListeners("ended", data: self.snapshot())
         }
     }
 
@@ -592,11 +595,19 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         ])
         controlsOverlay = overlay
 
-        let mini = button("⌄", width: 32, selector: #selector(tapMini))
-        let pip = button("PiP", width: 40, selector: #selector(tapPiP))
+        let mini = button("⌄", width: 44, selector: #selector(tapMini))
+        let pip = button("PiP", width: 44, selector: #selector(tapPiP))
         let quality = button("Auto", width: 58, selector: #selector(tapQuality))
         let speed = button("1×", width: 52, selector: #selector(tapSpeed))
         let full = button("⛶", width: 44, selector: #selector(tapFull))
+        let toolbarStyle = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        for (control, symbol) in [(mini, "chevron.down"), (pip, "pip.enter")] {
+            if let image = UIImage(systemName: symbol, withConfiguration: toolbarStyle) {
+                control.setImage(image, for: .normal)
+                control.setTitle(nil, for: .normal)
+                control.tintColor = .white
+            }
+        }
         mini.accessibilityIdentifier = "irgun-native-mini"
         mini.accessibilityLabel = "Keep playing at bottom of app"
         pip.accessibilityIdentifier = "irgun-native-pip"
@@ -613,6 +624,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let top = UIStackView(arrangedSubviews: [mini,pip,quality,speed,full])
         top.translatesAutoresizingMaskIntoConstraints = false
         top.axis = .horizontal
+        top.semanticContentAttribute = .forceLeftToRight
         top.spacing = 5
         top.alignment = .center
         overlay.addSubview(top)
@@ -652,8 +664,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let center = UIStackView(arrangedSubviews: [back,play,forward])
         center.translatesAutoresizingMaskIntoConstraints = false
         center.axis = .horizontal
+        center.semanticContentAttribute = .forceLeftToRight
         center.spacing = 22
         center.alignment = .center
+        back.backgroundColor = .clear
+        forward.backgroundColor = .clear
         overlay.addSubview(center)
         NSLayoutConstraint.activate([
             center.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
