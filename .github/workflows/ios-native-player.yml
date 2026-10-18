@@ -22,6 +22,8 @@ on:
       - scripts/patch_xcode_project.rb
       - src/ios-native-avplayer.js
       - src/main.js
+      - src/watch-details-swipe.js
+      - scripts/test_watch_details_swipe.mjs
 
 permissions:
   contents: read
@@ -73,7 +75,7 @@ jobs:
           node --test scripts/test_ios_unified_avplayer.mjs scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs
           node --check src/main.js
           node scripts/test_ios_reader_mode.mjs
-          node --test scripts/test_ios_android_parity.mjs scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs scripts/test_ios_sample_selection.mjs
+          node --test scripts/test_ios_android_parity.mjs scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs scripts/test_ios_sample_selection.mjs scripts/test_watch_details_swipe.mjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           npm run build
@@ -146,6 +148,8 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:SimulatorUITests/PlaybackUITests/testNativeSingleAVPlayerVideoAudioMiniHome \
+            -only-testing:SimulatorUITests/PlaybackUITests/testNativeControlsHideAndReturnOnTap \
+            -only-testing:SimulatorUITests/PlaybackUITests/testSwipeBelowVideoMinimizesPlayingAndPausedNativeItem \
             test 2>&1 | tee simulator-results/xcodebuild.log
 
       - name: Collect screenshots and simulator logs

@@ -5,6 +5,7 @@ import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
 import { createIosSwipeMotion } from './ios-swipe-motion.js';
+import { bindWatchDetailsSwipeToMini } from './watch-details-swipe.js';
 import { paidFolderTreeHtml } from './paid-catalog-ui.js';
 import { BELSKY_VOL1_ID, nextPaidTrackInFolder } from './paid-collections.js';
 import { createPaidQuestionController } from './paid-index-controller.js';
@@ -1534,7 +1535,8 @@ function svgIcon(name, extraClass = '') {
     audio: `<svg ${common}><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>`,
     video: `<svg ${common}><rect x="3" y="5" width="14" height="14" rx="2"/><path d="m17 10 4-2v8l-4-2z"/></svg>`,
     minimize: `<svg ${common}><path d="m6 9 6 6 6-6"/></svg>`,
-    pip: `<svg ${common}><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="12.5" y="11.5" width="6.5" height="5.5" rx="1"/></svg>`,
+    fullscreen: `<svg ${common}><path d="M9 4H4V9 M15 4H20V9 M20 15V20H15 M9 20H4V15"/></svg>`,
+    pip: `<svg ${common}><path d="M3 5H21V19H3Z M13 11H19V17H13Z"/></svg>`,
     back15: `<svg class="skip-icon-modern" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="skip-ring" d="M17 18A22 22 0 1 1 11 34"/><path class="skip-arrowhead" d="M18 8 8 18l10 10"/><text x="32" y="39" text-anchor="middle" class="skip-text">${state.skipSeconds}</text></svg>`,
     forward15: `<svg class="skip-icon-modern" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="skip-ring" d="M47 18A22 22 0 1 0 53 34"/><path class="skip-arrowhead" d="m46 8 10 10-10 10"/><text x="32" y="39" text-anchor="middle" class="skip-text">${state.skipSeconds}</text></svg>`
   };
@@ -3835,6 +3837,7 @@ function enterIosPictureInPicture(event) {
 
 function bindPersistentVideoChrome() {
   if (!persistentVideoMount) return;
+  bindIosWatchDetailsSwipeToMini(persistentVideoMount.querySelector('.watch-overlay'));
   persistentVideoMount.querySelectorAll('[data-expand-watch]').forEach(expand => {
     if (expand.dataset.bound) return;
     expand.dataset.bound = '1';
@@ -3867,6 +3870,17 @@ function bindPersistentVideoChrome() {
     back.addEventListener('click', event => { event.stopPropagation(); closeWatch(true); });
   }
   refreshPersistentMiniVideoChrome();
+}
+
+function bindIosWatchDetailsSwipeToMini(overlay) {
+  if (!IS_IOS) return;
+  bindWatchDetailsSwipeToMini(overlay, {
+    canMinimize: () => Boolean(state.watchVideo && state.watchMode === 'video' &&
+      !state.watchMinimized && !state.watchPictureInPicture && iosUnified.state.layout !== 'full' &&
+      !state.playlistPickerItem && !state.deleteDialog && !state.filterDialog &&
+      !document.querySelector('[aria-modal="true"], .admin-editor-backdrop, .sheet-backdrop, .paid-modal-backdrop')),
+    minimize: minimizeWatchToPersistent
+  });
 }
 
 function hostCurrentWatchOverlay(mode = 'full') {
@@ -5671,7 +5685,7 @@ function watchHtml() {
       <button class="mini-video-play" data-mini-video-play-toggle="1" aria-label="${state.watchVideoPlaying ? 'Pause' : 'Play'}">${state.watchVideoPlaying ? '<span class="pause-mark">II</span>' : svgIcon('play')}</button>
       <button class="mini-video-close" data-close-mini-video="1" aria-label="Close video">×</button>
     </div>
-    <header class="watch-top"><button data-close-watch="1">${currentLanguage()==='he'?'חזרה':'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${IS_IOS && Capacitor.isNativePlatform() ? `<button class="watch-minimize" data-ios-video-fullscreen="1" aria-label="Fullscreen" title="Fullscreen">⛶</button><button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
+    <header class="watch-top"><button data-close-watch="1">${currentLanguage()==='he'?'חזרה':'Back'}</button><strong>${esc(displayShiurTitle(v.title, 'Shiur'))}</strong>${state.watchMode === 'video' ? `<div class="watch-top-media-actions"><button class="watch-minimize" data-minimize-watch="1" aria-label="Keep playing at bottom of app" title="Mini player">${svgIcon('minimize')}</button>${IS_IOS && Capacitor.isNativePlatform() ? `<button class="watch-minimize" data-ios-video-fullscreen="1" aria-label="Fullscreen" title="Fullscreen">${svgIcon('fullscreen')}</button><button class="watch-pip" data-video-pip="1" aria-label="Picture in Picture" title="Picture in Picture">${svgIcon('pip')}</button>` : ''}</div>` : ''}</header>
     <div class="watch-scroll">
       <div class="watch-player-card">
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage()==='he'?'וידאו':'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage()==='he'?'אודיו':'Audio'}</button>` : ''}</div>
@@ -5682,7 +5696,6 @@ function watchHtml() {
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
         <div class="watch-meta">${esc([v.showcase, fmtDate(v.lectureDate || v.date || v.created), v.duration ? fmtTime(v.duration) : '', v._speakerLabel, v._topicLabel].filter(Boolean).join(' - '))}</div>
-        ${followButtons ? `<div class="follow-bar lecture-follow-actions" role="group" aria-label="Follow speakers and topics">${followButtons}</div>` : ''}
         <div class="watch-actions compact-watch-actions">
           <button class="watch-action ${liked ? 'active' : ''}" data-like="${esc(likeId)}">${svgIcon('heart')}<span class="watch-action-text">${likeCount}</span></button>
           <button class="watch-action ${savePresentation.cls}" data-open-playlist-picker="1" data-playlist-kind="video" data-playlist-id="${esc(id)}">${svgIcon('bookmark')}<span class="watch-action-text">${tr(savePresentation.label)}</span></button>
@@ -5691,6 +5704,7 @@ function watchHtml() {
           <button class="watch-action" data-download-kind="video" data-download-id="${esc(id)}">${svgIcon('download')}<span class="watch-action-text">Download</span></button>
           ${offlineState ? `<button class="watch-action ${offlineState.cls}" data-save-offline-kind="video" data-save-offline-id="${esc(id)}">${offlineIconHtml('watch-offline-icon')}<span class="watch-action-text">${esc(offlineState.label)}</span>${offlineState.status==='downloading'?`<span class="offline-progress-badge">${Number(offlineState.job?.percent)>0?`${Number(offlineState.job.percent)}%`:'…'}</span>`:''}</button>` : ''}
         </div>
+        ${followButtons ? `<div class="follow-bar lecture-follow-actions" role="group" aria-label="Follow speakers and topics">${followButtons}</div>` : ''}
         ${v.description ? `<p class="watch-description">${esc(v.description)}</p>` : ''}
       </section>
       <section class="watch-section">
@@ -6532,6 +6546,7 @@ async function navigateIosBottomTab(button) {
 }
 
 function bind() {
+  document.querySelectorAll('.watch-overlay').forEach(bindIosWatchDetailsSwipeToMini);
   if (IS_IOS) paidQuestionIndex.bind(document);
   document.querySelectorAll('[data-retry-library]').forEach(el => el.addEventListener('click', () => bootstrap({ manual:true })));
   // The persistent iOS nav already delegates clicks on its stable mount.

@@ -198,6 +198,8 @@ window.ISTSimulator = {
     const nativeVideoVisible = nativeVideo && native.layerReady === true &&
       native.overlayOccluded !== true && native.layout !== 'mini' && native.pipActive !== true;
     const videoBox = video?.getBoundingClientRect();
+    const detailsHeading = document.querySelector('.watch-details h1');
+    const detailsBox = detailsHeading?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
     const contentRoot = document.querySelector('.content');
@@ -279,7 +281,11 @@ window.ISTSimulator = {
       videoTime: native ? (Number(native.position)||0) : (Number(video?.currentTime)||0),
       videoPlaying: native ? (nativeVideo&&native.playing===true) : Boolean(video && !video.paused && !video.ended),
       videoVisible: native ? nativeVideoVisible : simulatorVisible(video),
-      controlsVisible: native ? nativeVideoVisible&&native.layout!=='mini' : simulatorVisible(document.getElementById('dmPlay')),
+      controlsVisible: native ? native.controlsVisible === true : simulatorVisible(document.getElementById('dmPlay')),
+      detailsSwipeX: detailsBox ? detailsBox.left + detailsBox.width * 0.3 : 0,
+      detailsSwipeY: detailsBox ? detailsBox.top + detailsBox.height * 0.5 : 0,
+      detailsSwipeEndY: detailsBox ? Math.min(innerHeight - 130, detailsBox.top + detailsBox.height * 0.5 + 145) : 0,
+      watchScrollTop: document.querySelector('.watch-scroll')?.scrollTop || 0,
       videoX:native?(Number(native.surfaceX)||0):(videoBox?.left||0),
       videoY:native?(Number(native.surfaceY)||0):(videoBox?.top||0),
       videoWidth:native?(Number(native.surfaceWidth)||0):(videoBox?.width||0),

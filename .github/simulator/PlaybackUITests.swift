@@ -101,6 +101,10 @@ final class PlaybackUITests: XCTestCase {
                 "Keep playing at bottom of app": "irgun-native-mini"
             ]
             if let identifier = mappings[label] {
+                if native["controlsVisible"] as? Bool == false && native["layout"] as? String != "mini" {
+                    videoPoint(0.5, 0.25).tap()
+                    _ = try waitFor("Tap reveals native controls", timeout: 5) { $0["controlsVisible"] as? Bool == true }
+                }
                 let control = app.buttons[identifier]
                 let ready = NSPredicate(format:"exists == true AND hittable == true")
                 guard XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:control)],timeout:20) == .completed else {
@@ -596,6 +600,65 @@ final class PlaybackUITests: XCTestCase {
         _ = try waitFor("Swipe must minimize paused video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
         Thread.sleep(forTimeInterval: 1)
         XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true); evidence("swipe-minimize")
+    }
+
+    func testNativeControlsHideAndReturnOnTap() throws {
+        try openSample(); try assertMovingVideo()
+        let initial = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+        guard initial["active"] as? Bool == true else { throw XCTSkip("Native AVPlayer scenario") }
+        if initial["controlsVisible"] as? Bool != true { videoPoint(0.5, 0.25).tap() }
+        _ = try waitFor("Controls are visible before inactivity", timeout: 5) { $0["controlsVisible"] as? Bool == true }
+        _ = try waitFor("Playing controls hide after eight seconds", timeout: 12) {
+            $0["controlsVisible"] as? Bool == false && $0["videoPlaying"] as? Bool == true
+        }
+        evidence("native-controls-hidden")
+        videoPoint(0.5, 0.25).tap()
+        let revealed = try waitFor("A picture tap restores controls without pausing", timeout: 5) {
+            $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
+        }
+        let same = revealed["nativePlayer"] as? [String: Any] ?? [:]
+        XCTAssertEqual(number(initial, "itemEpoch"), number(same, "itemEpoch"))
+        XCTAssertGreaterThan(number(same, "position"), number(initial, "position"))
+        evidence("native-controls-revealed")
+        try tapWebButton("Pause video")
+        _ = try waitFor("Pause keeps controls available") { $0["videoPlaying"] as? Bool == false }
+        let paused = number(snapshot(), "videoTime")
+        Thread.sleep(forTimeInterval: 9)
+        XCTAssertTrue(snapshot()["controlsVisible"] as? Bool ?? false)
+        XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
+        evidence("native-paused-controls")
+    }
+
+    func testSwipeBelowVideoMinimizesPlayingAndPausedNativeItem() throws {
+        try openSample(); try assertMovingVideo()
+        for paused in [false, true] {
+            if paused {
+                let mini = snapshot()
+                app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: number(mini,"expandX"), dy: number(mini,"expandY"))).tap()
+                _ = try waitFor("Expand before details swipe") { $0["minimized"] as? Bool == false }
+                try tapWebButton("Pause video")
+                _ = try waitFor("Pause before details swipe") { $0["videoPlaying"] as? Bool == false }
+            }
+            let before = try waitFor("Visible heading below video for physical swipe") {
+                self.number($0,"detailsSwipeEndY") - self.number($0,"detailsSwipeY") >= 110 &&
+                self.number($0,"watchScrollTop") <= 3
+            }
+            let native = before["nativePlayer"] as? [String: Any] ?? [:]
+            let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: number(before,"detailsSwipeX"),dy: number(before,"detailsSwipeY")))
+            let end = origin.withOffset(CGVector(dx: number(before,"detailsSwipeX"),dy: number(before,"detailsSwipeEndY")))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            let after = try waitFor("Swipe below picture minimizes existing item", timeout: 10) {
+                $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == !paused
+            }
+            let current = after["nativePlayer"] as? [String: Any] ?? [:]
+            XCTAssertEqual(number(current,"itemEpoch"), number(native,"itemEpoch"))
+            XCTAssertEqual(current["id"] as? String, native["id"] as? String)
+            XCTAssertEqual(number(current,"rate"), number(native,"rate"))
+            if paused { XCTAssertEqual(number(current,"position"), number(native,"position"), accuracy: 0.3) }
+            else { XCTAssertGreaterThanOrEqual(number(current,"position"), number(native,"position") - 0.3) }
+            evidence(paused ? "details-swipe-paused" : "details-swipe-playing")
+        }
     }
 
     func testPausedVideoDoesNotStartOnHome() throws {

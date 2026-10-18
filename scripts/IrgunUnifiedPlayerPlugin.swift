@@ -4,6 +4,7 @@ import AVFoundation
 import AVKit
 import CoreVideo
 import MediaPlayer
+import UIKit
 
 // Android's Media3 timeline uses a thin track and a small round thumb.
 private final class IrgunTimelineSlider: UISlider {
@@ -12,7 +13,6 @@ private final class IrgunTimelineSlider: UISlider {
         return CGRect(x: track.minX, y: bounds.midY - 1, width: track.width, height: 2)
     }
 }
-import UIKit
 
 // One native AVPlayer for ALL iOS lectures, including video, ordinary audio and
 // protected owned audio. One AVPlayerItem survives Audio <-> Video for a shiur.
@@ -20,7 +20,7 @@ import UIKit
 // Audio mode preserves the item and clock (video HLS bandwidth is not guaranteed
 // to drop). A single player layer supports inline, Mini, fullscreen and PiP.
 @objc(IrgunUnifiedPlayerPlugin)
-public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPictureInPictureControllerDelegate {
+public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPictureInPictureControllerDelegate, UIGestureRecognizerDelegate, UIAdaptivePresentationControllerDelegate, UIPopoverPresentationControllerDelegate {
     public static weak var current: IrgunUnifiedPlayerPlugin?
     public func simulatorSnapshot() -> [String: Any] { return snapshot() }
     public let identifier = "IrgunUnifiedPlayerPlugin"
@@ -46,6 +46,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private let videoLayer = AVPlayerLayer()
     private var pipController: AVPictureInPictureController?
     private var controlsOverlay: UIView?
+    private var controlsChrome: UIView?
+    private var controlsVisible = true
+    private var controlsHideTask: DispatchWorkItem?
+    private var controlsTouchActive = false
+    private var controlsMenuOpen = false
+    private var nativeIcons: [String: UIImage] = [:]
     private var nativePlay: UIButton?
     private var nativeQuality: UIButton?
     private var nativeSpeed: UIButton?
@@ -188,6 +194,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     private func placeSurface(_ box: [String: Any]?) {
+        let wasHidden = controlsOverlay?.isHidden ?? true
         if let root = viewer.parent?.view, layout == "full" {
             viewer.view.frame = root.bounds
         } else if let box = box, let rect = frame(from: box), let root = viewer.parent?.view {
@@ -208,6 +215,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         // Mini video is visible but does not steal taps from the WebView's bar.
         viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !overlayOccluded && !(pipController?.isPictureInPictureActive ?? false)
         controlsOverlay?.isHidden = mode != "video" || layout == "mini" || overlayOccluded || (pipController?.isPictureInPictureActive ?? false)
+        if wasHidden && controlsOverlay?.isHidden == false { revealNativeControls() }
+        refreshControlsHideTimer()
         viewer.view.setNeedsLayout()
     }
 
@@ -319,6 +328,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "surfaceWidth": Double(viewer.view.frame.width),
             "surfaceHeight": Double(viewer.view.frame.height),
             "surfaceInteractive": viewer.view.isUserInteractionEnabled,
+            "controlsVisible": controlsVisible && controlsAreAvailable,
             "fullscreenButtonTaps": fullscreenButtonTaps,
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
@@ -341,6 +351,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         if d > 0 { metadata[MPMediaItemPropertyPlaybackDuration] = d }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = metadata
         updateNativeControls()
+        refreshControlsHideTimer()
         notifyListeners("state", data: snapshot())
     }
 
@@ -465,6 +476,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.loadAvailableVariants(url)
             }
             self.active = true
+            self.controlsTouchActive = false
+            self.controlsMenuOpen = false
+            self.revealNativeControls()
             self.installRemoteControls()
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
@@ -572,6 +586,172 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     // Native controls modeled after the Android Media3 layout. Each control
     // manipulates this AVPlayer only; these are not WebKit media commands.
+    private var controlsAreAvailable: Bool {
+        active && mode == "video" && layout != "mini" && !overlayOccluded &&
+        !viewer.view.isHidden && controlsOverlay?.isHidden == false &&
+        !(pipController?.isPictureInPictureActive ?? false)
+    }
+
+    private func cancelControlsHide() {
+        controlsHideTask?.cancel()
+        controlsHideTask = nil
+    }
+
+    private func setControlsVisible(_ visible: Bool) {
+        controlsVisible = visible
+        // Keep the transparent gesture surface alive when the chrome is hidden.
+        // A tap must reveal controls without pausing or replacing the item.
+        controlsChrome?.isHidden = !visible
+        if !visible { cancelControlsHide() }
+    }
+
+    private func revealNativeControls() {
+        cancelControlsHide()
+        setControlsVisible(true)
+        refreshControlsHideTimer()
+    }
+
+    private func refreshControlsHideTimer() {
+        guard controlsAreAvailable else { cancelControlsHide(); return }
+        // Media3 keeps controls on screen while paused. During playback only
+        // user interaction resets the eight-second deadline, never progress.
+        guard playingWanted else { cancelControlsHide(); setControlsVisible(true); return }
+        guard controlsVisible, !controlsTouchActive, !controlsMenuOpen else {
+            cancelControlsHide()
+            return
+        }
+        guard controlsHideTask == nil else { return }
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.controlsHideTask = nil
+            guard self.controlsAreAvailable, self.playingWanted,
+                  !self.controlsTouchActive, !self.controlsMenuOpen else { return }
+            self.setControlsVisible(false)
+            self.publishState()
+        }
+        controlsHideTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: task)
+    }
+
+    @objc private func beginControlsTouch() {
+        controlsTouchActive = true
+        cancelControlsHide()
+    }
+
+    @objc private func endControlsTouch() {
+        controlsTouchActive = false
+        revealNativeControls()
+    }
+
+    @objc private func tapVideoSurface(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended, controlsAreAvailable else { return }
+        if controlsVisible { setControlsVisible(false) }
+        else { revealNativeControls() }
+        publishState()
+    }
+
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var view = touch.view
+        while let current = view, current !== controlsOverlay {
+            if current is UIControl { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    // These paths are the Android app's irgun_*.xml vectors, drawn on the same
+    // 24-unit canvas instead of substituting platform-dependent SF Symbols.
+    private func androidControlImage(_ name: String) -> UIImage {
+        if let image = nativeIcons[name] { return image }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24)).image { _ in
+            let path = UIBezierPath()
+            func line(_ points: [(CGFloat, CGFloat)], close: Bool = false) {
+                guard let first = points.first else { return }
+                path.move(to: CGPoint(x: first.0, y: first.1))
+                for point in points.dropFirst() { path.addLine(to: CGPoint(x: point.0, y: point.1)) }
+                if close { path.close() }
+            }
+            switch name {
+            case "pip":
+                line([(3,5),(21,5),(21,19),(3,19)], close: true)
+                line([(13,11),(19,11),(19,17),(13,17)], close: true)
+            case "mini":
+                line([(3,4),(21,4),(21,17),(3,17)], close: true)
+                line([(8,19),(12,22),(16,19)])
+            case "speed":
+                path.append(UIBezierPath(ovalIn: CGRect(x: 3,y: 3,width: 18,height: 18)))
+                line([(12,7),(12,12),(16,14)])
+            case "shrink":
+                line([(4,9),(9,9),(9,4)]); line([(20,9),(15,9),(15,4)])
+                line([(15,20),(15,15),(20,15)]); line([(9,20),(9,15),(4,15)])
+            default:
+                line([(9,4),(4,4),(4,9)]); line([(15,4),(20,4),(20,9)])
+                line([(20,15),(20,20),(15,20)]); line([(9,20),(4,20),(4,15)])
+            }
+            UIColor.white.setStroke()
+            path.lineWidth = 1.8
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.stroke()
+        }.withRenderingMode(.alwaysTemplate)
+        nativeIcons[name] = image
+        return image
+    }
+
+    // AndroidX Media3's exo_ic_{rewind,forward,play_circle_filled,
+    // pause_circle_filled} vectors. See THIRD_PARTY_NOTICES.md.
+    private func androidTransportImage(_ name: String) -> UIImage {
+        if let image = nativeIcons[name] { return image }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { renderer in
+            let context = renderer.cgContext
+            context.scaleBy(x: 40 / 24, y: 40 / 24)
+            UIColor.white.setFill()
+            if name == "play" || name == "pause" {
+                let path = UIBezierPath(ovalIn: CGRect(x: 2, y: 2, width: 20, height: 20))
+                path.usesEvenOddFillRule = true
+                if name == "pause" {
+                    path.append(UIBezierPath(rect: CGRect(x: 9, y: 8, width: 2, height: 8)))
+                    path.append(UIBezierPath(rect: CGRect(x: 13, y: 8, width: 2, height: 8)))
+                } else {
+                    path.move(to: CGPoint(x: 10, y: 7.5))
+                    path.addLine(to: CGPoint(x: 16, y: 12))
+                    path.addLine(to: CGPoint(x: 10, y: 16.5))
+                    path.close()
+                }
+                path.fill()
+            } else {
+                context.saveGState()
+                context.translateBy(x: 12, y: 12)
+                context.scaleBy(x: name == "forward" ? -0.7 : 0.7, y: 0.7)
+                context.translateBy(x: -12, y: -12)
+                let p = UIBezierPath()
+                p.move(to: CGPoint(x: 12, y: 5))
+                p.addLine(to: CGPoint(x: 12, y: 1))
+                p.addLine(to: CGPoint(x: 7, y: 6))
+                p.addLine(to: CGPoint(x: 12, y: 11))
+                p.addLine(to: CGPoint(x: 12, y: 7))
+                p.addCurve(to: CGPoint(x: 18, y: 13), controlPoint1: CGPoint(x: 15.31, y: 7), controlPoint2: CGPoint(x: 18, y: 9.69))
+                p.addCurve(to: CGPoint(x: 12, y: 19), controlPoint1: CGPoint(x: 18, y: 16.31), controlPoint2: CGPoint(x: 15.31, y: 19))
+                p.addCurve(to: CGPoint(x: 6, y: 13), controlPoint1: CGPoint(x: 8.69, y: 19), controlPoint2: CGPoint(x: 6, y: 16.31))
+                p.addLine(to: CGPoint(x: 4, y: 13))
+                p.addCurve(to: CGPoint(x: 12, y: 21), controlPoint1: CGPoint(x: 4, y: 17.42), controlPoint2: CGPoint(x: 7.58, y: 21))
+                p.addCurve(to: CGPoint(x: 20, y: 13), controlPoint1: CGPoint(x: 16.42, y: 21), controlPoint2: CGPoint(x: 20, y: 17.42))
+                p.addCurve(to: CGPoint(x: 12, y: 5), controlPoint1: CGPoint(x: 20, y: 8.58), controlPoint2: CGPoint(x: 16.42, y: 5))
+                p.close()
+                p.fill()
+                context.restoreGState()
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.alignment = .center
+                ("15" as NSString).draw(in: CGRect(x: 6, y: 10.5, width: 12, height: 7), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 5.5, weight: .bold),
+                    .foregroundColor: UIColor.white, .paragraphStyle: paragraph
+                ])
+            }
+        }.withRenderingMode(.alwaysOriginal)
+        nativeIcons[name] = image
+        return image
+    }
+
     private func button(_ text: String, width: CGFloat, selector: Selector) -> UIButton {
         let result = UIButton(type: .system)
         result.translatesAutoresizingMaskIntoConstraints = false
@@ -580,6 +760,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         result.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
         result.backgroundColor = .clear
         result.addTarget(self, action: selector, for: .touchUpInside)
+        result.addTarget(self, action: #selector(beginControlsTouch), for: .touchDown)
+        result.addTarget(self, action: #selector(endControlsTouch), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         result.widthAnchor.constraint(equalToConstant: width).isActive = true
         // Native iPad fullscreen controls need Apple's minimum 44pt hit target.
         // A 34pt button under the status-bar edge can be reported as hittable
@@ -601,19 +783,27 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             overlay.bottomAnchor.constraint(equalTo: viewer.view.bottomAnchor)
         ])
         controlsOverlay = overlay
+        let chrome = UIView()
+        chrome.translatesAutoresizingMaskIntoConstraints = false
+        chrome.backgroundColor = UIColor(white: 0, alpha: 0.4)
+        overlay.addSubview(chrome)
+        NSLayoutConstraint.activate([
+            chrome.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            chrome.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            chrome.topAnchor.constraint(equalTo: overlay.topAnchor),
+            chrome.bottomAnchor.constraint(equalTo: overlay.bottomAnchor)
+        ])
+        controlsChrome = chrome
 
         let mini = button("⌄", width: 44, selector: #selector(tapMini))
         let pip = button("PiP", width: 44, selector: #selector(tapPiP))
         let quality = button("Auto", width: 72, selector: #selector(tapQuality))
         let speed = button("1×", width: 44, selector: #selector(tapSpeed))
         let full = button("⛶", width: 44, selector: #selector(tapFull))
-        let toolbarStyle = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-        for (control, symbol) in [(mini, "pip.exit"), (pip, "pip.enter"), (speed, "clock")] {
-            if let image = UIImage(systemName: symbol, withConfiguration: toolbarStyle) {
-                control.setImage(image, for: .normal)
-                control.setTitle(nil, for: .normal)
-                control.tintColor = .white
-            }
+        for (control, name) in [(mini, "mini"), (pip, "pip"), (speed, "speed")] {
+            control.setImage(androidControlImage(name), for: .normal)
+            control.setTitle(nil, for: .normal)
+            control.tintColor = .white
         }
         mini.accessibilityIdentifier = "irgun-native-mini"
         mini.accessibilityLabel = "Keep playing at bottom of app"
@@ -635,8 +825,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         top.semanticContentAttribute = .forceLeftToRight
         top.spacing = 0
         top.alignment = .center
-        top.backgroundColor = UIColor(white: 0, alpha: 0.6)
-        overlay.addSubview(top)
+        top.backgroundColor = UIColor(white: 0, alpha: 0.3)
+        chrome.addSubview(top)
         NSLayoutConstraint.activate([
             // Never put the exit-fullscreen button inside the iPad status bar,
             // camera housing, or the iPhone dynamic island.
@@ -648,26 +838,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let back = button("↶ 15", width: 46, selector: #selector(tapBack))
         let play = button("▶", width: 44, selector: #selector(tapPlay))
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
-        // Native SF Symbols stay white and legible over any video frame.
-        let skipSymbolStyle = UIImage.SymbolConfiguration(pointSize: 25, weight: .semibold)
-        if let backSymbol = UIImage(systemName: "gobackward.15", withConfiguration: skipSymbolStyle) {
-            back.setImage(backSymbol, for: .normal)
-            back.setTitle(nil, for: .normal)
-            back.tintColor = .white
-        }
-        if let forwardSymbol = UIImage(systemName: "goforward.15", withConfiguration: skipSymbolStyle) {
-            forward.setImage(forwardSymbol, for: .normal)
-            forward.setTitle(nil, for: .normal)
-            forward.tintColor = .white
-        }
+        back.setImage(androidTransportImage("back"), for: .normal)
+        back.setTitle(nil, for: .normal)
+        forward.setImage(androidTransportImage("forward"), for: .normal)
+        forward.setTitle(nil, for: .normal)
         back.accessibilityIdentifier = "irgun-native-back-15"
         back.accessibilityLabel = "Back 15 seconds"
         play.accessibilityIdentifier = "irgun-native-play"
         forward.accessibilityIdentifier = "irgun-native-forward-15"
         forward.accessibilityLabel = "Forward 15 seconds"
         play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
-        play.backgroundColor = .white
-        play.layer.cornerRadius = 22
+        play.backgroundColor = .clear
         // button() already establishes the actual touch height. Do not
         // install a second conflicting height constraint on UIKit.
         nativePlay = play
@@ -679,7 +860,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         center.alignment = .center
         back.backgroundColor = .clear
         forward.backgroundColor = .clear
-        overlay.addSubview(center)
+        chrome.addSubview(center)
         NSLayoutConstraint.activate([
             center.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
             center.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
@@ -701,6 +882,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         seek.setThumbImage(thumb, for: .highlighted)
         seek.accessibilityIdentifier = "irgun-native-seek"
         seek.semanticContentAttribute = .forceLeftToRight
+        seek.addTarget(self, action: #selector(beginControlsTouch), for: .touchDown)
+        seek.addTarget(self, action: #selector(endControlsTouch), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         seek.addTarget(self, action: #selector(tapSeek), for: .touchUpInside)
         seek.addTarget(self, action: #selector(tapSeek), for: .touchUpOutside)
         // UISlider drag callbacks do not move the thumb when the track is tapped
@@ -732,10 +915,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         bottom.translatesAutoresizingMaskIntoConstraints = false
         bottom.axis = .vertical
         bottom.spacing = 1
-        bottom.backgroundColor = UIColor(white: 0, alpha: 0.45)
+        bottom.backgroundColor = UIColor(white: 0, alpha: 0.3)
         bottom.isLayoutMarginsRelativeArrangement = true
         bottom.layoutMargins = UIEdgeInsets(top: 0, left: 8, bottom: 4, right: 8)
-        overlay.addSubview(bottom)
+        chrome.addSubview(bottom)
         NSLayoutConstraint.activate([
             bottom.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
             bottom.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
@@ -744,11 +927,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
         swipe.direction = .down
+        swipe.delegate = self
         overlay.addGestureRecognizer(swipe)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(tapDoubleSeek(_:)))
         doubleTap.numberOfTapsRequired = 2
         doubleTap.cancelsTouchesInView = false
+        doubleTap.delegate = self
         overlay.addGestureRecognizer(doubleTap)
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(tapVideoSurface(_:)))
+        singleTap.require(toFail: doubleTap)
+        singleTap.require(toFail: swipe)
+        singleTap.delegate = self
+        overlay.addGestureRecognizer(singleTap)
         updateNativeControls()
     }
 
@@ -761,24 +951,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     private func updateNativeControls() {
-        if let playSymbol = UIImage(systemName: playingWanted ? "pause.fill" : "play.fill",
-                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 23, weight: .bold)) {
-            nativePlay?.setImage(playSymbol, for: .normal)
-            nativePlay?.setTitle(nil, for: .normal)
-            nativePlay?.tintColor = UIColor(red: 0.06, green: 0.12, blue: 0.20, alpha: 1)
-        } else {
-            nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
-        }
+        nativePlay?.setImage(androidTransportImage(playingWanted ? "pause" : "play"), for: .normal)
+        nativePlay?.setTitle(nil, for: .normal)
         nativePlay?.accessibilityLabel = playingWanted ? "Pause video" : "Play video"
         nativeFull?.accessibilityLabel = layout == "full" ? "Exit Fullscreen" : "Fullscreen"
         nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
         nativeSpeed?.accessibilityValue = String(format: "%.2g×", Double(playbackRate))
-        let fullSymbol = layout == "full" ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-        if let fullImage = UIImage(systemName: fullSymbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)) {
-            nativeFull?.setImage(fullImage, for: .normal)
-            nativeFull?.setTitle(nil, for: .normal)
-            nativeFull?.tintColor = .white
-        }
+        nativeFull?.setImage(androidControlImage(layout == "full" ? "shrink" : "fullscreen"), for: .normal)
+        nativeFull?.setTitle(nil, for: .normal)
+        nativeFull?.tintColor = .white
         let shownPosition = nativeSeekTarget ?? position()
         nativeElapsed?.text = formatTime(shownPosition)
         nativeDuration?.text = formatTime(duration())
@@ -848,6 +1029,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         if point.x < w * 0.35 { skip(seconds: -15) }
         else if point.x > w * 0.65 { skip(seconds: 15) }
         else { return }
+        revealNativeControls()
         publishState()
     }
 
@@ -868,6 +1050,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         fullscreenButtonTaps += 1
         layout = layout == "full" ? "inline" : "full"
         placeSurface(lastSurfaceRect)
+        revealNativeControls()
         notifyListeners("requestFullscreen", data: ["fullscreen": layout == "full"])
         publishState()
     }
@@ -898,10 +1081,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 guard let self = self else { return }
                 self.playbackRate = Float(value)
                 if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
+                self.resumeControlsAfterMenu()
                 self.publishState()
             })
         }
-        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel))
+        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel) { [weak self] _ in self?.resumeControlsAfterMenu() })
         present(sheet, from:nativeSpeed)
     }
 
@@ -912,19 +1096,36 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         for height in choices {
             sheet.addAction(UIAlertAction(title:height==0 ? "Auto" : "\(height)p",style:.default) { [weak self] _ in
                 self?.applyQuality(height)
+                self?.resumeControlsAfterMenu()
             })
         }
-        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel))
+        sheet.addAction(UIAlertAction(title:"Cancel",style:.cancel) { [weak self] _ in self?.resumeControlsAfterMenu() })
         present(sheet, from:nativeQuality)
     }
 
     private func present(_ alert: UIAlertController, from button: UIButton?) {
         guard viewer.presentedViewController == nil else { return }
+        controlsMenuOpen = true
+        cancelControlsHide()
         if let pop = alert.popoverPresentationController {
             pop.sourceView = button ?? viewer.view
             pop.sourceRect = button?.bounds ?? CGRect(x:10,y:10,width:1,height:1)
+            pop.delegate = self
         }
-        viewer.present(alert,animated:true)
+        viewer.present(alert,animated:true) { [weak self, weak alert] in alert?.presentationController?.delegate = self }
+    }
+
+    private func resumeControlsAfterMenu() {
+        controlsMenuOpen = false
+        revealNativeControls()
+    }
+
+    public func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        resumeControlsAfterMenu()
+    }
+
+    public func popoverPresentationControllerDidDismissPopover(_ popoverPresentationController: UIPopoverPresentationController) {
+        resumeControlsAfterMenu()
     }
 
     private func applyQuality(_ height: Int) {
@@ -1059,6 +1260,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc public func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.generation += 1
+            self.cancelControlsHide()
+            self.controlsTouchActive = false
+            self.controlsMenuOpen = false
+            self.setControlsVisible(true)
             if let pending = self.pendingOpen { pending.reject("Native media stopped") }
             self.pendingOpen = nil
             self.pendingOpenTimeout?.cancel()
@@ -1101,6 +1306,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         if let token = timeObserver { player.removeTimeObserver(token) }
         if let observer = endObserver { NotificationCenter.default.removeObserver(observer) }
         pendingOpenTimeout?.cancel()
+        controlsHideTask?.cancel()
         if let pending = pendingOpen { pending.reject("Native player released") }
         clearRemoteControls()
     }
