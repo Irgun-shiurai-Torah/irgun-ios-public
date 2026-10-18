@@ -9,6 +9,19 @@ let simulatorFrameTime = 0;
 let simulatorLastFrameAt = 0;
 let simulatorFrameRequest = 0;
 const simulatorGestures = [];
+const simulatorTabMotion = [];
+// Observe after the app's root touchmove handler, while the finger is still
+// down. A tab changing on release alone cannot satisfy this observation.
+document.addEventListener('touchmove', () => {
+  const content = document.querySelector('#app .app-shell > .content');
+  const preview = document.querySelector('.ios-swipe-preview');
+  if (!content || !preview) return;
+  const dx = new DOMMatrixReadOnly(getComputedStyle(content).transform).m41;
+  if (Math.abs(dx) < 2) return;
+  simulatorTabMotion.push({at:Date.now(),screen:state.screen,dx,
+    inert:preview.inert,media:preview.querySelectorAll('video,audio,iframe').length});
+  if (simulatorTabMotion.length > 40) simulatorTabMotion.shift();
+}, {passive:true});
 const simulatorWarnings = [];
 const simulatorOriginalWarn = console.warn.bind(console);
 console.warn = (...args) => {
@@ -241,7 +254,7 @@ window.ISTSimulator = {
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen, renderedScreen, tabSwipeReady,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
-      gestures: simulatorGestures, warnings: simulatorWarnings,
+      gestures: simulatorGestures, tabMotion: simulatorTabMotion, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),
       nativeRestoreBusy: Boolean(state.nativeBackgroundRestoreBusy),
       initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),

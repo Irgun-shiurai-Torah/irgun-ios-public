@@ -62,6 +62,7 @@ jobs:
       - name: Build app and add account-test observations
         run: |
           node --test scripts/test_ios_account_observer.mjs
+          node --test scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web
           python3 .github/account-tests/prepare.py web

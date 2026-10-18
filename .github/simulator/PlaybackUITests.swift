@@ -281,13 +281,24 @@ final class PlaybackUITests: XCTestCase {
             let width = web.frame.width
             let start = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.8 : 0.2), dy: y))
             let end = web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: width * (left ? 0.2 : 0.8), dy: y))
+            let beganAt = Date().timeIntervalSince1970 * 1000
             start.press(forDuration: 0.05, thenDragTo: end)
-            _ = try waitFor("Swipe must open \(screen)") {
+            let settled = try waitFor("Swipe must open \(screen)") {
                 $0["screen"] as? String == screen &&
                 $0["renderedScreen"] as? String == screen &&
                 $0["tabSwipeReady"] as? Bool == true
             }
+            if screen != current {
+                let motion = settled["tabMotion"] as? [[String:Any]] ?? []
+                XCTAssertTrue(motion.contains {
+                    self.number($0,"at") >= beganAt && $0["screen"] as? String == current &&
+                    (left ? self.number($0,"dx") < -10 : self.number($0,"dx") > 10) &&
+                    $0["inert"] as? Bool == true && self.number($0,"media") == 0
+                }, "Page must follow the finger before release, with an inert media-free neighbor")
+            }
         }
+        try swipe(true, to: "shiurim")
+        try swipe(false, to: "home") // Immediate reverse must finish normally.
         for screen in ["shiurim", "live", "library", "account"] { try swipe(true, to: screen) }
         try swipe(true, to: "account") // No wrapping past the last tab.
         for screen in ["library", "live", "shiurim", "home"] { try swipe(false, to: screen) }
