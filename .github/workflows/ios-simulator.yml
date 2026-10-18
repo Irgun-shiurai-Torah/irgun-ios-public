@@ -79,7 +79,7 @@ jobs:
           node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
           node --check src/main.js
           node --check src/direct-media.js
-          node --test scripts/test_ios_android_parity.mjs scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs
+          node --test scripts/test_ios_android_parity.mjs scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs scripts/test_ios_sample_selection.mjs
           node scripts/test_ios_reader_mode.mjs
           npm install --no-audit --no-fund
           python3 .github/simulator/prepare.py web

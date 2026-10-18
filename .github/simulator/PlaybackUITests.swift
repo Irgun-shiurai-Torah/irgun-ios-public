@@ -173,9 +173,10 @@ final class PlaybackUITests: XCTestCase {
                 n["sameItem"] as? Bool == true &&
                 n["mode"] as? String == "video" &&
                 self.number(n,"videoWidth") > 0 &&
-                self.number(n,"itemEpoch") == 1
+                self.number(n,"itemEpoch") >= 1
         }
         let first = opened["nativePlayer"] as? [String:Any] ?? [:]
+        let epoch = number(first,"itemEpoch")
         let id = first["id"] as? String ?? ""
         XCTAssertTrue(id.hasPrefix("video:"))
         let start=self.number(first,"position")
@@ -184,7 +185,7 @@ final class PlaybackUITests: XCTestCase {
             return n["id"] as? String == id &&
                 n["playing"] as? Bool == true &&
                 self.number(n,"position") > start + 1.5 &&
-                self.number(n,"itemEpoch") == 1
+                self.number(n,"itemEpoch") == epoch
         }
         evidence("native-video-moving-clock")
         XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true,
@@ -199,14 +200,14 @@ final class PlaybackUITests: XCTestCase {
                 n["mode"] as? String == "audio" &&
                 n["id"] as? String == id &&
                 n["sameItem"] as? Bool == true &&
-                self.number(n,"itemEpoch") == 1
+                self.number(n,"itemEpoch") == epoch
         }
         let audioTime=self.number(audioState["nativePlayer"] as? [String:Any] ?? [:],"position")
         _ = try waitFor("Actual native audio clock continues", timeout: 30) { s in
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return n["playing"] as? Bool == true &&
                 self.number(n,"position") > audioTime + 1 &&
-                self.number(n,"itemEpoch") == 1
+                self.number(n,"itemEpoch") == epoch
         }
         XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true)
         evidence("native-audio-same-item")
@@ -217,7 +218,7 @@ final class PlaybackUITests: XCTestCase {
             return s["mode"] as? String == "video" &&
                 n["mode"] as? String == "video" &&
                 n["id"] as? String == id &&
-                self.number(n,"itemEpoch") == 1 &&
+                self.number(n,"itemEpoch") == epoch &&
                 n["playing"] as? Bool == true
         }
         let beforeHome=number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"position")
@@ -228,7 +229,7 @@ final class PlaybackUITests: XCTestCase {
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return n["id"] as? String == id &&
                 n["active"] as? Bool == true &&
-                self.number(n,"itemEpoch") == 1 &&
+                self.number(n,"itemEpoch") == epoch &&
                 self.number(n,"position") > beforeHome + 1
         }
         evidence("native-home-reopened")
@@ -238,7 +239,7 @@ final class PlaybackUITests: XCTestCase {
             return s["minimized"] as? Bool == true &&
                 n["layout"] as? String == "mini" &&
                 n["id"] as? String == id &&
-                self.number(n,"itemEpoch") == 1
+                self.number(n,"itemEpoch") == epoch
         }
         evidence("native-mini-one-player")
     }

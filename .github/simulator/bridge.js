@@ -1,5 +1,6 @@
 // Appended to main.js ONLY in the unsigned simulator workflow.
 // This exposes observations, not replacement playback behavior.
+import {simulatorHlsSourceReady} from '../.github/simulator/sample-selection.js';
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
 let simulatorError = '';
 let simulatorOpening = false;
@@ -176,7 +177,7 @@ window.ISTSimulator = {
           if (sources?.hls) break;
           if (attempt<2) await new Promise(resolve=>setTimeout(resolve,1500));
         }
-        if (!sources?.hls || !video.hasAudio) continue;
+        if (!sources?.hls || !video.hasAudio || !await simulatorHlsSourceReady(sources.hls)) continue;
         this.selectedSampleId = String(videoId(video));
         await openWatch(videoId(video), 30);
         return;

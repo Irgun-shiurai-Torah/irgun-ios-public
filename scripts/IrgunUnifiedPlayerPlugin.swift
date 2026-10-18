@@ -4,6 +4,14 @@ import AVFoundation
 import AVKit
 import CoreVideo
 import MediaPlayer
+
+// Android's Media3 timeline uses a thin track and a small round thumb.
+private final class IrgunTimelineSlider: UISlider {
+    override func trackRect(forBounds bounds: CGRect) -> CGRect {
+        let track = super.trackRect(forBounds: bounds)
+        return CGRect(x: track.minX, y: bounds.midY - 1, width: track.width, height: 2)
+    }
+}
 import UIKit
 
 // One native AVPlayer for ALL iOS lectures, including video, ordinary audio and
@@ -570,8 +578,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         result.setTitle(text, for: .normal)
         result.setTitleColor(.white, for: .normal)
         result.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
-        result.backgroundColor = UIColor(red: 0.055, green: 0.11, blue: 0.18, alpha: 0.86)
-        result.layer.cornerRadius = 10
+        result.backgroundColor = .clear
         result.addTarget(self, action: selector, for: .touchUpInside)
         result.widthAnchor.constraint(equalToConstant: width).isActive = true
         // Native iPad fullscreen controls need Apple's minimum 44pt hit target.
@@ -597,11 +604,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
         let mini = button("⌄", width: 44, selector: #selector(tapMini))
         let pip = button("PiP", width: 44, selector: #selector(tapPiP))
-        let quality = button("Auto", width: 58, selector: #selector(tapQuality))
-        let speed = button("1×", width: 52, selector: #selector(tapSpeed))
+        let quality = button("Auto", width: 72, selector: #selector(tapQuality))
+        let speed = button("1×", width: 44, selector: #selector(tapSpeed))
         let full = button("⛶", width: 44, selector: #selector(tapFull))
         let toolbarStyle = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-        for (control, symbol) in [(mini, "chevron.down"), (pip, "pip.enter")] {
+        for (control, symbol) in [(mini, "pip.exit"), (pip, "pip.enter"), (speed, "clock")] {
             if let image = UIImage(systemName: symbol, withConfiguration: toolbarStyle) {
                 control.setImage(image, for: .normal)
                 control.setTitle(nil, for: .normal)
@@ -621,23 +628,25 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         nativeSpeed = speed
         nativeFull = full
         nativePiP = pip
-        let top = UIStackView(arrangedSubviews: [mini,pip,quality,speed,full])
+        // Match Android's full-width black toolbar and physical icon order.
+        let top = UIStackView(arrangedSubviews: [UIView(),pip,quality,speed,full,mini])
         top.translatesAutoresizingMaskIntoConstraints = false
         top.axis = .horizontal
         top.semanticContentAttribute = .forceLeftToRight
-        top.spacing = 5
+        top.spacing = 0
         top.alignment = .center
+        top.backgroundColor = UIColor(white: 0, alpha: 0.6)
         overlay.addSubview(top)
         NSLayoutConstraint.activate([
             // Never put the exit-fullscreen button inside the iPad status bar,
             // camera housing, or the iPhone dynamic island.
-            top.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 7),
-            top.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -6),
-            top.leadingAnchor.constraint(greaterThanOrEqualTo: overlay.leadingAnchor, constant: 4)
+            top.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor),
+            top.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            top.leadingAnchor.constraint(equalTo: overlay.leadingAnchor)
         ])
 
         let back = button("↶ 15", width: 46, selector: #selector(tapBack))
-        let play = button("▶", width: 52, selector: #selector(tapPlay))
+        let play = button("▶", width: 44, selector: #selector(tapPlay))
         let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
         // Native SF Symbols stay white and legible over any video frame.
         let skipSymbolStyle = UIImage.SymbolConfiguration(pointSize: 25, weight: .semibold)
@@ -657,7 +666,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         forward.accessibilityIdentifier = "irgun-native-forward-15"
         forward.accessibilityLabel = "Forward 15 seconds"
         play.titleLabel?.font = UIFont.systemFont(ofSize: 20, weight: .bold)
-        play.layer.cornerRadius = 17
+        play.backgroundColor = .white
+        play.layer.cornerRadius = 22
         // button() already establishes the actual touch height. Do not
         // install a second conflicting height constraint on UIKit.
         nativePlay = play
@@ -665,7 +675,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         center.translatesAutoresizingMaskIntoConstraints = false
         center.axis = .horizontal
         center.semanticContentAttribute = .forceLeftToRight
-        center.spacing = 22
+        center.spacing = 18
         center.alignment = .center
         back.backgroundColor = .clear
         forward.backgroundColor = .clear
@@ -677,12 +687,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             center.trailingAnchor.constraint(lessThanOrEqualTo: overlay.trailingAnchor, constant: -5)
         ])
 
-        let seek = UISlider()
+        let seek = IrgunTimelineSlider()
         seek.translatesAutoresizingMaskIntoConstraints = false
         seek.minimumValue = 0
         seek.maximumValue = 1
-        seek.minimumTrackTintColor = UIColor(red: 0.82, green: 0.69, blue: 0.42, alpha: 1)
+        seek.minimumTrackTintColor = .white
         seek.maximumTrackTintColor = UIColor(white: 1, alpha: 0.55)
+        let thumb = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.white.setFill()
+            context.cgContext.fillEllipse(in: CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        seek.setThumbImage(thumb, for: .normal)
+        seek.setThumbImage(thumb, for: .highlighted)
         seek.accessibilityIdentifier = "irgun-native-seek"
         seek.semanticContentAttribute = .forceLeftToRight
         seek.addTarget(self, action: #selector(tapSeek), for: .touchUpInside)
@@ -716,15 +732,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         bottom.translatesAutoresizingMaskIntoConstraints = false
         bottom.axis = .vertical
         bottom.spacing = 1
-        bottom.backgroundColor = UIColor(red: 0.03, green: 0.065, blue: 0.11, alpha: 0.82)
-        bottom.layer.cornerRadius = 12
+        bottom.backgroundColor = UIColor(white: 0, alpha: 0.45)
         bottom.isLayoutMarginsRelativeArrangement = true
-        bottom.layoutMargins = UIEdgeInsets(top: 4, left: 9, bottom: 6, right: 9)
+        bottom.layoutMargins = UIEdgeInsets(top: 0, left: 8, bottom: 4, right: 8)
         overlay.addSubview(bottom)
         NSLayoutConstraint.activate([
-            bottom.leadingAnchor.constraint(equalTo: overlay.leadingAnchor, constant: 9),
-            bottom.trailingAnchor.constraint(equalTo: overlay.trailingAnchor, constant: -9),
-            bottom.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor, constant: -5)
+            bottom.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            bottom.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            bottom.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor)
         ])
 
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
@@ -750,15 +765,20 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 23, weight: .bold)) {
             nativePlay?.setImage(playSymbol, for: .normal)
             nativePlay?.setTitle(nil, for: .normal)
-            nativePlay?.tintColor = .white
+            nativePlay?.tintColor = UIColor(red: 0.06, green: 0.12, blue: 0.20, alpha: 1)
         } else {
             nativePlay?.setTitle(playingWanted ? "Ⅱ" : "▶", for: .normal)
         }
         nativePlay?.accessibilityLabel = playingWanted ? "Pause video" : "Play video"
         nativeFull?.accessibilityLabel = layout == "full" ? "Exit Fullscreen" : "Fullscreen"
         nativeQuality?.setTitle(qualityHeight > 0 ? "\(qualityHeight)p" : "Auto", for: .normal)
-        nativeSpeed?.setTitle(String(format: "%.2g×", Double(playbackRate)), for: .normal)
-        nativeFull?.setTitle(layout == "full" ? "↙" : "⛶", for: .normal)
+        nativeSpeed?.accessibilityValue = String(format: "%.2g×", Double(playbackRate))
+        let fullSymbol = layout == "full" ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+        if let fullImage = UIImage(systemName: fullSymbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold)) {
+            nativeFull?.setImage(fullImage, for: .normal)
+            nativeFull?.setTitle(nil, for: .normal)
+            nativeFull?.tintColor = .white
+        }
         let shownPosition = nativeSeekTarget ?? position()
         nativeElapsed?.text = formatTime(shownPosition)
         nativeDuration?.text = formatTime(duration())
