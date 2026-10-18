@@ -6,6 +6,7 @@ import {buildPaidFolderTree, nextPaidTrackInFolder, paidFolderKey, BELSKY_VOL1_I
   paidFolderPath, parseBelskyIndex, findBelskyQuestions} from '../src/paid-collections.js';
 import {paidFolderTreeHtml, paidQuestionResultsHtml} from '../src/paid-catalog-ui.js';
 import {verifiedPurchasedIds, mergeVerifiedPaidCatalog} from '../src/paid-entitlements.js';
+import {createPaidQuestionController} from '../src/paid-index-controller.js';
 
 const main = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 function appFunction(name) {
@@ -63,6 +64,18 @@ test('restored ownership uses only authenticated server entitlements', () => {
   assert.equal(items[0].owned,true);
   assert.equal(items[1].owned,false);
   assert.equal(items[0].tracks,undefined,'Display restoration does not invent playable media');
+});
+
+test('the question index opens from Library and Account purchase cards', () => {
+  for (const screen of ['library','account','paid']) {
+    const state={screen,paidQuestionIndexLoaded:true};
+    const controller=createPaidQuestionController({state,esc,isHebrew:()=>false,render:()=>{}});
+    controller.open();
+    assert.equal(state.screen,'paid');
+    assert.equal(state.paidQuestionIndexOpen,true);
+    controller.close();
+    assert.equal(state.paidQuestionIndexOpen,false);
+  }
 });
 
 function completionRig({sleep='off',last=false,owned=true}={}) {

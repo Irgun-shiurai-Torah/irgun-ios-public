@@ -3153,3 +3153,65 @@ body.irgun-ios .paid-card { scroll-margin-top:calc(84px + env(safe-area-inset-to
   body.irgun-ios .paid-folder-children { margin-inline-start:6px; padding:8px 5px 10px 9px; }
   body.irgun-ios .paid-folder-count { max-width:72px; font-size:9px; }
 }
+
+/* Match Android collection cards on phone and tablet. */
+body.irgun-ios .paid-grid {
+  align-items:start;
+  gap:14px;
+}
+body.irgun-ios .paid-card {
+  min-width:0;
+  background:#fff;
+  border:1px solid #e2e8f0;
+  border-radius:19px !important;
+  box-shadow:0 9px 28px rgba(15,31,53,.065);
+}
+body.irgun-ios .paid-card.owned { border-color:#d8c59e; }
+body.irgun-ios .paid-card.expanded { grid-column:1/-1; }
+body.irgun-ios .paid-card .paid-cover,
+body.irgun-ios .paid-card .paid-cover-slide {
+  height:190px;
+  min-height:0;
+  aspect-ratio:auto;
+  background:#f8fafc;
+}
+body.irgun-ios .paid-card .paid-cover img,
+body.irgun-ios .paid-card .paid-cover-slide img {
+  object-fit:contain;
+  height:100%;
+  max-height:100%;
+}
+body.irgun-ios .paid-card .paid-body { padding:17px; min-width:0; }
+body.irgun-ios .paid-body h2 { font-size:19px; line-height:1.38; overflow-wrap:anywhere; }
+body.irgun-ios .paid-category {
+  display:inline-flex;
+  align-items:center;
+  padding:6px 9px;
+  margin-bottom:8px;
+  border:1px solid #ead4a4;
+  border-radius:999px;
+  background:#fff8ed;
+  color:#795b27;
+  font-size:10px;
+}
+body.irgun-ios .paid-status-chip { font-size:10px; border-radius:999px; }
+body.irgun-ios .paid-speaker { color:#94703c; font-size:12px; }
+body.irgun-ios .paid-meta { font-size:11px; line-height:1.5; }
+body.irgun-ios .paid-actions { margin-top:13px; }
+body.irgun-ios .paid-actions button { min-height:44px; font-size:12px; }
+body.irgun-ios .paid-primary {
+  background:linear-gradient(180deg,#ddc38d,#c8a46b);
+  color:#172338;
+}
+body.irgun-ios .paid-secondary { background:#f5f7fb; }
+body.irgun-ios .paid-album { overflow:visible; }
+body.irgun-ios .paid-album[hidden] { display:none !important; }
+body.irgun-ios .paid-track-head { margin:16px 0 10px; }
+body.irgun-ios .paid-track-head strong { font-size:15px; color:#15283f; }
+body.irgun-ios .paid-track-head span { font-size:11px; line-height:1.4; }
+
+body.irgun-ios .paid-card { height:auto; }
+body.irgun-ios .paid-card-topline { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:6px; margin-bottom:8px; }
+body.irgun-ios .paid-card-topline .paid-category { margin-bottom:0; }
+body.irgun-ios .paid-status-chip { padding:6px 9px; color:#526579; background:#edf2f7; font-weight:750; }
+body.irgun-ios .paid-status-chip.owned { color:#176c62; background:#e4f5ee; }

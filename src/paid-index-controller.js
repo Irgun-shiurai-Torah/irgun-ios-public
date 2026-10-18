@@ -31,6 +31,9 @@ export function createPaidQuestionController({state,CapacitorHttp,render,esc,isH
     }
   }
   function open() {
+    // Cards also appear under Library and Account purchases. The index has
+    // its own collection-page view, so enter it from any of those surfaces.
+    state.screen='paid';
     state.paidQuestionIndexOpen=true;
     state.paidQuestionSearch='';
     state.paidQuestionDisc='all';
