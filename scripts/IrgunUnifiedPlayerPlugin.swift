@@ -49,6 +49,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var controlsChrome: UIView?
     private var controlsVisible = true
     private var controlsHideTask: DispatchWorkItem?
+    private var controlsHideDeadline: TimeInterval = 0
     private var controlsTouchActive = false
     private var controlsMenuOpen = false
     private var nativeIcons: [String: UIImage] = [:]
@@ -335,6 +336,26 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         #if targetEnvironment(simulator)
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
+        data["controlsHideRemaining"] = max(0, controlsHideDeadline - ProcessInfo.processInfo.systemUptime)
+        // Observe real UIKit geometry for physical test taps. Accessibility
+        // queries can outlast Media3's eight-second timeout on a large iPad
+        // catalogue; these observations never reveal or activate a control.
+        var buttons: [String: [String: Any]] = [:]
+        func observeButtons(_ view: UIView) {
+            if let button = view as? UIButton, let id = button.accessibilityIdentifier,
+               let root = viewer.parent?.view {
+                let rect = button.convert(button.bounds, to: root)
+                let point = CGPoint(x: rect.midX, y: rect.midY)
+                let hit = root.hitTest(point, with: nil)
+                buttons[id] = ["x": Double(point.x), "y": Double(point.y),
+                               "width": Double(rect.width), "height": Double(rect.height),
+                               "hittable": controlsAreAvailable && controlsVisible && button.isEnabled &&
+                                    (hit === button || hit?.isDescendant(of: button) == true)]
+            }
+            for child in view.subviews { observeButtons(child) }
+        }
+        if let chrome = controlsChrome { observeButtons(chrome) }
+        data["buttons"] = buttons
         #endif
         return data
     }
@@ -595,6 +616,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private func cancelControlsHide() {
         controlsHideTask?.cancel()
         controlsHideTask = nil
+        controlsHideDeadline = 0
     }
 
     private func setControlsVisible(_ visible: Bool) {
@@ -624,12 +646,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let task = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.controlsHideTask = nil
+            self.controlsHideDeadline = 0
             guard self.controlsAreAvailable, self.playingWanted,
                   !self.controlsTouchActive, !self.controlsMenuOpen else { return }
             self.setControlsVisible(false)
             self.publishState()
         }
         controlsHideTask = task
+        controlsHideDeadline = ProcessInfo.processInfo.systemUptime + 8
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: task)
     }
 
@@ -702,9 +726,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     // pause_circle_filled} vectors. See THIRD_PARTY_NOTICES.md.
     private func androidTransportImage(_ name: String) -> UIImage {
         if let image = nativeIcons[name] { return image }
-        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { renderer in
+        // Media3 fits play/pause into a 52pt target with 2pt padding; skip
+        // artwork fills its 52pt background. Keep the amount text at 9pt.
+        let size: CGFloat = name == "play" || name == "pause" ? 48 : 52
+        let image = UIGraphicsImageRenderer(size: CGSize(width: size, height: size)).image { renderer in
             let context = renderer.cgContext
-            context.scaleBy(x: 40 / 24, y: 40 / 24)
+            context.scaleBy(x: size / 24, y: size / 24)
             UIColor.white.setFill()
             if name == "play" || name == "pause" {
                 let path = UIBezierPath(ovalIn: CGRect(x: 2, y: 2, width: 20, height: 20))
@@ -743,7 +770,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.alignment = .center
                 ("15" as NSString).draw(in: CGRect(x: 6, y: 10.5, width: 12, height: 7), withAttributes: [
-                    .font: UIFont.systemFont(ofSize: 5.5, weight: .bold),
+                    .font: UIFont.systemFont(ofSize: 9 * 24 / size, weight: .bold),
                     .foregroundColor: UIColor.white, .paragraphStyle: paragraph
                 ])
             }
@@ -752,7 +779,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         return image
     }
 
-    private func button(_ text: String, width: CGFloat, selector: Selector) -> UIButton {
+    private func button(_ text: String, width: CGFloat, height: CGFloat = 44, selector: Selector) -> UIButton {
         let result = UIButton(type: .system)
         result.translatesAutoresizingMaskIntoConstraints = false
         result.setTitle(text, for: .normal)
@@ -766,7 +793,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         // Native iPad fullscreen controls need Apple's minimum 44pt hit target.
         // A 34pt button under the status-bar edge can be reported as hittable
         // by XCTest without UIKit receiving its touchUpInside action.
-        result.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        result.heightAnchor.constraint(equalToConstant: height).isActive = true
         return result
     }
 
@@ -785,7 +812,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         controlsOverlay = overlay
         let chrome = UIView()
         chrome.translatesAutoresizingMaskIntoConstraints = false
-        chrome.backgroundColor = UIColor(white: 0, alpha: 0.4)
+        chrome.backgroundColor = UIColor(white: 0, alpha: 0.375)
         overlay.addSubview(chrome)
         NSLayoutConstraint.activate([
             chrome.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
@@ -825,7 +852,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         top.semanticContentAttribute = .forceLeftToRight
         top.spacing = 0
         top.alignment = .center
-        top.backgroundColor = UIColor(white: 0, alpha: 0.3)
+        top.backgroundColor = UIColor(white: 0, alpha: 0.6)
         chrome.addSubview(top)
         NSLayoutConstraint.activate([
             // Never put the exit-fullscreen button inside the iPad status bar,
@@ -835,9 +862,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             top.leadingAnchor.constraint(equalTo: overlay.leadingAnchor)
         ])
 
-        let back = button("↶ 15", width: 46, selector: #selector(tapBack))
-        let play = button("▶", width: 44, selector: #selector(tapPlay))
-        let forward = button("15 ↷", width: 46, selector: #selector(tapForward))
+        let back = button("↶ 15", width: 52, height: 52, selector: #selector(tapBack))
+        let play = button("▶", width: 52, height: 52, selector: #selector(tapPlay))
+        let forward = button("15 ↷", width: 52, height: 52, selector: #selector(tapForward))
         back.setImage(androidTransportImage("back"), for: .normal)
         back.setTitle(nil, for: .normal)
         forward.setImage(androidTransportImage("forward"), for: .normal)
@@ -856,7 +883,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         center.translatesAutoresizingMaskIntoConstraints = false
         center.axis = .horizontal
         center.semanticContentAttribute = .forceLeftToRight
-        center.spacing = 18
+        center.spacing = 10
         center.alignment = .center
         back.backgroundColor = .clear
         forward.backgroundColor = .clear
@@ -874,9 +901,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         seek.maximumValue = 1
         seek.minimumTrackTintColor = .white
         seek.maximumTrackTintColor = UIColor(white: 1, alpha: 0.55)
-        let thumb = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+        let thumb = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 10)).image { context in
             UIColor.white.setFill()
-            context.cgContext.fillEllipse(in: CGRect(x: 0, y: 0, width: 8, height: 8))
+            context.cgContext.fillEllipse(in: CGRect(x: 0, y: 0, width: 10, height: 10))
         }
         seek.setThumbImage(thumb, for: .normal)
         seek.setThumbImage(thumb, for: .highlighted)
@@ -895,7 +922,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
         func timeLabel() -> UILabel {
             let label=UILabel()
-            label.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+            label.font = UIFont.monospacedDigitSystemFont(ofSize: 14, weight: .bold)
             label.textColor = .white
             label.text = "00:00"
             return label

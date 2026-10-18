@@ -150,6 +150,7 @@ jobs:
             -only-testing:SimulatorUITests/PlaybackUITests/testNativeSingleAVPlayerVideoAudioMiniHome \
             -only-testing:SimulatorUITests/PlaybackUITests/testNativeControlsHideAndReturnOnTap \
             -only-testing:SimulatorUITests/PlaybackUITests/testSwipeBelowVideoMinimizesPlayingAndPausedNativeItem \
+            -only-testing:SimulatorUITests/PlaybackUITests/testSwipeDownMinimizesPlayingAndPausedVideo \
             test 2>&1 | tee simulator-results/xcodebuild.log
 
       - name: Collect screenshots and simulator logs

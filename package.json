@@ -1,7 +1,7 @@
 {
   "name": "irgun-shiurai-torah-app",
   "private": true,
-  "version": "1.2.77-ios",
+  "version": "1.2.78-ios",
   "type": "module",
   "scripts": {
     "dev": "vite",

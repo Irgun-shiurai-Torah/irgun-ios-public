@@ -101,18 +101,32 @@ final class PlaybackUITests: XCTestCase {
                 "Keep playing at bottom of app": "irgun-native-mini"
             ]
             if let identifier = mappings[label] {
-                if native["controlsVisible"] as? Bool == false && native["layout"] as? String != "mini" {
+                // Use the actual, currently hittable UIKit button bounds.
+                // An AX query plus .tap() can take longer than the eight-second
+                // controller lifetime on iPad, even after hittable was true.
+                if native["controlsVisible"] as? Bool == true && native["playRequested"] as? Bool == true &&
+                   number(native,"controlsHideRemaining") < 5 {
+                    videoPoint(0.5, 0.25).tap()
+                    _ = try waitFor("Picture tap refreshes expiring control display", timeout: 5) { s in
+                        let n = s["nativePlayer"] as? [String: Any] ?? [:]
+                        // The timer may expire while XCTest delivers the tap;
+                        // in that case the same tap already reveals a fresh UI.
+                        return n["controlsVisible"] as? Bool == false || self.number(n,"controlsHideRemaining") >= 6
+                    }
+                }
+                let current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                if current["controlsVisible"] as? Bool == false && current["layout"] as? String != "mini" {
                     videoPoint(0.5, 0.25).tap()
                     _ = try waitFor("Tap reveals native controls", timeout: 5) { $0["controlsVisible"] as? Bool == true }
                 }
-                let control = app.buttons[identifier]
-                let ready = NSPredicate(format:"exists == true AND hittable == true")
-                guard XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:control)],timeout:20) == .completed else {
-                    evidence("missing-native-control-\(label)")
-                    XCTFail("Native AVPlayer control unavailable: \(label)")
-                    throw Failure.timedOut(label)
+                let ready = try waitFor("Visible native button: \(label)", timeout: 5) { s in
+                    let n = s["nativePlayer"] as? [String: Any] ?? [:]
+                    let buttons = n["buttons"] as? [String: [String: Any]] ?? [:]
+                    return n["controlsVisible"] as? Bool == true && buttons[identifier]?["hittable"] as? Bool == true
                 }
-                control.tap()
+                let buttons = (ready["nativePlayer"] as? [String: Any])?["buttons"] as? [String: [String: Any]] ?? [:]
+                let point = buttons[identifier] ?? [:]
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: number(point,"x"),dy: number(point,"y"))).tap()
                 return
             }
         }
@@ -588,7 +602,9 @@ final class PlaybackUITests: XCTestCase {
 
     func testSwipeDownMinimizesPlayingAndPausedVideo() throws {
         try openSample(); try assertMovingVideo()
-        videoPoint(0.5,0.15).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        // Start on the picture, below the 44pt toolbar. Toolbar buttons own
+        // their touches just as they do on Android.
+        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
         _ = try waitFor("Swipe must minimize playing video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
         let s=snapshot()
@@ -596,7 +612,7 @@ final class PlaybackUITests: XCTestCase {
         _ = try waitFor("Expand before paused swipe") { $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause before swipe") { $0["videoPlaying"] as? Bool == false }
-        videoPoint(0.5,0.15).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
         _ = try waitFor("Swipe must minimize paused video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
         Thread.sleep(forTimeInterval: 1)
         XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true); evidence("swipe-minimize")
