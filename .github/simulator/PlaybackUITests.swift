@@ -63,7 +63,11 @@ final class PlaybackUITests: XCTestCase {
     private func waitFor(_ message: String, timeout: TimeInterval = 40,
                          condition: @escaping ([String: Any]) -> Bool) throws -> [String: Any] {
         let predicate = NSPredicate { _, _ in condition(self.snapshot()) }
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: app)
+        // This predicate reads the simulator's loopback observations. Giving
+        // XCTest the application here makes each false poll collect a large
+        // accessibility debug snapshot, which can stall the app's main queue
+        // past the video controller's eight-second deadline on iPad.
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: NSObject())
         if XCTWaiter.wait(for: [expectation], timeout: timeout) != .completed {
             evidence("failure-\(message)")
             XCTFail("\(message). Last state: \(snapshot())")
