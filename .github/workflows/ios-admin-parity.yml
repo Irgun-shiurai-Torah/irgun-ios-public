@@ -1,0 +1,42 @@
+name: iOS Website Admin Parity QA
+
+on:
+  pull_request:
+    paths:
+      - 'src/admin-*'
+      - 'src/main.js'
+      - 'package.json'
+      - 'scripts/test_ios_admin_website_parity.mjs'
+      - '.github/workflows/ios-admin-parity.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/admin-*'
+      - 'src/main.js'
+      - 'package.json'
+      - 'scripts/test_ios_admin_website_parity.mjs'
+      - '.github/workflows/ios-admin-parity.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: Protected iOS Admin controls and web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify protected admin workflows
+        run: |
+          node --check src/main.js
+          node --check src/admin-website-parity.js
+          node --check src/admin-city-panel.js
+          node --test scripts/test_ios_admin_website_parity.mjs
+      - name: Bundle complete iOS web UI
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
