@@ -638,7 +638,7 @@ final class PlaybackUITests: XCTestCase {
                                         self.number(before,"position") - 1.5,
                                         "Quality selection must not rewind playback")
             XCTAssertLessThanOrEqual(self.number(after,"position"),
-                                     self.number(before,"position") + Date().timeIntervalSince(start) *
+                                     self.number(before,"position") + Date().timeIntervalSince(started) *
                                      max(1, self.number(after,"rate")) + 6,
                                      "Quality selection must not jump ahead")
         }
