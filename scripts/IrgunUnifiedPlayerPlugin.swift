@@ -168,7 +168,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var pipController: AVPictureInPictureController?
     private var controlsOverlay: UIView?
     private var controlsChrome: UIView?
-    private var controlsVisible = true
+    private var controlsVisible = false
     private var controlsHideTask: DispatchWorkItem?
     private var controlsHideDeadline: TimeInterval = 0
     private var controlsTouchActive = false
@@ -340,7 +340,6 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     private func placeSurface(_ box: [String: Any]?) {
-        let wasHidden = controlsOverlay?.isHidden ?? true
         if let root = viewer.parent?.view, layout == "full" {
             viewer.view.frame = root.bounds
         } else if let box = box, let rect = frame(from: box), let root = viewer.parent?.view {
@@ -361,7 +360,6 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         // Mini video is visible but does not steal taps from the WebView's bar.
         viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !overlayOccluded && !(pipController?.isPictureInPictureActive ?? false)
         controlsOverlay?.isHidden = mode != "video" || layout == "mini" || overlayOccluded || (pipController?.isPictureInPictureActive ?? false)
-        if wasHidden && controlsOverlay?.isHidden == false { revealNativeControls() }
         refreshControlsHideTimer()
         viewer.view.setNeedsLayout()
     }
@@ -661,7 +659,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.active = true
             self.controlsTouchActive = false
             self.controlsMenuOpen = false
-            self.revealNativeControls()
+            // Match Android's unobstructed initial picture: only a real tap reveals controls.
+            self.setControlsVisible(false)
             self.installRemoteControls()
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
@@ -737,6 +736,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.pipController?.stopPictureInPicture()
             }
             self.mode = next
+            // Re-entering Video from Audio must not expose controls automatically.
+            self.setControlsVisible(false)
             self.placeSurface(self.lastSurfaceRect)
             self.publishState()
             call.resolve(self.snapshot())
@@ -757,6 +758,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 }
                 self.isPiPRequested = false
                 self.notifyListeners("pipState", data:["active":false,"reason":"mini"])
+                self.setControlsVisible(false)
             }
             self.layout = next
             if let rect = call.getObject("rect") { self.lastSurfaceRect = rect }
@@ -797,9 +799,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     private func refreshControlsHideTimer() {
         guard controlsAreAvailable else { cancelControlsHide(); return }
-        // Media3 keeps controls on screen while paused. During playback only
-        // user interaction resets the eight-second deadline, never progress.
-        guard playingWanted else { cancelControlsHide(); setControlsVisible(true); return }
+        // Playing and paused Video use the same eight-second inactivity timeout.
+        // A user tap reveals controls; progress updates never extend that timeout.
         guard controlsVisible, !controlsTouchActive, !controlsMenuOpen else {
             cancelControlsHide()
             return
@@ -809,7 +810,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             guard let self = self else { return }
             self.controlsHideTask = nil
             self.controlsHideDeadline = 0
-            guard self.controlsAreAvailable, self.playingWanted,
+            guard self.controlsAreAvailable,
                   !self.controlsTouchActive, !self.controlsMenuOpen else { return }
             self.setControlsVisible(false)
             self.publishState()
@@ -846,7 +847,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         // eight-second playback chrome timeout hides the controls mid-gesture.
         // Button touches still belong to the buttons (guarded above).
         if let tap = gestureRecognizer as? UITapGestureRecognizer,
-           tap.numberOfTapsRequired == 2, controlsAreAvailable, playingWanted {
+           tap.numberOfTapsRequired == 2, controlsAreAvailable {
             cancelControlsHide()
         }
         return true
@@ -982,6 +983,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let chrome = UIView()
         chrome.translatesAutoresizingMaskIntoConstraints = false
         chrome.backgroundColor = UIColor(white: 0, alpha: 0.375)
+        chrome.isHidden = true
         overlay.addSubview(chrome)
         NSLayoutConstraint.activate([
             chrome.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
@@ -1618,7 +1620,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.cancelControlsHide()
             self.controlsTouchActive = false
             self.controlsMenuOpen = false
-            self.setControlsVisible(true)
+            self.setControlsVisible(false)
             if let pending = self.pendingOpen { pending.reject("Native media stopped") }
             self.pendingOpen = nil
             self.pendingOpenTimeout?.cancel()
