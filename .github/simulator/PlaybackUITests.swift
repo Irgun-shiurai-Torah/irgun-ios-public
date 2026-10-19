@@ -610,10 +610,40 @@ final class PlaybackUITests: XCTestCase {
         videoPoint(0.8,0.4).doubleTap()
         _ = try waitFor("Double tap while playing must keep playing", timeout: 6) { self.number($0,"videoTime")>playing+13 && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
-        let backward=number(snapshot(),"videoTime")
+        let beforeBackward = snapshot()
+        let nativeBefore = beforeBackward["nativePlayer"] as? [String:Any] ?? [:]
+        let previousDoubleTaps = number(nativeBefore,"doubleTapCount")
+        let backward = number(beforeBackward,"videoTime")
         videoPoint(0.2,0.4).doubleTap()
-        _ = try waitFor("Left double tap while playing must seek back 15 seconds and keep playing", timeout: 6) {
-            abs(self.number($0,"videoTime") - backward + 15)<3 && $0["videoPlaying"] as? Bool == true
+        if nativeBefore["active"] as? Bool == true {
+            // A playing clock advances during XCTest's touch delivery and AX
+            // waits. Verify the actual UIKit recognizer and 15-second AVPlayer
+            // seek against its own timestamp, not a stale pre-gesture clock.
+            let observed = try waitFor("Native left double tap must reach the AVPlayer", timeout: 15) { s in
+                let n = s["nativePlayer"] as? [String:Any] ?? [:]
+                return self.number(n,"doubleTapCount") > previousDoubleTaps &&
+                    self.number(n,"doubleTapOffset") == -15
+            }
+            let seek = observed["nativePlayer"] as? [String:Any] ?? [:]
+            let from = number(seek,"doubleTapFrom")
+            let target = number(seek,"doubleTapTarget")
+            XCTAssertEqual(target, max(0,from-15), accuracy: 0.25,
+                           "The native recognizer must request a full 15-second rewind")
+            _ = try waitFor("Native left double tap must really rewind and keep playing", timeout: 20) { s in
+                let n = s["nativePlayer"] as? [String:Any] ?? [:]
+                let age = self.number(n,"doubleTapAge")
+                let rate = max(0.75,self.number(n,"rate"))
+                let current = self.number(n,"position")
+                return n["doubleTapCompleted"] as? Bool == true &&
+                    n["playing"] as? Bool == true && s["videoPlaying"] as? Bool == true &&
+                    current >= target - 2 &&
+                    current <= target + age * rate + 3 &&
+                    current < from + age * rate - 8
+            }
+        } else {
+            _ = try waitFor("Left double tap while playing must seek back 15 seconds and keep playing", timeout: 10) {
+                abs(self.number($0,"videoTime") - backward + 15)<3 && $0["videoPlaying"] as? Bool == true
+            }
         }
         try assertMovingVideo(); evidence("double-tap-seek")
     }

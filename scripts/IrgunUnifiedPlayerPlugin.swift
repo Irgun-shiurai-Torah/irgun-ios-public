@@ -73,6 +73,13 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
+    // Simulator-only evidence for actual native double-tap delivery and AVPlayer seeking.
+    private var doubleTapSeekCount = 0
+    private var doubleTapSeekOffset = 0.0
+    private var doubleTapSeekFrom = 0.0
+    private var doubleTapSeekTarget = 0.0
+    private var doubleTapSeekAt: TimeInterval = 0
+    private var doubleTapSeekCompleted = false
     #endif
     private var itemID = ""
     private var itemURL = ""
@@ -259,9 +266,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
     }
 
-    private func skip(seconds: Double) {
-        let target = max(0, (player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0) + seconds)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+    @discardableResult
+    private func skip(seconds: Double, completion: ((Bool) -> Void)? = nil) -> (from: Double, target: Double) {
+        let from = position()
+        let target = max(0, from + seconds)
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { finished in
+            if let completion = completion {
+                DispatchQueue.main.async { completion(finished) }
+            }
+        }
+        return (from, target)
     }
 
     private func clearRemoteControls() {
@@ -337,6 +351,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
         data["controlsHideRemaining"] = max(0, controlsHideDeadline - ProcessInfo.processInfo.systemUptime)
+        data["doubleTapCount"] = doubleTapSeekCount
+        data["doubleTapOffset"] = doubleTapSeekOffset
+        data["doubleTapFrom"] = doubleTapSeekFrom
+        data["doubleTapTarget"] = doubleTapSeekTarget
+        data["doubleTapAge"] = doubleTapSeekAt > 0 ? max(0, ProcessInfo.processInfo.systemUptime - doubleTapSeekAt) : 0
+        data["doubleTapCompleted"] = doubleTapSeekCompleted
         // Observe real UIKit geometry for physical test taps. Accessibility
         // queries can outlast Media3's eight-second timeout on a large iPad
         // catalogue; these observations never reveal or activate a control.
@@ -679,6 +699,13 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         while let current = view, current !== controlsOverlay {
             if current is UIControl { return false }
             view = current.superview
+        }
+        // An in-flight double tap must not lose its touch target when the
+        // eight-second playback chrome timeout hides the controls mid-gesture.
+        // Button touches still belong to the buttons (guarded above).
+        if let tap = gestureRecognizer as? UITapGestureRecognizer,
+           tap.numberOfTapsRequired == 2, controlsAreAvailable, playingWanted {
+            cancelControlsHide()
         }
         return true
     }
@@ -1047,15 +1074,31 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     @objc private func tapDoubleSeek(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.state == .ended else { return }
+        guard recognizer.state == .ended, controlsAreAvailable else { return }
         let point = recognizer.location(in: viewer.view)
         let w = viewer.view.bounds.width
         // Double-tap skipping is for the picture, never the progress bar.
         guard point.y > viewer.view.bounds.height * 0.16 &&
               point.y < viewer.view.bounds.height * 0.80 else { return }
-        if point.x < w * 0.35 { skip(seconds: -15) }
-        else if point.x > w * 0.65 { skip(seconds: 15) }
+        let offset: Double
+        if point.x < w * 0.35 { offset = -15 }
+        else if point.x > w * 0.65 { offset = 15 }
         else { return }
+        #if targetEnvironment(simulator)
+        doubleTapSeekCount += 1
+        let event = doubleTapSeekCount
+        doubleTapSeekCompleted = false
+        let requested = skip(seconds: offset) { [weak self] finished in
+            guard let self = self, self.doubleTapSeekCount == event else { return }
+            self.doubleTapSeekCompleted = finished
+        }
+        doubleTapSeekOffset = offset
+        doubleTapSeekFrom = requested.from
+        doubleTapSeekTarget = requested.target
+        doubleTapSeekAt = ProcessInfo.processInfo.systemUptime
+        #else
+        skip(seconds: offset)
+        #endif
         revealNativeControls()
         publishState()
     }
