@@ -1,0 +1,52 @@
+    // Shared by account and extended suites. All entry and submission use
+    // native XCTest keyboard/taps; observations only verify real form state.
+    private func nativeEnterLoginField(_ key: String, _ value: String) throws {
+        let password = key == "password"
+        let focusedKey = password ? "authPasswordFocused" : "authEmailFocused"
+        let lengthKey = password ? "authPasswordLength" : "authEmailLength"
+        for _ in 0..<3 {
+            let field = password ? app.webViews.secureTextFields.firstMatch : app.webViews.textFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout:10),"Real native login field must exist")
+            field.tap()
+            _ = try waitFor("Native login field receives focus before keyboard entry",timeout:15) {
+                ($0["account"] as? [String:Any])?[focusedKey] as? Bool == true
+            }
+            _ = app.keyboards.firstMatch.waitForExistence(timeout:2)
+            let account = snapshot()["account"] as? [String:Any] ?? [:]
+            let deleteCount = max(Int(number(account,lengthKey)),value.utf16.count)+8
+            field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:deleteCount))
+            _ = try waitFor("Native keyboard clears only the focused login field",timeout:10) {
+                self.number($0["account"] as? [String:Any] ?? [:],lengthKey) == 0
+            }
+            field.typeText(value)
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                let observed = snapshot()["account"] as? [String:Any] ?? [:]
+                let lengthMatches = Int(number(observed,lengthKey)) == value.utf16.count
+                let emailMatches = password || (field.value as? String ?? "")
+                    .trimmingCharacters(in:.whitespacesAndNewlines).lowercased() == value
+                    .trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
+                if lengthMatches && emailMatches { return }
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+        }
+        XCTFail("Native credential entry did not match the approved field shape; no login was submitted")
+        throw Failure.timedOut("Native credential entry")
+    }
+
+    private func nativeSubmitLoginForm() throws {
+        let before = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
+        var submitted = false
+        // Do not press Go/Return while credentials are still being entered or
+        // repaired: a premature request clears the secure field on rerender.
+        for label in ["Go","Log In","Return","return"] {
+            let key = app.keyboards.buttons[label].firstMatch
+            if key.exists && key.isHittable { key.tap();submitted=true;break }
+        }
+        if !submitted { try tapWebButton("Login") }
+        _ = try waitFor("The real native login form must submit",timeout:20) {
+            let account = $0["account"] as? [String:Any] ?? [:]
+            return account["loggedIn"] as? Bool == true ||
+                self.number(account,"authSubmitCount") > before
+        }
+    }
