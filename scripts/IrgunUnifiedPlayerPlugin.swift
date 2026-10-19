@@ -1583,6 +1583,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         pipResumeWanted = false
         pipPausedByUser = false
         isPiPRequested = false
+        // Return to inline playback with controls hidden, matching initial video open.
+        setControlsVisible(false)
         placeSurface(lastSurfaceRect)
         // AVKit may pause while leaving system PiP. Resume the SAME AVPlayerItem
         // only when video had been playing and no explicit pause was requested.
