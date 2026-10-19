@@ -724,7 +724,11 @@ final class PlaybackUITests: XCTestCase {
         try assertMovingVideo()
         let s=snapshot()
         app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(s,"expandX"),dy:number(s,"expandY"))).tap()
-        _ = try waitFor("Expand before paused swipe") { $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true }
+        _ = try waitFor("Expand before paused swipe with native controls hidden") { state in
+            let native = state["nativePlayer"] as? [String: Any] ?? [:]
+            return state["minimized"] as? Bool == false &&
+                (native["active"] as? Bool != true || state["controlsVisible"] as? Bool == false)
+        }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause before swipe") { $0["videoPlaying"] as? Bool == false }
         videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
@@ -734,19 +738,18 @@ final class PlaybackUITests: XCTestCase {
     }
 
     func testNativeControlsHideAndReturnOnTap() throws {
-        try openSample(); try assertMovingVideo()
-        let initial = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-        guard initial["active"] as? Bool == true else { throw XCTSkip("Native AVPlayer scenario") }
-        // Establish a fresh inactivity window through actual controls. Media
-        // loading, frame checks and evidence capture can consume the original
-        // eight seconds before this test starts observing the timeout.
-        try tapWebButton("Pause video")
-        _ = try waitFor("Pause establishes visible controls") {
-            $0["videoPlaying"] as? Bool == false && $0["controlsVisible"] as? Bool == true
+        try openSample()
+        let opened = try waitFor("Native video starts without overlaid controls", timeout: 12) { state in
+            let native = state["nativePlayer"] as? [String: Any] ?? [:]
+            return native["active"] as? Bool == true &&
+                native["mode"] as? String == "video" &&
+                native["controlsVisible"] as? Bool == false
         }
-        try tapWebButton("Play video")
-        _ = try waitFor("Play starts a fresh visible-control window", timeout: 5) {
-            $0["videoPlaying"] as? Bool == true && $0["controlsVisible"] as? Bool == true
+        let initial = opened["nativePlayer"] as? [String: Any] ?? [:]
+        try assertMovingVideo()
+        videoPoint(0.5, 0.25).tap()
+        _ = try waitFor("A picture tap reveals controls during playback", timeout: 5) {
+            $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
         }
         _ = try waitFor("Playing controls hide after eight seconds", timeout: 12) {
             $0["controlsVisible"] as? Bool == false && $0["videoPlaying"] as? Bool == true
@@ -761,12 +764,20 @@ final class PlaybackUITests: XCTestCase {
         XCTAssertGreaterThan(number(same, "position"), number(initial, "position"))
         evidence("native-controls-revealed")
         try tapWebButton("Pause video")
-        _ = try waitFor("Pause keeps controls available") { $0["videoPlaying"] as? Bool == false }
+        _ = try waitFor("Video pauses without losing its position", timeout: 5) {
+            $0["videoPlaying"] as? Bool == false
+        }
         let paused = number(snapshot(), "videoTime")
-        Thread.sleep(forTimeInterval: 9)
-        XCTAssertTrue(snapshot()["controlsVisible"] as? Bool ?? false)
+        _ = try waitFor("Paused controls also auto-hide after eight seconds", timeout: 12) {
+            $0["controlsVisible"] as? Bool == false && $0["videoPlaying"] as? Bool == false
+        }
         XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
-        evidence("native-paused-controls")
+        evidence("native-paused-controls-hidden")
+        videoPoint(0.5, 0.25).tap()
+        _ = try waitFor("Tap reveals paused controls without playing", timeout: 5) {
+            $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == false
+        }
+        XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
     }
 
     func testSwipeBelowVideoMinimizesPlayingAndPausedNativeItem() throws {
@@ -851,14 +862,22 @@ final class PlaybackUITests: XCTestCase {
             app.webViews.firstMatch.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: x, dy: y)).tap()
         }
-        _ = try waitFor("Expanded player controls must return") {
-            $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true
+        let expanded = try waitFor("Expanded player keeps controls hidden until tapped") { state in
+            let native = state["nativePlayer"] as? [String: Any] ?? [:]
+            return state["minimized"] as? Bool == false &&
+                (native["active"] as? Bool != true || state["controlsVisible"] as? Bool == false)
         }
         try assertMovingVideo()
+        if expanded["controlsVisible"] as? Bool != true {
+            videoPoint(0.5, 0.25).tap()
+            _ = try waitFor("Tap after expansion reveals controls without pausing") {
+                $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
+            }
+        }
         evidence("expanded-video")
     }
 
-    func testPictureInPictureAndReopenRestoresControls() throws {
+    func testPictureInPictureAndReopenKeepsControlsHiddenUntilTap() throws {
         try openSample()
         try assertMovingVideo()
         let before=snapshot()
@@ -876,15 +895,21 @@ final class PlaybackUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 4)
         app.activate()
-        _ = try waitFor("Reopen from PiP must restore inline video and controls",timeout:50) { s in
+        _ = try waitFor("Reopen from PiP restores inline video with native controls hidden",timeout:50) { s in
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return s["pip"] as? Bool == false && s["videoVisible"] as? Bool == true &&
-                s["controlsVisible"] as? Bool == true &&
+                (!isNative || s["controlsVisible"] as? Bool == false) &&
                 (!isNative || (n["mode"] as? String == "video" &&
                                n["layerReady"] as? Bool == true &&
                                n["pipActive"] as? Bool == false))
         }
         try assertMovingVideo()
+        if isNative {
+            videoPoint(0.5, 0.25).tap()
+            _ = try waitFor("Tap after PiP reveals controls without interrupting playback", timeout: 5) {
+                $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
+            }
+        }
         evidence("pip-reopen")
     }
 
