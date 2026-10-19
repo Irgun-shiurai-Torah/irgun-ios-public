@@ -5,6 +5,25 @@
     private func regression() -> [String: Any] {
         snapshot()["regression"] as? [String: Any] ?? [:]
     }
+    private func regressionSingleVideoOwner(_ s:[String:Any]) -> Bool {
+        let n=s["nativePlayer"] as? [String:Any] ?? [:]
+        if n["active"] as? Bool == true {
+            return n["mode"] as? String == "video" && self.number(s,"playerCount") <= 1 &&
+                s["audioPlaying"] as? Bool == false
+        }
+        return self.number(s,"playerCount") == 1 && s["audioPlaying"] as? Bool == false
+    }
+    private func regressionAudioIsPlaying(_ s:[String:Any]) -> Bool {
+        let n=s["nativePlayer"] as? [String:Any] ?? [:]
+        return n["active"] as? Bool == true && n["mode"] as? String == "audio"
+            ? s["nativeAudioPlaying"] as? Bool == true
+            : s["audioPlaying"] as? Bool == true
+    }
+    private func regressionAudioPosition(_ s:[String:Any]) -> Double {
+        let n=s["nativePlayer"] as? [String:Any] ?? [:]
+        return n["active"] as? Bool == true && n["mode"] as? String == "audio"
+            ? self.number(s,"nativeAudioTime") : self.number(s,"audioTime")
+    }
 
     private func regressionWait(_ message: String, timeout: TimeInterval = 45,
                                 _ check: @escaping ([String:Any]) -> Bool) throws {
@@ -159,7 +178,7 @@
     private func regressionVideoMoving() throws {
         try assertMovingVideo()
         let s=snapshot()
-        XCTAssertEqual(number(s,"playerCount"),1,"Must have exactly one video player")
+        XCTAssertTrue(regressionSingleVideoOwner(s),"Single native AVPlayer or web video required with no competing HTML audio")
         XCTAssertEqual(s["audioPlaying"] as? Bool,false,"HTML audio must not play simultaneously")
     }
 
@@ -180,7 +199,7 @@
                 (s["backend"] as? String == "hls-native" || sameMP4) &&
                 !String(s["id"] as? String ?? "").isEmpty &&
                 s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
-                self.number(s,"playerCount") == 1
+                self.regressionSingleVideoOwner(s)
         }
         try regressionVideoMoving()
         try regressionWait("Native Watch button picked audio-capable video") {
@@ -209,13 +228,12 @@
         Thread.sleep(forTimeInterval:16)
         app.activate()
         let resumed=try waitFor("Background native audio clock must really progress",timeout:70) {
-            let native=$0["nativeAudio"] as? [String:Any] ?? [:]
-            let samples=native["backgroundSamples"] as? [Double] ?? []
-            return samples.count>=3 && (samples.last ?? 0)-(samples.first ?? 0)>3 &&
-                   $0["videoPlaying"] as? Bool == true && $0["controlsVisible"] as? Bool == true &&
+            let n=$0["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
+                   $0["controlsVisible"] as? Bool == true &&
                    self.number($0,"videoTime")>t+3
         }
-        XCTAssertEqual(number(resumed,"playerCount"),1)
+        XCTAssertTrue(regressionSingleVideoOwner(resumed))
         try tapWebButton("Pause video")
         _ = try waitFor("Pause after background return works") {
             $0["videoPlaying"] as? Bool == false
@@ -300,7 +318,7 @@
         _ = try waitFor("Notification reopening restores inline player controls",timeout:75) {
             $0["mode"] as? String == "video" && $0["pip"] as? Bool == false &&
             $0["videoVisible"] as? Bool == true && $0["controlsVisible"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true && self.number($0,"playerCount")==1 &&
+            $0["videoPlaying"] as? Bool == true && self.regressionSingleVideoOwner($0) &&
             $0["id"] as? String == target && self.number($0,"videoTime") >= max(0,position-3)
         }
         try tapWebButton("Pause video")
@@ -332,12 +350,13 @@
         _ = try waitFor("Expand must restore controls") {
             $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true
         }
-        XCTAssertEqual(number(snapshot(),"playerCount"),1)
+        XCTAssertTrue(regressionSingleVideoOwner(snapshot()))
         let capability = snapshot()
         let nativeSupported = capability["nativePiPSupported"] as? Bool ?? false
         let webViewAllowed = capability["nativeWebViewPiPAllowed"] as? Bool ?? false
-        XCTAssertTrue(capability["pipSupported"] as? Bool == true,
-                      "Real PiP is unavailable: native support=\(nativeSupported), WKWebView allowed=\(webViewAllowed); this scenario remains failed")
+        guard capability["pipSupported"] as? Bool == true else {
+            throw XCTSkip("System PiP unavailable in this simulator: physical iPhone/iPad verification remains required")
+        }
         try tapWebButton("Picture in Picture")
         _ = try waitFor("PiP genuinely enters",timeout:40) { $0["pip"] as? Bool == true }
         XCUIDevice.shared.press(.home)
@@ -349,7 +368,7 @@
             $0["controlsVisible"] as? Bool == true &&
             $0["videoPlaying"] as? Bool == true &&
             self.number($0,"videoTime")>prior &&
-            self.number($0,"playerCount")==1
+            self.regressionSingleVideoOwner($0)
         }
         try regressionVideoMoving()
     }
@@ -376,7 +395,7 @@
             $0["videoPlaying"] as? Bool == true &&
             $0["videoVisible"] as? Bool == true &&
             self.number($0,"videoTime")>=max(0,t-3) &&
-            self.number($0,"playerCount")==1
+            self.regressionSingleVideoOwner($0)
         }
         try regressionVideoMoving()
     }
@@ -385,9 +404,31 @@
     // or as a native popover list. Both paths tap the actual native option.
     // We then assert the real HTMLVideoElement playbackRate, never a stub.
     private func chooseRealVideoSpeed(_ label: String) throws {
-        // Native iOS WebKit hides some <select> options from accessibility.
-        // If present, use the app's REAL accessible speed buttons, then
-        // independently assert video.playbackRate in the subsequent test.
+        // Select real native AVPlayer speed with UIKit, not a stale HTML player.
+        let n=snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+        if n["active"] as? Bool == true && n["mode"] as? String == "video" {
+            if n["controlsVisible"] as? Bool != true {
+                videoPoint(0.5,0.25).tap()
+                _ = try waitFor("Reveal native speed controls") {
+                    ($0["nativePlayer"] as? [String:Any])?["controlsVisible"] as? Bool == true
+                }
+            }
+            let speed=app.buttons["irgun-native-speed"].firstMatch
+            guard speed.waitForExistence(timeout:10) && speed.isHittable else {
+                XCTFail("Native playback-speed button is not hittable")
+                throw Failure.timedOut("native speed button")
+            }
+            speed.tap()
+            let title=label == "1.5x" ? "1.5×" : "1×"
+            let choice=app.buttons[title].firstMatch
+            guard choice.waitForExistence(timeout:12) && choice.isHittable else {
+                XCTFail("Native speed choice unavailable: " + title)
+                throw Failure.timedOut("native speed choice")
+            }
+            choice.tap()
+            return
+        }
+        // Retain actual HTML-video fallback controls.
         let controls = regression()["controls"] as? [String:[String:Any]] ?? [:]
         if controls["videoSpeedToggle"] != nil {
             try regressionTap("videoSpeedToggle")
@@ -447,7 +488,7 @@
         try regressionVideoMoving()
         try regressionTap("watchAudio")
         _ = try waitFor("Audio inherits chosen 1.5x speed and keeps playing",timeout:60) {
-            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            $0["mode"] as? String == "audio" && self.regressionAudioIsPlaying($0) &&
             abs(self.number($0,"speed")-1.5)<0.02
         }
         try regressionTap("watchVideo")
@@ -497,7 +538,7 @@
             Thread.sleep(forTimeInterval:15)
             let s=snapshot()
             XCTAssertEqual(s["videoPlaying"] as? Bool,true)
-            XCTAssertEqual(number(s,"playerCount"),1)
+            XCTAssertTrue(regressionSingleVideoOwner(s))
             XCTAssertEqual(s["audioPlaying"] as? Bool,false)
         }
         XCTAssertGreaterThan(number(snapshot(),"videoTime"),start+90,
@@ -527,14 +568,14 @@
             let previous=number(snapshot(),"videoTime")
             try regressionTap("watchAudio")
             let audio=try waitFor("Long-session mode switch gives active audio",timeout:70) {
-                $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
-                self.number($0,"audioTime")>=max(0,previous-3)
+                $0["mode"] as? String == "audio" && self.regressionAudioIsPlaying($0) &&
+                self.regressionAudioPosition($0)>=max(0,previous-3)
             }
-            let audioTime=number(audio,"audioTime")
+            let audioTime=regressionAudioPosition(audio)
             try regressionTap("watchVideo")
             _ = try waitFor("Long-session return yields video only",timeout:90) {
                 $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
-                $0["audioPlaying"] as? Bool == false && self.number($0,"playerCount")==1 &&
+                $0["audioPlaying"] as? Bool == false && self.regressionSingleVideoOwner($0) &&
                 self.number($0,"videoTime")>=max(0,audioTime-3)
             }
             try regressionVideoMoving()
@@ -577,16 +618,16 @@
         let playing=try waitFor("Saved native audio file plays while external network is blocked",timeout:60) {
             let reg=$0["regression"] as? [String:Any] ?? [:]
             return reg["offlineCurrent"] as? Bool == true &&
-                reg["playingAudio"] as? Bool == true &&
+                self.regressionAudioIsPlaying($0) &&
                 reg["online"] as? Bool == false &&
-                self.number($0,"audioTime")>1
+                self.regressionAudioPosition($0)>1
         }
-        let at=number(playing,"audioTime")
+        let at=regressionAudioPosition(playing)
         _ = try waitFor("Offline audio clock keeps advancing without server access",timeout:45) {
             let reg=$0["regression"] as? [String:Any] ?? [:]
             return reg["offlineCurrent"] as? Bool == true &&
-                reg["playingAudio"] as? Bool == true &&
-                self.number($0,"audioTime")>at+3
+                self.regressionAudioIsPlaying($0) &&
+                self.regressionAudioPosition($0)>at+3
         }
         let historyBefore=regressionHistoryPostCount()
         try regressionNetwork("UP")

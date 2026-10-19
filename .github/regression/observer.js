@@ -128,6 +128,7 @@
     const bounds=tabs?.getBoundingClientRect();
     const libraryTabsRect=bounds?{x:bounds.left,y:bounds.top,w:bounds.width,h:bounds.height}:null;
     const videoSpeed=document.getElementById('dmSpeed');
+    const native=iosNativeActive() ? iosUnified.state : null;
     return JSON.stringify({...base,regression:{
       controls:selectors,rects:hitRects,libraryTabsRect,
       libraryTabsScrollLeft:Number(tabs?.scrollLeft)||0,
@@ -153,12 +154,12 @@
         String(audio.currentSrc||'').startsWith('capacitor:') ||
         String(audio.currentSrc||'').startsWith('ionic:'),
       offlineJobs:state.offlineJobs.size,
-      videoSpeedChoice:Number(videoSpeed?.value)||0,
-      videoRate:Number(state.watchVimeo?.video?.playbackRate)||0,
+      videoSpeedChoice:native ? (Number(native.rate)||0) : (Number(videoSpeed?.value)||0),
+      videoRate:native ? (Number(native.rate)||0) : (Number(state.watchVimeo?.video?.playbackRate)||0),
       configuredAudioRate:Number(state.playbackSpeed)||1,
       audioRate:Number(audio.playbackRate)||0,
-      playingAudio:!audio.paused&&!audio.ended,
-      audioSeconds:Number(audio.currentTime)||0,
+      playingAudio:native?.mode==='audio' ? native.playing===true : !audio.paused&&!audio.ended,
+      audioSeconds:native?.mode==='audio' ? (Number(native.position)||0) : (Number(audio.currentTime)||0),
       playingVideo:Boolean(state.watchVimeo?.video&&!state.watchVimeo.video.paused),
       videoSeconds:Number(state.watchVimeo?.video?.currentTime)||0,
       videoCount:document.querySelectorAll('#directVideoElement').length,

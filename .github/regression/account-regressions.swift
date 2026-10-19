@@ -236,22 +236,22 @@
         let originalVideoTime = number(snapshot(), "videoTime")
         try touch("modeAudio")
         let audioState = try waitFor("Video to Audio transfers real playback", timeout: 90) {
-            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
+            $0["mode"] as? String == "audio" && self.regressionAudioIsPlaying($0) &&
             $0["videoPlaying"] as? Bool == false && $0["pendingSeek"] as? Bool == false &&
-            self.number($0, "audioTime") >= max(0, originalVideoTime - 3)
+            self.regressionAudioPosition($0) >= max(0, originalVideoTime - 3)
         }
-        let audioStart = number(audioState, "audioTime")
+        let audioStart = regressionAudioPosition(audioState)
         let audioMoving = try waitFor("Audio advances after Video to Audio") {
-            $0["mode"] as? String == "audio" && $0["audioPlaying"] as? Bool == true &&
-            self.number($0, "audioTime") >= audioStart + 1
+            $0["mode"] as? String == "audio" && self.regressionAudioIsPlaying($0) &&
+            self.regressionAudioPosition($0) >= audioStart + 1
         }
         checked("Video to Audio retains playback and position")
-        let audioEnd = number(audioMoving, "audioTime")
+        let audioEnd = regressionAudioPosition(audioMoving)
         try touch("modeVideo")
         _ = try waitFor("Audio to Video restores one playing video owner", timeout: 90) {
             $0["mode"] as? String == "video" && $0["ready"] as? Bool == true &&
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            $0["audioPlaying"] as? Bool == false && self.number($0, "playerCount") == 1 &&
+            $0["audioPlaying"] as? Bool == false && self.regressionSingleVideoOwner($0) &&
             self.number($0, "videoTime") >= max(0, audioEnd - 3)
         }
         let videoFramesBefore = number(snapshot(), "frameTime")

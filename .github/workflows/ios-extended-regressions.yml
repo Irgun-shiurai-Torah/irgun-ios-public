@@ -1,8 +1,12 @@
-name: iOS Extended Regression Tests (manual after PR45)
+name: iOS Extended Regression Tests
 
-# This staging PR must never start simulator jobs until PR #45 has passed and merged.
-# Enable automatic PR coverage only after rebase, review, and explicit approval.
+# PR45 passed and merged. Run only when regression QA files change.
+# Does not modify runtime or publish a build.
 on:
+  pull_request:
+    paths:
+      - '.github/regression/**'
+      - '.github/workflows/ios-extended-regressions.yml'
   workflow_dispatch:
 
 permissions:

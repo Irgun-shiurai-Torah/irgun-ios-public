@@ -1,12 +1,12 @@
 {
   "name": "irgun-shiurai-torah-app",
   "private": true,
-  "version": "1.2.84-ios",
+  "version": "1.2.85-ios",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "prebuild": "node --test scripts/test_comment_draft.mjs",
+    "prebuild": "node --test scripts/test_comment_draft.mjs scripts/test_ios_admin_website_parity.mjs",
     "preview": "vite preview",
     "cap:sync": "npm run build && npx cap sync",
     "android": "npm run cap:sync && npx cap open android",
