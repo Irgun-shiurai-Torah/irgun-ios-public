@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter} from '../src/ios-native-avplayer.js';
 
 function testEngine({ios=true, nativeFail=false}={}){
@@ -39,7 +40,7 @@ test('single native iOS player is only registered for native iOS',()=>{
   assert.equal(testEngine({ios:false}).engine,null);
   assert.ok(testEngine().engine);
 });
-test('one AVPlayerItem stays owned across Video, Audio, Mini, Full, quality and PiP',async()=>{
+test('one AVPlayer survives Video, Audio, Mini, Full, quality and PiP',async()=>{
   const t=testEngine(),e=t.engine;
   await e.open({id:'video:123',url,position:40,rate:1,autoplay:true});
   const adapter=createIosNativeVideoAdapter(e,'video:123');
@@ -48,7 +49,7 @@ test('one AVPlayerItem stays owned across Video, Audio, Mini, Full, quality and 
   await e.seek(61);await e.speed(1.5);await e.mode('video');
   await e.layout('full',{x:0,y:0,width:320,height:640});await e.quality(720);await e.pip();
   assert.equal(t.calls.filter(x=>x[0]==='open').length,1,'No duplicate native players');
-  assert.equal(e.state.itemEpoch,1,'AVPlayerItem cannot be replaced on presentation changes');
+  assert.equal(e.state.itemEpoch,1,'Presentation changes alone must retain the current item');
   assert.equal(e.state.position,61);assert.equal(e.state.rate,1.5);
   await e.open({id:'video:123',url,position:null,rate:1.5,autoplay:true});
   assert.equal(t.calls.filter(x=>x[0]==='open').length,1,'Reopening same source cannot reload');
@@ -88,4 +89,18 @@ test('native playback toolbar receives direct callbacks and does not allocate a 
   t.watchers.pipUnavailable({});
   assert.deepEqual(calls,['mini','full','pip-unavailable']);
   assert.equal(t.calls.filter(x=>x[0]==='open').length,1);
+});
+
+test('manual HLS resolution uses a narrowed source and restores the original master on Auto',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(swift,/class IrgunFixedHLSManifest/);
+  assert.match(swift,/let narrowed = IrgunFixedHLSManifest\(master: master/);
+  assert.match(swift,/AVPlayerItem\(asset: narrowed\.makeAsset\(\)\)/);
+  assert.match(swift,/nextItem = AVPlayerItem\(url: original\)/);
+  assert.match(swift,/player\.replaceCurrentItem\(with: nextItem\)/);
+  assert.match(swift,/desiredPosition: previousPosition/);
+  assert.match(swift,/player\.seek\(to: CMTime\(seconds: change\.desiredPosition/);
+  assert.match(swift,/player\.playImmediately\(atRate: self\.playbackRate\)/);
+  assert.match(swift,/targetHeight = waiting\.targetHeight|qualityHeight = waiting\.targetHeight/);
+  assert.doesNotMatch(swift,/preferredMaximumResolution = CGSize\(/);
 });

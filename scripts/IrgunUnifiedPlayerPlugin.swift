@@ -7,6 +7,127 @@ import MediaPlayer
 import UIKit
 
 // Android's Media3 timeline uses a thin track and a small round thumb.
+// AVPlayer's preferredMaximumResolution is only a ceiling. For a manual
+// resolution choice, offer exactly that height's original HLS variants instead.
+// Retain the master playlist's AUDIO/SUBTITLES groups so audio does not vanish.
+// There is no extra player, decoder, video control or user-facing diagnostics.
+private final class IrgunFixedHLSManifest: NSObject, AVAssetResourceLoaderDelegate {
+    private let body: Data
+    private let assetURL: URL
+    private static let sizePattern = try! NSRegularExpression(pattern: #"RESOLUTION=[0-9]+x([0-9]+)"#)
+    private static let uriPattern = try! NSRegularExpression(pattern: #"URI="([^"]+)""#)
+
+    private static func height(of line: String) -> Int? {
+        let ns = line as NSString
+        guard let result = sizePattern.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+              result.numberOfRanges >= 2 else { return nil }
+        return Int(ns.substring(with: result.range(at: 1)))
+    }
+
+    static func heights(in master: String) -> [Int] {
+        let choices = master.components(separatedBy: .newlines).compactMap { line -> Int? in
+            guard line.trimmingCharacters(in: .whitespaces).hasPrefix("#EXT-X-STREAM-INF:") else { return nil }
+            return height(of: line)
+        }
+        return Array(Set(choices)).sorted(by: >)
+    }
+
+    private static func rewriteAttributeURLs(_ line: String, relativeTo masterURL: URL) -> String {
+        var rewritten = line
+        let ns = line as NSString
+        let matches = uriPattern.matches(in: line, range: NSRange(location: 0, length: ns.length))
+        for match in matches.reversed() {
+            let original = ns.substring(with: match.range(at: 1))
+            guard let address = URL(string: original, relativeTo: masterURL)?.absoluteURL,
+                  ["http", "https"].contains(address.scheme?.lowercased() ?? "") else { continue }
+            let replacement = #"URI=""# + address.absoluteString + #"""#
+            rewritten = (rewritten as NSString).replacingCharacters(in: match.range, with: replacement)
+        }
+        return rewritten
+    }
+
+    static func filtered(_ master: String, from source: URL, height requiredHeight: Int) -> String? {
+        guard master.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else { return nil }
+        var result: [String] = []
+        var pendingStream: String?
+        var selected = 0
+        for rawLine in master.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            if line.hasPrefix("#EXT-X-STREAM-INF:") {
+                pendingStream = line
+                continue
+            }
+            if let header = pendingStream {
+                if line.hasPrefix("#") { continue }
+                if Self.height(of: header) == requiredHeight,
+                   let uri = URL(string: line, relativeTo: source)?.absoluteURL,
+                   uri.scheme?.lowercased() == "https" {
+                    result.append(header)
+                    result.append(uri.absoluteString)
+                    selected += 1
+                }
+                pendingStream = nil
+                continue
+            }
+            if line.hasPrefix("#EXT-X-I-FRAME-STREAM-INF:") {
+                if Self.height(of: line) == requiredHeight {
+                    result.append(rewriteAttributeURLs(line, relativeTo: source))
+                }
+            } else if line.hasPrefix("#") {
+                result.append(rewriteAttributeURLs(line, relativeTo: source))
+            }
+        }
+        guard selected > 0 else { return nil }
+        return result.joined(separator: "\n") + "\n"
+    }
+
+    init?(master: String, source: URL, height: Int) {
+        guard height > 0,
+              let narrowed = Self.filtered(master, from: source, height: height),
+              let content = narrowed.data(using: .utf8),
+              var parts = URLComponents(url: source, resolvingAgainstBaseURL: false) else { return nil }
+        parts.scheme = "irgunhls"
+        var query = parts.queryItems ?? []
+        query.append(URLQueryItem(name: "irgun_qa", value: String(height)))
+        query.append(URLQueryItem(name: "irgun_session", value: UUID().uuidString))
+        parts.queryItems = query
+        guard let playlistURL = parts.url else { return nil }
+        body = content
+        assetURL = playlistURL
+        super.init()
+    }
+
+    func makeAsset() -> AVURLAsset {
+        let asset = AVURLAsset(url: assetURL)
+        asset.resourceLoader.setDelegate(self, queue: .main)
+        return asset
+    }
+
+    func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
+                        shouldWaitForLoadingOfRequestedResource request: AVAssetResourceLoadingRequest) -> Bool {
+        guard request.request.url?.scheme?.lowercased() == "irgunhls" else { return false }
+        if let info = request.contentInformationRequest {
+            info.contentType = "public.m3u-playlist"
+            info.contentLength = Int64(body.count)
+            info.isByteRangeAccessSupported = true
+        }
+        if let transfer = request.dataRequest {
+            let offset = max(0, Int(transfer.currentOffset))
+            if offset < body.count {
+                let remaining = body.count - offset
+                let count = transfer.requestsAllDataToEndOfResource
+                    ? remaining : min(remaining, max(0, transfer.requestedLength))
+                if count > 0 {
+                    transfer.respond(with: body.subdata(in: offset..<(offset + count)))
+                }
+            }
+        }
+        request.finishLoading()
+        return true
+    }
+}
+
 private final class IrgunTimelineSlider: UISlider {
     override func trackRect(forBounds bounds: CGRect) -> CGRect {
         let track = super.trackRect(forBounds: bounds)
@@ -65,6 +186,23 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var fullscreenButtonTaps = 0
     private var qualityHeight: Int = 0
     private var availableHeights: [Int] = []
+    private var qualityMaster: String?
+    private var qualityMasterURL: URL?
+    private var fixedQualityManifest: IrgunFixedHLSManifest?
+    private var qualityChangeCount = 0
+    private var qualityTimeout: DispatchWorkItem?
+    private struct QualityChange {
+        let serial: Int
+        let targetHeight: Int
+        let desiredPosition: Double
+        let previousItem: AVPlayerItem
+        let previousManifest: IrgunFixedHLSManifest?
+        let targetManifest: IrgunFixedHLSManifest?
+        let replacement: AVPlayerItem
+        let finish: ((Bool) -> Void)?
+        var isSeeking = false
+    }
+    private var qualityChange: QualityChange?
     private var isPiPRequested = false
     private var pipResumeWanted = false
     private var pipPausedByUser = false
@@ -489,6 +627,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                             self.player.currentItem == nil
             self.generation += 1
             if replacing {
+                self.clearPendingQualityChange()
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
@@ -512,8 +651,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.itemID = id
                 self.itemURL = source
                 self.qualityHeight = 0
-            self.nativeSeekTarget = nil
+                self.nativeSeekTarget = nil
                 self.availableHeights = []
+                self.qualityMaster = nil
+                self.qualityMasterURL = nil
+                self.fixedQualityManifest = nil
                 self.loadAvailableVariants(url)
             }
             self.active = true
@@ -1198,33 +1340,167 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         resumeControlsAfterMenu()
     }
 
-    private func applyQuality(_ height: Int) {
-        guard height == 0 || availableHeights.contains(height) else { return }
-        qualityHeight=height
-        // ABR remains Apple's; the cap limits the variant without replacing
-        // the AVPlayerItem, changing clock or creating a second decoder.
-        if height == 0 { player.currentItem?.preferredMaximumResolution = .zero }
-        else { player.currentItem?.preferredMaximumResolution = CGSize(width: CGFloat(height) * 16 / 9, height: CGFloat(height)) }
+    private func clearPendingQualityChange() {
+        qualityChangeCount += 1
+        qualityTimeout?.cancel()
+        qualityTimeout = nil
+        let pending = qualityChange
+        qualityChange = nil
+        pending?.finish?(false)
+    }
+
+    #if targetEnvironment(simulator)
+    private func attachSimulatedFrameOutput(to item: AVPlayerItem) {
+        simulatorFrameCount = 0
+        simulatorFrameTime = 0
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
+        ])
+        item.add(output)
+        simulatorFrameOutput = output
+    }
+    #endif
+
+    private func restoreQualityAfterFailure(_ change: QualityChange) {
+        guard qualityChange?.serial == change.serial else { return }
+        clearPendingQualityChange()
+        itemObserver = nil
+        player.replaceCurrentItem(with: change.previousItem)
+        fixedQualityManifest = change.previousManifest
+        itemEpoch += 1
+        #if targetEnvironment(simulator)
+        attachSimulatedFrameOutput(to: change.previousItem)
+        #endif
+        itemObserver = change.previousItem.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.publishState() }
+        }
+        player.seek(to: CMTime(seconds: change.desiredPosition, preferredTimescale: 600),
+                    toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self = self, self.active else { return }
+                if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
+                else { self.player.pause() }
+                self.publishState()
+            }
+        }
+    }
+
+    private func finishQualityChangeIfReady() {
+        guard var change = qualityChange,
+              player.currentItem === change.replacement else { return }
+        switch change.replacement.status {
+        case .readyToPlay:
+            guard !change.isSeeking else { return }
+            change.isSeeking = true
+            qualityChange = change
+            let serial = change.serial
+            player.seek(to: CMTime(seconds: change.desiredPosition, preferredTimescale: 600),
+                        toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                        toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] completed in
+                DispatchQueue.main.async {
+                    guard let self = self, let waiting = self.qualityChange,
+                          waiting.serial == serial else { return }
+                    guard completed else { self.restoreQualityAfterFailure(waiting); return }
+                    self.qualityTimeout?.cancel()
+                    self.qualityTimeout = nil
+                    self.qualityChange = nil
+                    self.qualityHeight = waiting.targetHeight
+                    self.fixedQualityManifest = waiting.targetManifest
+                    if self.playingWanted { self.player.playImmediately(atRate: self.playbackRate) }
+                    else { self.player.pause() }
+                    self.publishState()
+                    waiting.finish?(true)
+                }
+            }
+        case .failed:
+            restoreQualityAfterFailure(change)
+        default:
+            break
+        }
+    }
+
+    private func applyQuality(_ height: Int, completion: ((Bool) -> Void)? = nil) {
+        guard active, player.currentItem?.status == .readyToPlay,
+              height == 0 || availableHeights.contains(height) else {
+            completion?(false)
+            return
+        }
+        if height == qualityHeight && qualityChange == nil {
+            completion?(true)
+            return
+        }
+        guard let oldItem = player.currentItem,
+              let original = playableURL(itemURL),
+              qualityChange == nil,
+              !(pipController?.isPictureInPictureActive ?? false) else {
+            completion?(false)
+            return
+        }
+        let loader: IrgunFixedHLSManifest?
+        let nextItem: AVPlayerItem
+        if height == 0 {
+            loader = nil
+            nextItem = AVPlayerItem(url: original)
+        } else {
+            guard let master = qualityMaster, let masterURL = qualityMasterURL,
+                  let narrowed = IrgunFixedHLSManifest(master: master, source: masterURL, height: height) else {
+                completion?(false)
+                return
+            }
+            loader = narrowed
+            nextItem = AVPlayerItem(asset: narrowed.makeAsset())
+        }
+        qualityChangeCount += 1
+        let serial = qualityChangeCount
+        let previousPosition = position()
+        let pending = QualityChange(serial: serial, targetHeight: height,
+                                    desiredPosition: previousPosition,
+                                    previousItem: oldItem, previousManifest: fixedQualityManifest,
+                                    targetManifest: loader, replacement: nextItem,
+                                    finish: completion)
+        qualityChange = pending
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, let waiting = self.qualityChange,
+                  waiting.serial == serial else { return }
+            self.restoreQualityAfterFailure(waiting)
+        }
+        qualityTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+        player.pause()
+        itemObserver = nil
+        player.replaceCurrentItem(with: nextItem)
+        itemEpoch += 1
+        #if targetEnvironment(simulator)
+        attachSimulatedFrameOutput(to: nextItem)
+        #endif
+        itemObserver = nextItem.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.finishQualityChangeIfReady()
+                self?.publishState()
+            }
+        }
+        finishQualityChangeIfReady()
         publishState()
     }
 
     private func loadAvailableVariants(_ source: URL) {
         guard source.pathExtension.lowercased() == "m3u8" else { return }
-        let owner=generation
-        var request=URLRequest(url:source)
-        request.timeoutInterval=8
-        URLSession.shared.dataTask(with:request) { [weak self] data,_,_ in
-            guard let data = data, let manifest=String(data:data,encoding:.utf8),
-                  let regex=try? NSRegularExpression(pattern:"RESOLUTION=[0-9]+x([0-9]+)") else { return }
-            let ns=manifest as NSString
-            let matches=regex.matches(in:manifest,range:NSRange(location:0,length:ns.length))
-            let heights=Array(Set(matches.compactMap { match -> Int? in
-                guard match.numberOfRanges > 1 else { return nil }
-                return Int(ns.substring(with:match.range(at:1)))
-            })).sorted(by:>)
+        let owner = generation
+        var request = URLRequest(url: source)
+        request.timeoutInterval = 8
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let data = data, data.count < 1_048_576,
+                  let status = (response as? HTTPURLResponse)?.statusCode,
+                  (200...299).contains(status),
+                  let manifest = String(data: data, encoding: .utf8),
+                  manifest.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else { return }
+            let heights = IrgunFixedHLSManifest.heights(in: manifest)
             DispatchQueue.main.async {
                 guard let self = self, self.generation == owner else { return }
-                self.availableHeights=heights
+                self.availableHeights = heights
+                self.qualityMaster = manifest
+                self.qualityMasterURL = response?.url ?? source
                 self.updateNativeControls()
             }
         }.resume()
@@ -1232,13 +1508,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     @objc public func setQuality(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            guard self.active else { call.reject("No native item loaded");return }
-            let height=max(0,call.getInt("height") ?? 0)
+            guard self.active else { call.reject("No native item loaded"); return }
+            let height = max(0, call.getInt("height") ?? 0)
             guard height == 0 || self.availableHeights.contains(height) else {
-                call.reject("Requested video quality was not advertised by this HLS stream");return
+                call.reject("Requested resolution was not advertised by this HLS stream")
+                return
             }
-            self.applyQuality(height)
-            call.resolve(self.snapshot())
+            self.applyQuality(height) { succeeded in
+                if succeeded { call.resolve(self.snapshot()) }
+                else { call.reject("The selected HLS resolution could not be loaded; playback quality was restored") }
+            }
         }
     }
 
@@ -1330,6 +1609,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc public func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.generation += 1
+            self.clearPendingQualityChange()
+            self.qualityMaster = nil
+            self.qualityMasterURL = nil
+            self.fixedQualityManifest = nil
+            self.qualityHeight = 0
+            self.availableHeights = []
             self.cancelControlsHide()
             self.controlsTouchActive = false
             self.controlsMenuOpen = false
@@ -1370,6 +1655,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     deinit {
+        qualityTimeout?.cancel()
         pipController?.stopPictureInPicture()
         playerObserver = nil
         itemObserver = nil
