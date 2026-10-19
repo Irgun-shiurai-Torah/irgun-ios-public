@@ -7,6 +7,7 @@ on:
       - fix/ios-vimeo-native-background-20261016
       - fix/ios-player-parity-catalog-20261017
       - feature/ios-android-design-parity-20261018
+      - feature/ios-audio-library-sections-20261019
     paths-ignore:
       - "README*"
       - "**/*.md"
@@ -282,6 +283,9 @@ jobs:
             RELEASE_TAG="ios-adhoc-pr34-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           elif [ "$GITHUB_REF" = "refs/heads/feature/ios-android-design-parity-20261018" ]; then
             RELEASE_TAG="ios-adhoc-pr36-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          elif [ "$GITHUB_REF" = "refs/heads/feature/ios-audio-library-sections-20261019" ]; then
+            # Signed review-only build. Keep it separate from the main release.
+            RELEASE_TAG="ios-adhoc-pr37-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           elif [ "$GITHUB_REF" = "refs/heads/fix/ios-vimeo-native-background-20261016" ]; then
             # Keep previews immutable and away from the main production release.
             RELEASE_TAG="ios-adhoc-pr32-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -335,7 +339,7 @@ jobs:
 
       - name: Note feature-branch install behavior
         if: ${{ github.ref != 'refs/heads/main' }}
-        run: echo "PR34 has its own preview release; other feature branches keep signed IPA and manifest as workflow artifacts. Production website installer is unchanged."
+        run: echo "PR34, PR36 and PR37 preview builds publish distinct immutable releases; the production installer remains unchanged until explicitly updated."
 
       - name: Upload wireless install manifest as workflow artifact
         uses: actions/upload-artifact@v7
@@ -346,7 +350,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish wireless Ad Hoc IPA and manifest
-        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' }}
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' || github.ref == 'refs/heads/feature/ios-audio-library-sections-20261019' }}
         env:
           GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
