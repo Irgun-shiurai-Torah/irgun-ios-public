@@ -158,3 +158,12 @@ test('Admin parity UI includes all eight website-only management groups',()=>{
   assert.match(css,/\.admin-parity-row\{/);
   assert.match(css,/\.admin-parity-metrics\{/);
 });
+
+test('City Admin roles and buyer data reset before checking permissions after both login methods',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const occurrences=(main.match(/state\.cityAdminChecked = false;\s*cityAdminController\.reset\(\);\s*websiteAdminParity\.reset\(\)/g)||[]);
+  assert.equal(occurrences.length,2,'Email and social login must reset account-scoped privileges');
+  assert.match(main,/state\.isCityAdmin = false;\s*state\.cityAdminChecked = false;/);
+  assert.match(main,/await checkAdminStatus\(true\);/);
+  assert.match(main,/state\.adminPaidBuyersLoaded = false;/);
+});
