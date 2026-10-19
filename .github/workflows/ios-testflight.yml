@@ -280,8 +280,10 @@ jobs:
           set -euo pipefail
           RELEASE_TAG="ios-adhoc-latest"
           if [ "$GITHUB_REF" = "refs/heads/preview/ios-admin-parity-pr39-20261019" ]; then
-            # Isolated signed preview of PR39 + latest main; never touch production install assets.
-            RELEASE_TAG="ios-adhoc-pr39-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            # User-requested website installer build: publish verified PR39 admin features
+            # to the same release tag used by https://irgunshiuraitorah.com/install-ios.html.
+            # PR39 remains unmerged; this updates only the downloadable Ad Hoc installer.
+            RELEASE_TAG="ios-adhoc-latest"
           elif [ "$GITHUB_REF" = "refs/heads/fix/ios-player-parity-catalog-20261017" ]; then
             # Keep PR34 install assets separate from production and the prior PR32.
             RELEASE_TAG="ios-adhoc-pr34-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -343,7 +345,7 @@ jobs:
 
       - name: Note feature-branch install behavior
         if: ${{ github.ref != 'refs/heads/main' }}
-        run: echo "PR39 admin preview and other feature builds publish distinct immutable releases; the production installer remains unchanged."
+        run: echo "The PR39 admin preview intentionally updates ios-adhoc-latest for the user-requested website installer. The PR is not merged; the main branch remains unchanged."
 
       - name: Upload wireless install manifest as workflow artifact
         uses: actions/upload-artifact@v7
