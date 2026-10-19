@@ -99,6 +99,7 @@ final class PlaybackUITests: XCTestCase {
             let mappings = [
                 "Fullscreen": "irgun-native-fullscreen",
                 "Exit Fullscreen": "irgun-native-fullscreen",
+                "Video quality": "irgun-native-quality",
                 "Pause video": "irgun-native-play",
                 "Play video": "irgun-native-play",
                 "Picture in Picture": "irgun-native-pip",
@@ -594,6 +595,72 @@ final class PlaybackUITests: XCTestCase {
         Thread.sleep(forTimeInterval: 2)
         XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true)
         evidence("fullscreen-exit")
+    }
+
+    // Real physical iPhone/iPad taps: choose actual HLS renditions, confirm
+    // decoded height (not merely a label), and preserve the playback timestamp.
+    func testManualHLSQualityKeepsDecodedResolutionAndPlaybackPosition() throws {
+        try openSample()
+        try assertMovingVideo()
+        let initial = snapshot()
+        guard initial["backend"] as? String == "hls-native",
+              (initial["nativePlayer"] as? [String:Any])?["active"] as? Bool == true else {
+            throw XCTSkip("Manual HLS rendition verification requires the native HLS sample")
+        }
+        let variantState = try waitFor("Real HLS playlist advertises multiple qualities", timeout: 20) { state in
+            let native = state["nativePlayer"] as? [String:Any] ?? [:]
+            return (native["qualities"] as? [Int] ?? []).count >= 2
+        }
+        let choices = (variantState["nativePlayer"] as? [String:Any])?["qualities"] as? [Int] ?? []
+        let exactSequence = [720,480,360].filter { choices.contains($0) }
+        let sequence = exactSequence.count >= 2 ? exactSequence : [choices.first!, choices.last!]
+        let startItemID = (variantState["nativePlayer"] as? [String:Any])?["id"] as? String ?? ""
+        for height in sequence {
+            let before = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+            let started = Date()
+            try tapWebButton("Video quality")
+            let option = app.buttons["\(height)p"].firstMatch
+            XCTAssertTrue(option.waitForExistence(timeout: 12),
+                          "The actual native quality menu must offer \(height)p")
+            option.tap()
+            let afterState = try waitFor("Native AVPlayer must decode the chosen \(height)p rendition", timeout: 65) { state in
+                let n = state["nativePlayer"] as? [String:Any] ?? [:]
+                return self.number(n, "qualityHeight") == Double(height) &&
+                    self.number(n, "videoHeight") == Double(height) &&
+                    self.number(n, "decodedFrames") >= 2 &&
+                    n["playing"] as? Bool == true
+            }
+            let after = afterState["nativePlayer"] as? [String:Any] ?? [:]
+            XCTAssertEqual(after["id"] as? String, startItemID, "Quality must keep the same lecture")
+            XCTAssertGreaterThan(self.number(after,"itemEpoch"), self.number(before,"itemEpoch"),
+                                 "A fixed HLS playlist should replace only the AVPlayerItem")
+            XCTAssertGreaterThanOrEqual(self.number(after,"position"),
+                                        self.number(before,"position") - 1.5,
+                                        "Quality selection must not rewind playback")
+            XCTAssertLessThanOrEqual(self.number(after,"position"),
+                                     self.number(before,"position") + Date().timeIntervalSince(start) *
+                                     max(1, self.number(after,"rate")) + 6,
+                                     "Quality selection must not jump ahead")
+        }
+        let beforeAuto = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+        let beganAuto = Date()
+        try tapWebButton("Video quality")
+        let automatic = app.buttons["Auto"].firstMatch
+        XCTAssertTrue(automatic.waitForExistence(timeout: 12))
+        automatic.tap()
+        let autoState = try waitFor("Auto restores adaptive HLS on the same lecture", timeout: 65) { state in
+            let n = state["nativePlayer"] as? [String:Any] ?? [:]
+            return self.number(n,"qualityHeight") == 0 &&
+                n["id"] as? String == startItemID &&
+                n["playing"] as? Bool == true &&
+                self.number(n,"decodedFrames") >= 2
+        }
+        let afterAuto = autoState["nativePlayer"] as? [String:Any] ?? [:]
+        XCTAssertGreaterThanOrEqual(self.number(afterAuto,"position"),self.number(beforeAuto,"position") - 1.5)
+        XCTAssertLessThanOrEqual(self.number(afterAuto,"position"),
+                                 self.number(beforeAuto,"position") + Date().timeIntervalSince(beganAuto) + 6)
+        try assertMovingVideo()
+        evidence("native-quality-renditions")
     }
 
     func testDoubleTapSeeksBothWaysWithoutChangingPause() throws {
