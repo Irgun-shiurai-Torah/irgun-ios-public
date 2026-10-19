@@ -198,6 +198,7 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
+  const native = iosNativeActive() ? iosUnified.state : null;
   return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
@@ -226,7 +227,10 @@ window.ISTAccountTest = { snapshot() {
     authSubmitCount:window.__ISTAccountLoginSubmissions||0,
     authInvalidFieldKey:window.__ISTAccountLastInvalidField||'',
     playlistPickerOpen:!!document.querySelector('.playlist-picker-backdrop'),
-    videoTime:Number(state.watchVimeo?.video?.currentTime)||0,videoPlaying:!!state.watchVimeo?.video&&!state.watchVimeo.video.paused};
+    videoTime:native?.mode==='video' ? (Number(native.position)||0) : (Number(state.watchVimeo?.video?.currentTime)||0),
+    videoPlaying:native?.mode==='video' ? native.playing===true : Boolean(state.watchVimeo?.video&&!state.watchVimeo.video.paused),
+    audioTime:native?.mode==='audio' ? (Number(native.position)||0) : (Number(audio.currentTime)||0),
+    audioPlaying:native?.mode==='audio' ? native.playing===true : Boolean(!audio.paused&&!audio.ended)};
 }};
 if(window.ISTSimulator){
   const original=window.ISTSimulator.snapshot.bind(window.ISTSimulator);

@@ -3,6 +3,7 @@ import UIKit
 import WebKit
 import Capacitor
 import Network
+import UserNotifications
 
 // Compiled into CI simulator builds only; never copied by the release workflow.
 final class SimulatorProbe {
@@ -12,6 +13,7 @@ final class SimulatorProbe {
     private var status: UILabel?
     private var timer: Timer?
     private var polling = false
+    private var nativePushAuthorized = false
     private var listener: NWListener?
     private let observationQueue = DispatchQueue(label: "org.irgun.simulator.observations")
     private let observationLock = NSLock()
@@ -54,10 +56,14 @@ final class SimulatorProbe {
         controls.setTitle("Hide controls", for: .normal)
         controls.accessibilityIdentifier = "ist-simulator-hide-controls"
         controls.addTarget(self, action: #selector(hideForAppControls), for: .touchUpInside)
-        let buttons = UIStackView(arrangedSubviews: [button, reopen, next, hide, controls])
+        let push = UIButton(type: .system)
+        push.setTitle("Enable Push", for: .normal)
+        push.accessibilityIdentifier = "ist-simulator-enable-push"
+        push.addTarget(self, action: #selector(enablePushPermission), for: .touchUpInside)
+        let buttons = UIStackView(arrangedSubviews: [button, reopen, next, hide, controls, push])
         buttons.axis = .horizontal; buttons.distribution = .fillEqually
         buttons.translatesAutoresizingMaskIntoConstraints = false
-        for control in [button, reopen, next, hide, controls] { control.titleLabel?.font = .systemFont(ofSize: 10) }
+        for control in [button, reopen, next, hide, controls, push] { control.titleLabel?.font = .systemFont(ofSize: 10) }
         panel.addSubview(label)
         panel.addSubview(buttons)
         window.addSubview(panel)
@@ -105,6 +111,18 @@ final class SimulatorProbe {
         listener.start(queue: observationQueue)
     }
 
+    @objc private func enablePushPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, _ in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                DispatchQueue.main.async {
+                    self?.nativePushAuthorized = granted &&
+                        (settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional)
+                    self?.poll()
+                }
+            }
+        }
+    }
+
     @objc private func openSample() {
         let action = ProcessInfo.processInfo.arguments.contains("--irgun-reported-mp4") ? "openReportedShiur" : "openSample"
         webView?.evaluateJavaScript("window.ISTSimulator?.\(action)()", completionHandler: nil)
@@ -137,6 +155,7 @@ final class SimulatorProbe {
                var state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
                 state["nativePlayer"] = IrgunUnifiedPlayerPlugin.current?.simulatorSnapshot() ?? [:]
+                state["nativePushAuthorized"] = self.nativePushAuthorized
                 if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) {
                     self.status?.accessibilityValue = value
                     self.observationLock.lock()

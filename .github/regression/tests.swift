@@ -223,21 +223,37 @@
 
     func testRegressionBackgroundAudioAndReopenControls() throws {
         try regressionActivateSample()
-        let t=number(snapshot(),"videoTime")
+        let start=number(snapshot(),"videoTime")
         XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval:16)
-        app.activate()
-        let resumed=try waitFor("Background native audio clock must really progress",timeout:70) {
+        _ = try waitFor("Home really backgrounds the app",timeout:20) { _ in
+            self.app.state == .runningBackground || self.app.state == .runningBackgroundSuspended
+        }
+        let backgroundAudio=try waitFor("Native AVPlayer hands off to the real audio stream",timeout:25) {
             let n=$0["nativePlayer"] as? [String:Any] ?? [:]
-            return n["active"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
-                   $0["controlsVisible"] as? Bool == true &&
-                   self.number($0,"videoTime")>t+3
+            return n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
+                   n["playing"] as? Bool == true
+        }
+        let audioStart=number(backgroundAudio,"videoTime")
+        Thread.sleep(forTimeInterval:16)
+        let progressed=snapshot()
+        let progressedNative=progressed["nativePlayer"] as? [String:Any] ?? [:]
+        XCTAssertEqual(progressedNative["mode"] as? String,"audio")
+        XCTAssertEqual(progressedNative["playing"] as? Bool,true)
+        XCTAssertGreaterThan(number(progressed,"videoTime"),audioStart+3,
+                              "The same native AVPlayer must keep the lecture's audio clock moving in background")
+        app.activate()
+        let resumed=try waitFor("Foreground restores the HLS video at the background audio position",timeout:90) {
+            $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
+            $0["videoVisible"] as? Bool == true &&
+            self.number($0,"videoTime") >= max(0,self.number(progressed,"videoTime")-3)
         }
         XCTAssertTrue(regressionSingleVideoOwner(resumed))
-        try tapWebButton("Pause video")
-        _ = try waitFor("Pause after background return works") {
-            $0["videoPlaying"] as? Bool == false
+        videoPoint(0.5,0.25).tap()
+        _ = try waitFor("Tap reveals native controls after foreground",timeout:12) {
+            $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
         }
+        try tapWebButton("Pause video")
+        _ = try waitFor("Pause after background return works") { $0["videoPlaying"] as? Bool == false }
         try tapWebButton("Play video")
         try regressionVideoMoving()
     }
@@ -347,7 +363,12 @@
         XCTAssertGreaterThan(x,0);XCTAssertGreaterThan(y,0)
         app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
             .withOffset(CGVector(dx:x,dy:y)).tap()
-        _ = try waitFor("Expand must restore controls") {
+        _ = try waitFor("Expand restores the inline video surface") {
+            $0["minimized"] as? Bool == false && $0["videoVisible"] as? Bool == true &&
+            $0["videoPlaying"] as? Bool == true
+        }
+        videoPoint(0.5,0.25).tap()
+        _ = try waitFor("Tap reveals controls after expanding mini") {
             $0["minimized"] as? Bool == false && $0["controlsVisible"] as? Bool == true
         }
         XCTAssertTrue(regressionSingleVideoOwner(snapshot()))
@@ -560,7 +581,12 @@
         XCUIDevice.shared.perform(lockSelector)
         springboard.swipeUp()
         app.activate()
-        _ = try waitFor("Player survives real lock/unlock",timeout:70) {
+        _ = try waitFor("Player resumes after real lock/unlock",timeout:70) {
+            $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true
+        }
+        // Controls are supposed to auto-hide. Reveal them with a real surface tap.
+        videoPoint(0.5,0.25).tap()
+        _ = try waitFor("Tap reveals controls after lock/unlock",timeout:12) {
             $0["videoPlaying"] as? Bool == true && $0["controlsVisible"] as? Bool == true
         }
         try regressionVideoMoving()
@@ -655,15 +681,22 @@
             XCTFail("Require secrets for native invalid-password exercise")
             throw Failure.timedOut("account secrets")
         }
+        try regressionTap("account")
+        // Session restoration can finish just after the initial snapshot. Wait
+        // until it settles before deciding whether this test starts logged out.
+        try regressionWait("Account session restoration settles",timeout:90) {
+            $0["loginForm"] as? Bool == true ||
+            ($0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true)
+        }
         if regression()["loggedIn"] as? Bool == true {
-            try regressionTap("account")
             try regressionTap("logout")
-            try regressionWait("Start from logged-out native state") {
-                $0["loggedIn"] as? Bool == false
+            try regressionWait("Logout reaches signed-out form",timeout:60) {
+                $0["loggedIn"] as? Bool == false && $0["loginForm"] as? Bool == true
             }
         }
-        try regressionTap("account")
-        try regressionWait("Sign-in form is native visible") { $0["loginForm"] as? Bool == true }
+        try regressionWait("Sign-in form is native visible") {
+            $0["loginForm"] as? Bool == true && $0["loggedIn"] as? Bool == false
+        }
         try nativeEnterLoginField("email",email)
         let invalidSubmitBefore = number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount")
         try nativeEnterLoginField("password",pass+"not-valid")

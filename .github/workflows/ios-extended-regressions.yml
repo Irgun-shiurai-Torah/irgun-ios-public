@@ -1,12 +1,7 @@
 name: iOS Extended Regression Tests
 
-# PR45 passed and merged. Run only when regression QA files change.
-# Does not modify runtime or publish a build.
+# Hold long-running simulator jobs until PR47's native playback fixes pass and merge.
 on:
-  pull_request:
-    paths:
-      - '.github/regression/**'
-      - '.github/workflows/ios-extended-regressions.yml'
   workflow_dispatch:
 
 permissions:

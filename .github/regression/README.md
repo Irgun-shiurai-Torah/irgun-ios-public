@@ -97,3 +97,10 @@ audio audibility and network hardware must also receive physical-device checks.
 
 The suite uses only a dedicated non-admin QA account through Actions secrets;
 comment markers are run-specific, and report artifacts must remain credential-free.
+
+
+## Latest PR46 staging notes
+
+The first iPhone run exposed a native AVPlayer observation mismatch, asynchronous session-restoration race, and tests expecting controls to remain visible after their intended auto-hide timeout. The test harness has been corrected for these cases and now includes a simulator-only notification-permission control.
+
+Further simulator runs are paused until PR #47's background audio, network recovery, and offline-download fixes pass and merge. PR #46 remains a draft.
