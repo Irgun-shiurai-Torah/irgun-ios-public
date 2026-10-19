@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - preview/ios-admin-parity-pr39-20261019
       - fix/ios-vimeo-native-background-20261016
       - fix/ios-player-parity-catalog-20261017
       - feature/ios-android-design-parity-20261018
@@ -278,7 +279,10 @@ jobs:
         run: |
           set -euo pipefail
           RELEASE_TAG="ios-adhoc-latest"
-          if [ "$GITHUB_REF" = "refs/heads/fix/ios-player-parity-catalog-20261017" ]; then
+          if [ "$GITHUB_REF" = "refs/heads/preview/ios-admin-parity-pr39-20261019" ]; then
+            # Isolated signed preview of PR39 + latest main; never touch production install assets.
+            RELEASE_TAG="ios-adhoc-pr39-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          elif [ "$GITHUB_REF" = "refs/heads/fix/ios-player-parity-catalog-20261017" ]; then
             # Keep PR34 install assets separate from production and the prior PR32.
             RELEASE_TAG="ios-adhoc-pr34-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           elif [ "$GITHUB_REF" = "refs/heads/feature/ios-android-design-parity-20261018" ]; then
@@ -339,7 +343,7 @@ jobs:
 
       - name: Note feature-branch install behavior
         if: ${{ github.ref != 'refs/heads/main' }}
-        run: echo "PR34, PR36 and PR37 preview builds publish distinct immutable releases; the production installer remains unchanged until explicitly updated."
+        run: echo "PR39 admin preview and other feature builds publish distinct immutable releases; the production installer remains unchanged."
 
       - name: Upload wireless install manifest as workflow artifact
         uses: actions/upload-artifact@v7
@@ -350,7 +354,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish wireless Ad Hoc IPA and manifest
-        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' || github.ref == 'refs/heads/feature/ios-audio-library-sections-20261019' }}
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview/ios-admin-parity-pr39-20261019' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' || github.ref == 'refs/heads/feature/ios-audio-library-sections-20261019' }}
         env:
           GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
