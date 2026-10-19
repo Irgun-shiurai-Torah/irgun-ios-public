@@ -406,7 +406,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private func skip(seconds: Double, completion: ((Bool) -> Void)? = nil) -> (from: Double, target: Double) {
         let from = position()
         let target = max(0, from + seconds)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 600)) { finished in
+        // Skip controls should land on the requested time, not the nearest HLS keyframe.
+        // Explicit zero tolerances prevent a 15-second rewind from landing several seconds early.
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                    toleranceBefore: .zero,
+                    toleranceAfter: .zero) { finished in
             if let completion = completion {
                 DispatchQueue.main.async { completion(finished) }
             }
