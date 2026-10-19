@@ -1,0 +1,40 @@
+/* Mirror the actual Android components. Playback remains native AVPlayer. */
+body.irgun-ios .watch-top { height:56px; min-height:56px; padding:9px 12px; }
+body.irgun-ios .watch-top strong { font-size:12px; }
+body.irgun-ios .watch-top-media-actions { flex-shrink:0; gap:4px; }
+body.irgun-ios .media-switch { justify-content:flex-start; }
+body.irgun-ios .media-switch button { min-height:0; font-size:12px; }
+body.irgun-ios .watch-audio-panel {
+  max-width:560px; margin:auto; padding:20px 15px;
+  background:transparent; border-radius:0; color:#fff; text-align:center;
+}
+body.irgun-ios .watch-audio-controls { gap:10px; margin-top:12px; direction:ltr; }
+body.irgun-ios .watch-audio-controls .watch-audio-play {
+  width:auto; height:auto; min-width:0; border-radius:11px;
+  display:inline-flex; align-items:center; gap:7px; padding:10px 14px;
+  background:var(--gold2); color:#172238;
+}
+body.irgun-ios .watch-audio-time { display:block; color:#c7d2df; font-size:11px; margin-top:9px; }
+body.irgun-ios .big-controls .skip-control,
+body.irgun-ios .watch-audio-controls .skip-control {
+  background:transparent!important; border:0!important; box-shadow:none!important;
+  filter:none; opacity:1; min-width:0; min-height:0;
+}
+body.irgun-ios .big-controls .skip-control,
+body.irgun-ios .big-controls .skip-control .skip-icon-modern {
+  color:#102a43!important; -webkit-text-fill-color:#102a43;
+}
+body.irgun-ios .big-controls .skip-control .skip-ring,
+body.irgun-ios .big-controls .skip-control .skip-arrowhead { stroke:#102a43!important; }
+body.irgun-ios .big-controls .skip-control .skip-text { fill:#102a43!important; }
+body.irgun-ios .skip-icon-modern .skip-ring,
+body.irgun-ios .skip-icon-modern .skip-arrowhead { stroke-width:3.5px; }
+body.irgun-ios .skip-icon-modern .skip-text { font-weight:700; }
+body.irgun-ios .big-controls .skip-control .skip-icon-modern,
+body.irgun-ios .watch-audio-controls .skip-control .skip-icon-modern { width:40px; height:40px; }
+body.irgun-ios .watch-audio-controls .skip-control .skip-icon-modern { color:#fff!important; }
+body.irgun-ios .watch-details { border-top:0; }
+body.irgun-ios .paid-actions:has(> .paid-secondary:only-child) { grid-template-columns:1fr; }
+body.irgun-ios .paid-catalog-facts { display:flex; justify-content:flex-end; gap:10px; border-top:1px solid #edf1f5; margin-top:13px; padding-top:12px; }
+body.irgun-ios .paid-catalog-facts span { color:var(--muted); font-size:10px; background:none; border-radius:0; padding:0; }
+body.irgun-ios .paid-card-preview { font-size:13px; line-height:1.6; }

@@ -1,5 +1,6 @@
 // Appended to main.js ONLY in the unsigned simulator workflow.
 // This exposes observations, not replacement playback behavior.
+import {simulatorHlsSourceReady} from '../.github/simulator/sample-selection.js';
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
 let simulatorError = '';
 let simulatorOpening = false;
@@ -9,6 +10,19 @@ let simulatorFrameTime = 0;
 let simulatorLastFrameAt = 0;
 let simulatorFrameRequest = 0;
 const simulatorGestures = [];
+const simulatorTabMotion = [];
+// Observe after the app's root touchmove handler, while the finger is still
+// down. A tab changing on release alone cannot satisfy this observation.
+document.addEventListener('touchmove', () => {
+  const content = document.querySelector('#app .app-shell > .content');
+  const preview = document.querySelector('.ios-swipe-preview');
+  if (!content || !preview) return;
+  const dx = new DOMMatrixReadOnly(getComputedStyle(content).transform).m41;
+  if (Math.abs(dx) < 2) return;
+  simulatorTabMotion.push({at:Date.now(),screen:state.screen,dx,
+    inert:preview.inert,media:preview.querySelectorAll('video,audio,iframe').length});
+  if (simulatorTabMotion.length > 40) simulatorTabMotion.shift();
+}, {passive:true});
 const simulatorWarnings = [];
 const simulatorOriginalWarn = console.warn.bind(console);
 console.warn = (...args) => {
@@ -163,7 +177,7 @@ window.ISTSimulator = {
           if (sources?.hls) break;
           if (attempt<2) await new Promise(resolve=>setTimeout(resolve,1500));
         }
-        if (!sources?.hls || !video.hasAudio) continue;
+        if (!sources?.hls || !video.hasAudio || !await simulatorHlsSourceReady(sources.hls)) continue;
         this.selectedSampleId = String(videoId(video));
         await openWatch(videoId(video), 30);
         return;
@@ -184,6 +198,8 @@ window.ISTSimulator = {
     const nativeVideoVisible = nativeVideo && native.layerReady === true &&
       native.overlayOccluded !== true && native.layout !== 'mini' && native.pipActive !== true;
     const videoBox = video?.getBoundingClientRect();
+    const detailsHeading = document.querySelector('.watch-details h1');
+    const detailsBox = detailsHeading?.getBoundingClientRect();
     const expand = [...document.querySelectorAll('[data-expand-watch]')].find(simulatorVisible);
     const expandBox = expand?.getBoundingClientRect();
     const contentRoot = document.querySelector('.content');
@@ -241,7 +257,7 @@ window.ISTSimulator = {
       libraryReady: Boolean(state.libraryReady), libraryCount: state.videos.length,
       screen: state.screen, renderedScreen, tabSwipeReady,
       observedAt: Date.now(), tabSwipeY, pageLoading: Boolean(state.loading), playerButtons,
-      gestures: simulatorGestures, warnings: simulatorWarnings,
+      gestures: simulatorGestures, tabMotion: simulatorTabMotion, warnings: simulatorWarnings,
       directFallbackId: String(state.watchDirectFallbackId||''),
       nativeRestoreBusy: Boolean(state.nativeBackgroundRestoreBusy),
       initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),
@@ -265,7 +281,11 @@ window.ISTSimulator = {
       videoTime: native ? (Number(native.position)||0) : (Number(video?.currentTime)||0),
       videoPlaying: native ? (nativeVideo&&native.playing===true) : Boolean(video && !video.paused && !video.ended),
       videoVisible: native ? nativeVideoVisible : simulatorVisible(video),
-      controlsVisible: native ? nativeVideoVisible&&native.layout!=='mini' : simulatorVisible(document.getElementById('dmPlay')),
+      controlsVisible: native ? native.controlsVisible === true : simulatorVisible(document.getElementById('dmPlay')),
+      detailsSwipeX: detailsBox ? detailsBox.left + detailsBox.width * 0.3 : 0,
+      detailsSwipeY: detailsBox ? detailsBox.top + detailsBox.height * 0.5 : 0,
+      detailsSwipeEndY: detailsBox ? Math.min(innerHeight - 130, detailsBox.top + detailsBox.height * 0.5 + 145) : 0,
+      watchScrollTop: document.querySelector('.watch-scroll')?.scrollTop || 0,
       videoX:native?(Number(native.surfaceX)||0):(videoBox?.left||0),
       videoY:native?(Number(native.surfaceY)||0):(videoBox?.top||0),
       videoWidth:native?(Number(native.surfaceWidth)||0):(videoBox?.width||0),
