@@ -3974,7 +3974,6 @@ function homeHtml() {
       <div class="hero-overlay" aria-hidden="true"></div>
       <div class="hero-content">
         <h1>Torah, wherever you are.</h1>
-        <p>Live shiurim, thousands of recordings, and your personal Torah library—all in one app.</p>
         <div class="hero-actions"><button class="hero-btn primary" data-nav="shiurim">${svgIcon('play')} <span class="hero-button-label">Browse Shiurim</span></button><button class="hero-btn glass" data-nav="live">${svgIcon('live')} <span class="hero-button-label">Watch Live</span></button></div>
         <div class="counter-card pro-counter"><strong>${state.counter.toLocaleString()}</strong><span>Shiurim Played</span></div>
       </div>
@@ -3982,7 +3981,7 @@ function homeHtml() {
 
     <section class="home-shortcuts" aria-label="Quick access">
       <button class="home-shortcut" data-nav="schedule"><span>${svgIcon('calendar')}</span><div class="home-shortcut-copy"><strong>Schedule</strong></div></button>
-      <button class="home-shortcut" data-nav="paid"><span>${svgIcon(IS_IOS ? 'library' : 'store')}</span><div class="home-shortcut-copy"><strong>${IS_IOS ? 'My Audio Library' : 'Paid Shiurim'}</strong></div></button>
+      <button class="home-shortcut" data-nav="paid"><span>${svgIcon(IS_IOS ? 'library' : 'store')}</span><div class="home-shortcut-copy"><strong>${IS_IOS ? tr('Purchases') : 'Paid Shiurim'}</strong></div></button>
       <button class="home-shortcut" data-nav="donate"><span>${svgIcon('donate')}</span><div class="home-shortcut-copy"><strong>Sponsor Torah</strong></div></button>
       <button class="home-shortcut" data-nav="library"><span>${svgIcon('library')}</span><div class="home-shortcut-copy"><strong>Your Library</strong></div></button>
     </section>
