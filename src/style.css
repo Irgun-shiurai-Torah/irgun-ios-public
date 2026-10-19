@@ -3215,3 +3215,89 @@ body.irgun-ios .paid-card-topline { display:flex; flex-wrap:wrap; justify-conten
 body.irgun-ios .paid-card-topline .paid-category { margin-bottom:0; }
 body.irgun-ios .paid-status-chip { padding:6px 9px; color:#526579; background:#edf2f7; font-weight:750; }
 body.irgun-ios .paid-status-chip.owned { color:#176c62; background:#e4f5ee; }
+
+/* Two clearly distinct levels in the iOS personal audio library.
+   Purchased content stays playable; browsing remains informational only. */
+body.irgun-ios .ios-audio-library-title { margin-bottom:20px; }
+body.irgun-ios .ios-audio-library-title h1 { font-size:clamp(25px,3.4vw,32px); line-height:1.2; }
+body.irgun-ios .ios-audio-library-title p { font-size:13px; line-height:1.65; max-width:800px; }
+body.irgun-ios .ios-audio-library-title p strong {
+  color:#fff0cc; font-weight:850; overflow-wrap:anywhere;
+}
+body.irgun-ios .ios-audio-tier {
+  border-radius:23px; padding:20px; margin-top:0;
+  box-shadow:0 9px 26px rgba(15,31,53,.045);
+}
+body.irgun-ios .ios-audio-owned {
+  background:linear-gradient(155deg,#fffdf8,#f8f0e1);
+  border:1px solid #e4cc9e; border-left:5px solid #c6a166;
+}
+body.irgun-ios .ios-audio-explore {
+  background:linear-gradient(160deg,#f7fafd,#edf3f9);
+  border:1px solid #d7e2ee; border-left:5px solid #8aa5c2;
+}
+body.irgun-ios .ios-audio-tier-header {
+  display:flex; justify-content:space-between; align-items:flex-start;
+  flex-wrap:wrap; gap:12px 18px; margin-bottom:18px;
+}
+body.irgun-ios .ios-audio-tier-title { flex:1 1 220px; min-width:0; }
+body.irgun-ios .ios-audio-tier-eyebrow {
+  display:block; font-size:10px; line-height:1.35; font-weight:900;
+  color:#94703c; letter-spacing:.09em; margin-bottom:5px;
+}
+body.irgun-ios .ios-audio-explore .ios-audio-tier-eyebrow { color:#53718e; }
+body.irgun-ios .ios-audio-tier-title h2 {
+  margin:0; color:#142940; font-size:clamp(21px,2.7vw,27px); line-height:1.3;
+}
+body.irgun-ios .ios-audio-tier-title p {
+  margin:6px 0 0; color:#52657b; font-size:12.5px; line-height:1.6;
+}
+body.irgun-ios .ios-audio-tier-tools { display:flex; flex-direction:column; align-items:flex-end; gap:7px; }
+body.irgun-ios .ios-audio-count {
+  display:inline-flex; align-items:center; justify-content:center;
+  min-height:30px; padding:6px 10px; border-radius:999px;
+  background:#fff; border:1px solid #e4d5b9; color:#7d5b2c;
+  font-size:11px; font-weight:850; white-space:nowrap;
+}
+body.irgun-ios .ios-audio-explore .ios-audio-count { border-color:#d3dfea; color:#486984; }
+body.irgun-ios .ios-audio-see-all {
+  background:transparent; color:#36536d; border:0; padding:6px 0;
+  font-size:11px; font-weight:800; text-decoration:underline; text-underline-offset:3px;
+  cursor:pointer; min-height:35px;
+}
+body.irgun-ios .ios-audio-owned .paid-card.owned {
+  border-color:#d1b47f; box-shadow:0 7px 21px rgba(113,79,28,.095);
+}
+body.irgun-ios .ios-audio-explore .paid-card:not(.owned) {
+  border-color:#d9e3ee; box-shadow:0 6px 18px rgba(27,62,97,.055);
+}
+body.irgun-ios .ios-audio-explore .paid-status-chip.available {
+  background:#e6eef8; color:#355e82;
+}
+body.irgun-ios .ios-audio-divider {
+  display:flex; align-items:center; gap:12px;
+  margin:25px 5px 20px; color:#6b7d90;
+}
+body.irgun-ios .ios-audio-divider span {
+  height:1px; background:#cbd6e3; flex:1; min-width:10px;
+}
+body.irgun-ios .ios-audio-divider strong {
+  flex:none; font-size:10px; font-weight:900; letter-spacing:.09em; text-align:center;
+}
+body.irgun-ios .ios-audio-empty {
+  background:rgba(255,255,255,.78); border:1px dashed #cfdae5;
+  border-radius:14px; padding:19px; margin:0;
+  color:#617285; font-size:13px; line-height:1.5;
+}
+body.irgun-ios .ios-audio-login { margin:0; }
+body.irgun-ios .ios-audio-coming { margin-top:22px; }
+@media (max-width:520px) {
+  body.irgun-ios .ios-audio-tier { padding:14px 12px; border-radius:18px; }
+  body.irgun-ios .ios-audio-tier-header { gap:10px; margin-bottom:13px; }
+  body.irgun-ios .ios-audio-tier-title { flex-basis:100%; }
+  body.irgun-ios .ios-audio-tier-tools {
+    flex-direction:row; flex-wrap:wrap; align-items:center; justify-content:space-between; width:100%;
+  }
+  body.irgun-ios .ios-audio-divider { margin:22px 0 17px; gap:8px; }
+  body.irgun-ios .ios-audio-divider strong { font-size:9px; letter-spacing:.055em; }
+}

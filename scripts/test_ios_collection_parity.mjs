@@ -145,3 +145,56 @@ test('an old signed-URL response cannot override a newer selection',async()=>{
   finish({playbackUrl:'https://example.test/old'}); await pending;
   assert.equal(starts.length,0);
 });
+
+test('iOS purchases and browsable collections render as two distinct shelves', () => {
+  const state = {
+    paidQuestionIndexOpen:false, paidLoaded:true, paidCatalogOwnerKey:'account:test',
+    paidCatalog:[
+      {id:'browse-a', title:'Z Other Collection', available:true, owned:false},
+      {id:'owned-a', title:'Bought Collection', available:true, owned:true},
+      {id:'browse-b', title:'A Other Collection', available:true, owned:false},
+      {id:'coming-a', title:'Coming Later', available:false, owned:false}
+    ],
+    paidError:null, user:{id:'test'}
+  };
+  const context = vm.createContext({
+    IS_IOS:true, state, currentLanguage:()=> 'en',
+    currentPaidCatalogOwnerKey:()=> 'account:test',
+    paidProductTitle:item => item.title, paidProductCard:item => `<article data-sample="${item.id}"></article>`,
+    esc, svgIcon:() => '', paidQuestionIndex:{html:()=>''}
+  });
+  vm.runInContext(appFunction('paidShiurimHtml'),context);
+  const html = context.paidShiurimHtml();
+  const purchased = html.split('data-ios-library-tier="purchased"')[1].split('</section>')[0];
+  const browsing = html.split('data-ios-library-tier="browse"')[1].split('</section>')[0];
+  assert.match(html, /Your Personal Audio Library/);
+  assert.match(html, /irgunshiuraitorah\.com/);
+  assert.match(purchased, /data-sample="owned-a"/);
+  assert.doesNotMatch(purchased, /data-sample="browse-a"|data-sample="browse-b"/);
+  assert.match(browsing, /data-sample="browse-a"/);
+  assert.match(browsing, /data-sample="browse-b"/);
+  assert.doesNotMatch(browsing, /data-sample="owned-a"|data-sample="coming-a"/);
+  assert.ok(browsing.indexOf('browse-b') < browsing.indexOf('browse-a'), 'Browse grid is sorted by title');
+  assert.ok(html.indexOf('data-ios-library-tier="purchased"') <
+            html.indexOf('class="ios-audio-divider"'));
+  assert.ok(html.indexOf('class="ios-audio-divider"') <
+            html.indexOf('data-ios-library-tier="browse"'));
+  assert.match(html, /See All in Library/);
+  assert.doesNotMatch(html, /data-paid-purchase|data-paid-checkout|Buy Securely/);
+  assert.match(html, /More Collections/);
+
+  state.user = null;
+  state.paidCatalog = state.paidCatalog.filter(item => !item.owned);
+  const guest = context.paidShiurimHtml();
+  assert.match(guest, /Sign in to see your purchased collections/);
+  assert.match(guest, /data-sample="browse-a"/);
+  assert.doesNotMatch(guest, /See All in Library/);
+});
+
+test('iOS purchased and available tiers have distinct visual treatments', () => {
+  const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
+  for(const name of ['ios-audio-owned', 'ios-audio-explore', 'ios-audio-divider',
+    'ios-audio-owned .paid-card.owned', 'ios-audio-explore .paid-card:not(.owned)']){
+    assert.ok(css.includes(name), 'Missing iOS visual distinction: '+name);
+  }
+});

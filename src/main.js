@@ -4108,7 +4108,7 @@ function paidProductCard(item) {
   const id = String(item.id || '');
   const expanded = state.paidExpandedId === id;
   const images = paidProductImageUrls(item);
-  const status = item.owned ? tr('Purchased') : IS_IOS ? tr('Collection') : item.available ? tr('Available now') : tr('Coming Soon');
+  const status = item.owned ? tr('Purchased') : IS_IOS ? (item.available ? (currentLanguage()==='he' ? 'לעיון' : 'Browse') : (currentLanguage()==='he' ? 'בקרוב' : 'Coming Soon')) : item.available ? tr('Available now') : tr('Coming Soon');
   const statusClass = item.owned ? 'owned' : item.available ? 'available' : 'coming';
   const tree = paidFolderTreeHtml(item, {esc, openFolders:state.paidOpenFolders, isHebrew:currentLanguage()==='he'});
   const folderButton = tree ? `<button class="paid-primary" data-paid-expand="${esc(id)}">${svgIcon(item.owned ? 'play' : 'library')} ${expanded ? tr('Close') : item.owned ? tr('Listen') : (currentLanguage()==='he'?'תיקיות האוסף':'View Folders')}</button>` : '';
@@ -4137,19 +4137,26 @@ function paidShiurimHtml() {
   if (IS_IOS) {
     if (state.paidQuestionIndexOpen) return paidQuestionIndex.html();
     const he = currentLanguage() === 'he';
-    const heading = `<div class="page-title pro-page-title paid-page-title"><span class="page-kicker">IRGUN AUDIO COLLECTIONS</span><h1>${he?'אוספי שמע':'Audio Collections'}</h1><p>${he?'אוספים המשויכים לחשבונכם יופיעו כאן. אפשר לעיין גם באוספים נוספים.':'Purchased lectures linked to your account appear here. Browse additional collections below.'}</p></div>`;
+    const heading = `<div class="page-title pro-page-title paid-page-title ios-audio-library-title"><span class="page-kicker">IRGUN AUDIO COLLECTIONS</span><h1>${he ? 'ספריית השמע האישית שלכם' : 'Your Personal Audio Library'}</h1><p>${he ? 'אוספי השמע שרכשתם ומשויכים לחשבונכם מופיעים כאן להאזנה. אפשר לעיין באוספים נוספים למטה, ולבקר באתר ' : 'Purchased audio collections linked to your account appear here for listening. Browse other available collections below, and visit '}<strong>irgunshiuraitorah.com</strong>${he ? ' כדי להוסיף אותם לספרייה שלכם.' : ' to add them to your library.'}</p></div>`;
     if ((!state.paidLoaded || state.paidCatalogOwnerKey !== currentPaidCatalogOwnerKey()) && !state.paidError)
       return heading + '<div class="loading">Loading audio collections…</div>';
-    const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.owned))-Number(Boolean(a.owned)) || Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
-    const owned = state.paidCatalog.filter(item => item.owned);
-    const available = ordered.filter(item => item.available || item.owned);
+    const ordered = [...state.paidCatalog].sort((a,b)=>Number(Boolean(b.featured))-Number(Boolean(a.featured)) || paidProductTitle(a).localeCompare(paidProductTitle(b)));
+    const owned = ordered.filter(item => item.owned);
+    const available = ordered.filter(item => item.available && !item.owned);
     const coming = ordered.filter(item => !item.available && !item.owned);
-    return heading +
-      (owned.length ? `<div class="owned-summary"><span>${svgIcon('library')}</span><div><strong>${owned.length} ${he?'אוספים המשויכים לחשבון':'collections in your account'}</strong><p>${he?'האוספים שלכם זמינים להאזנה.':'Your collections are ready to listen to.'}</p></div><button data-nav="library" data-open-purchased="1">${he?'הרכישות שלכם':'Your Purchases'}</button></div>` : '') +
-      (!state.user ? `<div class="store-login-note"><span>${svgIcon('account')}</span><div><strong>${he?'התחברות לחשבון':'Sign in to see your collections'}</strong><p>${he?'האוספים שלכם יוצגו כאן.':'Collections linked to your account appear here.'}</p></div><button data-nav="account">${he?'התחברות':'Sign In'}</button></div>` : '') +
-      (state.paidError ? `<div class="paid-retry-card"><strong>Could not load audio collections</strong><span>${esc(state.paidError)}</span><button data-paid-retry="1">Try Again</button></div>` : '') +
-      `<section class="paid-catalog-section"><div class="section-head paid-catalog-heading"><div><span class="section-kicker">${he?'אוספי שמע':'Audio Collections'}</span><h2>${he?'אוספים זמינים':'Available Collections'}</h2></div><small>${available.length} ${he?'אוספים':'collections'}</small></div><div class="paid-grid ${available.length===1?'single-featured':''}">${available.map(paidProductCard).join('')}</div></section>` +
-      (coming.length ? `<details class="paid-coming-wrap"><summary><span>${he?'אוספים נוספים':'More Collections'}</span><small>${coming.length}</small></summary><div class="paid-grid">${coming.map(paidProductCard).join('')}</div></details>` : '');
+    const countLabel = count => `${count} ${he ? 'אוספים' : count === 1 ? 'collection' : 'collections'}`;
+    const ownedHeader = `<header class="ios-audio-tier-header"><div class="ios-audio-tier-title"><span class="ios-audio-tier-eyebrow">${he ? 'בספרייה שלכם' : 'IN YOUR LIBRARY'}</span><h2>${he ? 'האוספים שלכם' : 'Your Purchases'}</h2><p>${he ? 'האוספים שכבר רכשתם מוכנים להאזנה.' : 'Collections you already purchased, ready to listen to.'}</p></div><div class="ios-audio-tier-tools"><strong class="ios-audio-count">${countLabel(owned.length)}</strong>${owned.length ? `<button type="button" class="ios-audio-see-all" data-nav="library" data-open-purchased="1">${he ? 'לצפייה בכל הרכישות' : 'See All in Library'}</button>` : ''}</div></header>`;
+    const ownedBody = owned.length
+      ? `<div class="paid-grid ios-audio-owned-grid">${owned.map(paidProductCard).join('')}</div>`
+      : !state.user
+        ? `<div class="store-login-note ios-audio-login"><span>${svgIcon('account')}</span><div><strong>${he ? 'התחברו כדי לראות את האוספים שלכם' : 'Sign in to see your purchased collections'}</strong><p>${he ? 'הרכישות המשויכות לחשבון יופיעו כאן.' : 'Collections linked to your account will appear here.'}</p></div><button data-nav="account">${he ? 'התחברות' : 'Sign In'}</button></div>`
+        : `<p class="ios-audio-empty">${he ? 'עדיין אין אוספים המשויכים לחשבונכם.' : 'No purchased collections are linked to your account yet.'}</p>`;
+    const ownedSection = `<section class="paid-catalog-section ios-audio-tier ios-audio-owned" data-ios-library-tier="purchased" aria-label="${he ? 'האוספים שלכם' : 'Your Purchases'}">${ownedHeader}${ownedBody}</section>`;
+    const divider = `<div class="ios-audio-divider" role="separator" aria-label="${he ? 'אוספים נוספים לעיון' : 'Explore available collections'}"><span></span><strong>${he ? 'אוספים נוספים לעיון' : 'EXPLORE MORE COLLECTIONS'}</strong><span></span></div>`;
+    const exploreSection = `<section class="paid-catalog-section ios-audio-tier ios-audio-explore" data-ios-library-tier="browse" aria-label="${he ? 'אוספים זמינים' : 'Available Collections'}"><header class="ios-audio-tier-header"><div class="ios-audio-tier-title"><span class="ios-audio-tier-eyebrow">${he ? 'לעיון' : 'BROWSE THE CATALOG'}</span><h2>${he ? 'אוספים זמינים' : 'Available Collections'}</h2><p>${he ? 'כאן תוכלו לעיין באוספים שעדיין אינם בספרייה האישית שלכם.' : 'Browse collections that are not yet in your personal library.'}</p></div><strong class="ios-audio-count">${countLabel(available.length)}</strong></header>${available.length ? `<div class="paid-grid ios-audio-browse-grid">${available.map(paidProductCard).join('')}</div>` : `<p class="ios-audio-empty">${he ? 'כל האוספים הזמינים כבר נמצאים בספרייה שלכם, או שכרגע אין אוספים נוספים.' : 'There are no additional available collections to browse right now.'}</p>`}</section>`;
+    const comingSection = coming.length ? `<details class="paid-coming-wrap ios-audio-coming"><summary><span>${he ? 'אוספים נוספים' : 'More Collections'}</span><small>${coming.length}</small></summary><div class="paid-grid">${coming.map(paidProductCard).join('')}</div></details>` : '';
+    const retry = state.paidError ? `<div class="paid-retry-card"><strong>${he ? 'לא ניתן לטעון את אוספי השמע' : 'Could not load audio collections'}</strong><span>${esc(state.paidError)}</span><button data-paid-retry="1">${he ? 'נסו שוב' : 'Try Again'}</button></div>` : '';
+    return `<div class="ios-audio-library">${heading}${retry}${ownedSection}${divider}${exploreSection}${comingSection}</div>`;
   }
   if (!state.paidLoaded && !state.paidError) return `<div class="page-title pro-page-title"><span class="page-kicker">PREMIUM TORAH AUDIO</span><h1>${currentLanguage()==='he'?'רכישה':'Purchase'}</h1><p>${currentLanguage()==='he'?'טוען את האוספים הזמינים ואת הרכישות שלכם…':'Loading available collections and your purchases…'}</p></div><div class="loading">${currentLanguage()==='he'?'טוען אוספים…':'Loading audio collections…'}</div>`;
   const owned = state.paidCatalog.filter(item => item.owned).length;
