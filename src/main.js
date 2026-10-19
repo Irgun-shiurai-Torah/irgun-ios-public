@@ -8392,7 +8392,9 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
     }
     Promise.resolve(playback).then(() => {
       updatePlayerUi();
-      if (nativeOwner && !document.hidden) restoreVideoAfterBackgroundAudio();
+      if (nativeOwner && !document.hidden && state.backgroundVideoAudioDidBackground) {
+        restoreVideoAfterBackgroundAudio();
+      }
     }).catch(error => {
       console.warn('Background video-to-audio handoff failed', source, error);
     });
@@ -8405,6 +8407,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
+  if (document.hidden) state.backgroundVideoAudioDidBackground = true;
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   if (!iosNativeActive() && nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
@@ -8493,13 +8496,14 @@ function restoreVideoAfterSystemPip(force = false) {
 
 function restoreVideoAfterBackgroundAudio() {
   if (iosNativeActive()) {
-    if (!document.hidden && !state.mediaSwitchBusy && state.backgroundVideoReturnToVideo &&
-        state.watchVideo && state.watchMode === 'audio' &&
+    if (!document.hidden && state.backgroundVideoAudioDidBackground && !state.mediaSwitchBusy &&
+        state.backgroundVideoReturnToVideo && state.watchVideo && state.watchMode === 'audio' &&
         iosUnified.state?.mode === 'audio' && state.current?.kind === 'video-audio') {
       // The native AVPlayer played the lecture's MP3 while backgrounded. Reopen
       // its HLS item at that clock when foregrounded; no second player is made.
       state.watchResumeSeconds = Math.max(0, iosNativePosition());
       state.backgroundVideoReturnToVideo = false;
+      state.backgroundVideoAudioDidBackground = false;
       state.current = null;
       state.watchMode = 'video';
       state.videoOwnsPlayback = true;
