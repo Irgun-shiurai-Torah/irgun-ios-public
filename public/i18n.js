@@ -66,6 +66,7 @@
     "Donate Securely": "תרומה מאובטחת",
     "Why the secure website form?": "למה טופס האתר המאובטח?",
     "Alternate secure card option (Cardknox)": "אפשרות כרטיס מאובטחת נוספת (Cardknox)",
+    "Purchases": "רכישות",
     "Your Purchases": "הרכישות שלכם",
     "Browse Store": "לעיון בחנות",
     "Manage on Website": "ניהול באתר",
