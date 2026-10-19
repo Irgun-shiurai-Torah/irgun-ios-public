@@ -666,12 +666,64 @@ final class PlaybackUITests: XCTestCase {
     func testDoubleTapSeeksBothWaysWithoutChangingPause() throws {
         try openSample(); try assertMovingVideo()
         try tapWebButton("Pause video")
-        _ = try waitFor("Pause before seeking") { $0["videoPlaying"] as? Bool == false }
-        let before=number(snapshot(),"videoTime")
-        videoPoint(0.8,0.4).doubleTap()
-        _ = try waitFor("Right double tap must seek 15 seconds") { abs(self.number($0,"videoTime") - before - 15)<2 && $0["videoPlaying"] as? Bool == false }
-        videoPoint(0.2,0.4).doubleTap()
-        _ = try waitFor("Left double tap must seek back 15 seconds") { abs(self.number($0,"videoTime") - before)<2 && $0["videoPlaying"] as? Bool == false }
+        let pausedState = try waitFor("Pause before seeking") { state in
+            let native = state["nativePlayer"] as? [String: Any] ?? [:]
+            if native["active"] as? Bool == true {
+                return native["playing"] as? Bool == false &&
+                    native["playRequested"] as? Bool == false
+            }
+            return state["videoPlaying"] as? Bool == false
+        }
+        let nativePaused = pausedState["nativePlayer"] as? [String: Any] ?? [:]
+        let usesNativePlayer = nativePaused["active"] as? Bool == true
+        let before = usesNativePlayer ? number(nativePaused, "position") : number(pausedState, "videoTime")
+        if usesNativePlayer {
+            let previousTapCount = number(nativePaused, "doubleTapCount")
+            videoPoint(0.8,0.4).doubleTap()
+            let forward = try waitFor("Native right double tap must seek 15 seconds and remain paused", timeout: 15) { state in
+                let native = state["nativePlayer"] as? [String: Any] ?? [:]
+                return self.number(native, "doubleTapCount") > previousTapCount &&
+                    self.number(native, "doubleTapOffset") == 15 &&
+                    native["doubleTapCompleted"] as? Bool == true &&
+                    native["playing"] as? Bool == false &&
+                    native["playRequested"] as? Bool == false &&
+                    abs(self.number(native, "position") - self.number(native, "doubleTapTarget")) < 2
+            }
+            let forwardNative = forward["nativePlayer"] as? [String: Any] ?? [:]
+            XCTAssertEqual(number(forwardNative, "doubleTapTarget"),
+                           number(forwardNative, "doubleTapFrom") + 15, accuracy: 0.25)
+            XCTAssertEqual(number(forwardNative, "position"),
+                           number(forwardNative, "doubleTapTarget"), accuracy: 2)
+
+            let forwardTapCount = number(forwardNative, "doubleTapCount")
+            videoPoint(0.2,0.4).doubleTap()
+            let backwardState = try waitFor("Native left double tap must rewind 15 seconds and remain paused", timeout: 15) { state in
+                let native = state["nativePlayer"] as? [String: Any] ?? [:]
+                return self.number(native, "doubleTapCount") > forwardTapCount &&
+                    self.number(native, "doubleTapOffset") == -15 &&
+                    native["doubleTapCompleted"] as? Bool == true &&
+                    native["playing"] as? Bool == false &&
+                    native["playRequested"] as? Bool == false &&
+                    abs(self.number(native, "position") - self.number(native, "doubleTapTarget")) < 2
+            }
+            let backwardNative = backwardState["nativePlayer"] as? [String: Any] ?? [:]
+            XCTAssertEqual(number(backwardNative, "doubleTapTarget"),
+                           number(backwardNative, "doubleTapFrom") - 15, accuracy: 0.25)
+            XCTAssertEqual(number(backwardNative, "position"),
+                           number(backwardNative, "doubleTapTarget"), accuracy: 2)
+            XCTAssertEqual(number(backwardNative, "position"), before, accuracy: 2)
+        } else {
+            videoPoint(0.8,0.4).doubleTap()
+            _ = try waitFor("Right double tap must seek 15 seconds") {
+                abs(self.number($0, "videoTime") - before - 15) < 2 &&
+                    $0["videoPlaying"] as? Bool == false
+            }
+            videoPoint(0.2,0.4).doubleTap()
+            _ = try waitFor("Left double tap must seek back 15 seconds") {
+                abs(self.number($0, "videoTime") - before) < 2 &&
+                    $0["videoPlaying"] as? Bool == false
+            }
+        }
         try tapWebButton("Play video"); try assertMovingVideo()
         let playing=number(snapshot(),"videoTime")
         videoPoint(0.8,0.4).doubleTap()
