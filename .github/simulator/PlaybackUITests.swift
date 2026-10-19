@@ -457,15 +457,29 @@ final class PlaybackUITests: XCTestCase {
     func testReopeningSameShiurKeepsPlayerAndClock() throws {
         try openSample()
         try assertMovingVideo()
-        let before = number(snapshot(), "videoTime")
+        let initial = snapshot()
+        let before = number(initial, "videoTime")
+        let nativeBefore = initial["nativePlayer"] as? [String: Any] ?? [:]
         let button = app.buttons["ist-simulator-reopen"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        _ = try waitFor("Same-shiur deep link must keep player ready and advancing") {
-            $0["ready"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
-            $0["controlsVisible"] as? Bool == true && self.number($0, "videoTime") > before + 1 &&
-            self.number($0, "playerCount") == (((($0["nativePlayer"] as? [String:Any])?["active"] as? Bool) == true) ? 0 : 1)
+        _ = try waitFor("Same-shiur deep link must keep player ready and advancing") { state in
+            let native = state["nativePlayer"] as? [String: Any] ?? [:]
+            let isNative = nativeBefore["active"] as? Bool == true
+            return state["ready"] as? Bool == true && state["videoPlaying"] as? Bool == true &&
+                self.number(state, "videoTime") > before + 1 &&
+                self.number(state, "playerCount") == (isNative ? 0 : 1) &&
+                (!isNative || (native["active"] as? Bool == true &&
+                    native["id"] as? String == nativeBefore["id"] as? String &&
+                    self.number(native, "itemEpoch") == self.number(nativeBefore, "itemEpoch")))
         }
+        try assertMovingVideo()
+        // Controls may have reached their inactivity deadline while XCTest
+        // delivers the deep link. Verify real controls remain usable, rather
+        // than requiring them to stay visible throughout ongoing playback.
+        try tapWebButton("Pause video")
+        _ = try waitFor("Reopened player responds to Pause") { $0["videoPlaying"] as? Bool == false }
+        try tapWebButton("Play video")
         try assertMovingVideo()
         evidence("same-shiur-reopen")
     }
@@ -626,8 +640,17 @@ final class PlaybackUITests: XCTestCase {
         try openSample(); try assertMovingVideo()
         let initial = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
         guard initial["active"] as? Bool == true else { throw XCTSkip("Native AVPlayer scenario") }
-        if initial["controlsVisible"] as? Bool != true { videoPoint(0.5, 0.25).tap() }
-        _ = try waitFor("Controls are visible before inactivity", timeout: 5) { $0["controlsVisible"] as? Bool == true }
+        // Establish a fresh inactivity window through actual controls. Media
+        // loading, frame checks and evidence capture can consume the original
+        // eight seconds before this test starts observing the timeout.
+        try tapWebButton("Pause video")
+        _ = try waitFor("Pause establishes visible controls") {
+            $0["videoPlaying"] as? Bool == false && $0["controlsVisible"] as? Bool == true
+        }
+        try tapWebButton("Play video")
+        _ = try waitFor("Play starts a fresh visible-control window", timeout: 5) {
+            $0["videoPlaying"] as? Bool == true && $0["controlsVisible"] as? Bool == true
+        }
         _ = try waitFor("Playing controls hide after eight seconds", timeout: 12) {
             $0["controlsVisible"] as? Bool == false && $0["videoPlaying"] as? Bool == true
         }

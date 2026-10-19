@@ -120,8 +120,11 @@ final class SimulatorProbe {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
     }
     @objc private func hideForAppControls() {
+        // Keep diagnostics out of the app's touch path for the rest of this
+        // test. A timed return can cover the fullscreen toolbar between its
+        // observed hit test and XCTest delivering the real touch. Each test
+        // relaunches the app and recreates the panel.
         panel?.isHidden = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in self?.panel?.isHidden = false }
     }
 
     private func poll() {
