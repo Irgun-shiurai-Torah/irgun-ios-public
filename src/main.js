@@ -2587,6 +2587,12 @@ async function login(email, password) {
     state.user = data.user || { name: data.name || '', email };
     await loadUserCollections();
     state.adminChecked = false;
+    state.isCityAdmin = false;
+    state.cityAdminChecked = false;
+    cityAdminController.reset();
+    websiteAdminParity.reset();
+    state.adminPaidBuyers = [];
+    state.adminPaidBuyersLoaded = false;
     await checkAdminStatus(true);
     state.paidLoaded = false;
     state.paidCatalog = [];
@@ -2616,6 +2622,12 @@ async function finishSocialLogin(data, fallbackUser = {}, providerLabel = 'Accou
   state.user = data.user || { name: data.name || fallbackUser.name || '', email: fallbackUser.email || '' };
   await loadUserCollections();
   state.adminChecked = false;
+  state.isCityAdmin = false;
+  state.cityAdminChecked = false;
+  cityAdminController.reset();
+  websiteAdminParity.reset();
+  state.adminPaidBuyers = [];
+  state.adminPaidBuyersLoaded = false;
   await checkAdminStatus(true);
   state.paidLoaded = false;
   state.paidCatalog = [];
