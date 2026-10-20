@@ -239,6 +239,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var itemObserver: NSKeyValueObservation?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
+    private var playbackRecoveryTask: DispatchWorkItem?
+    private var lastObservedPlaybackPosition: Double = 0
+    private var lastPlaybackProgressAt = Date()
+    private var lastPlaybackRecoveryAttemptAt = Date.distantPast
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
     override public func load() {
@@ -259,12 +264,27 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
 
         playerObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.publishState() }
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if self.player.timeControlStatus == .playing {
+                    self.playbackRecoveryTask?.cancel()
+                    self.playbackRecoveryTask = nil
+                    self.lastObservedPlaybackPosition = self.position()
+                    self.lastPlaybackProgressAt = Date()
+                } else {
+                    self.schedulePlaybackRecoveryIfNeeded()
+                }
+                self.publishState()
+            }
         }
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
-        ) { [weak self] _ in self?.publishState() }
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.monitorPlaybackProgress()
+            self.publishState()
+        }
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main
         ) { [weak self] notification in
@@ -277,6 +297,117 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             // Pause, buffering and layout changes must never look like EOF.
             self.notifyListeners("ended", data: self.snapshot())
         }
+        // When the app goes Home, detach the video renderer, not the AVPlayerItem.
+        // This allows the existing player to continue its audio track using the
+        // background-audio entitlement. On return we reattach the same layer.
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.reconcileBackgroundVideoLayer(isBackgrounded: true) })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.reconcileBackgroundVideoLayer(isBackgrounded: false) })
+    }
+
+    private func reconcileBackgroundVideoLayer(isBackgrounded: Bool) {
+        guard active else { return }
+        if isBackgrounded {
+            // Explicit user PiP must keep its AVPlayerLayer attached.
+            guard mode == "video", !isPiPRequested,
+                  pipController?.isPictureInPictureActive != true else { return }
+            videoLayer.player = nil
+            if playingWanted {
+                do { try activateAudioSession() }
+                catch { NSLog("Irgun background playback session unavailable: \\(error)") }
+                // Do not replace the item or seek: the HLS audio track continues
+                // at its existing clock without a second decoder/player.
+                if player.rate < 0.01 { player.playImmediately(atRate: playbackRate) }
+                schedulePlaybackRecoveryIfNeeded()
+            }
+        } else {
+            if videoLayer.player == nil { videoLayer.player = player }
+            placeSurface(lastSurfaceRect)
+            guard playingWanted else { return }
+            if player.timeControlStatus != .playing {
+                do { try activateAudioSession() }
+                catch { NSLog("Irgun foreground playback session unavailable: \\(error)") }
+                player.playImmediately(atRate: playbackRate)
+                schedulePlaybackRecoveryIfNeeded()
+            }
+        }
+    }
+
+    private func monitorPlaybackProgress() {
+        guard active, playingWanted, !controlsMenuOpen, nativeSeekTarget == nil,
+              let item = player.currentItem, item.status == .readyToPlay else { return }
+        let now = Date()
+        let current = position()
+        if current > lastObservedPlaybackPosition + 0.35 ||
+           current < lastObservedPlaybackPosition - 1.0 {
+            lastObservedPlaybackPosition = current
+            lastPlaybackProgressAt = now
+            playbackRecoveryTask?.cancel()
+            playbackRecoveryTask = nil
+            return
+        }
+        if now.timeIntervalSince(lastPlaybackProgressAt) >= 5 {
+            schedulePlaybackRecoveryIfNeeded()
+        }
+    }
+
+    // AVPlayer can remain requested-to-play but stalled after a transient HLS
+    // network loss or iOS lifecycle interruption. Retry only while the user's
+    // play intent remains true; explicit Pause always cancels recovery.
+    private func schedulePlaybackRecoveryIfNeeded() {
+        guard active, playingWanted, !controlsMenuOpen, nativeSeekTarget == nil,
+              let item = player.currentItem, item.status == .readyToPlay else {
+            playbackRecoveryTask?.cancel()
+            playbackRecoveryTask = nil
+            return
+        }
+        guard playbackRecoveryTask == nil else { return }
+        let expectedGeneration = generation
+        let expectedItemEpoch = itemEpoch
+        let expectedItem = item
+        let expectedPosition = position()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.playbackRecoveryTask = nil
+            guard self.active, self.playingWanted, !self.controlsMenuOpen,
+                  self.nativeSeekTarget == nil,
+                  self.generation == expectedGeneration,
+                  self.itemEpoch == expectedItemEpoch,
+                  self.player.currentItem === expectedItem,
+                  self.player.currentItem?.status == .readyToPlay else { return }
+            let current = self.position()
+            if current > expectedPosition + 0.75 {
+                self.lastObservedPlaybackPosition = current
+                self.lastPlaybackProgressAt = Date()
+                return
+            }
+            let now = Date()
+            guard now.timeIntervalSince(self.lastPlaybackRecoveryAttemptAt) >= 3 else {
+                self.schedulePlaybackRecoveryIfNeeded()
+                return
+            }
+            self.lastPlaybackRecoveryAttemptAt = now
+            do {
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                NSLog("Irgun AVPlayer recovery could not reactivate audio session: \\(error)")
+            }
+            self.player.playImmediately(atRate: self.playbackRate)
+            self.publishState()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self = self, self.active, self.playingWanted,
+                      self.generation == expectedGeneration,
+                      self.itemEpoch == expectedItemEpoch,
+                      self.player.currentItem === expectedItem,
+                      self.position() <= current + 0.75 else { return }
+                self.schedulePlaybackRecoveryIfNeeded()
+            }
+        }
+        playbackRecoveryTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: task)
     }
 
     private func playableURL(_ value: String) -> URL? {
@@ -623,6 +754,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.artist = call.getString("artist") ?? ""
             self.playbackRate = Float(max(0.5, min(2, call.getDouble("rate") ?? 1)))
             self.playingWanted = call.getBool("autoplay") ?? false
+            self.playbackRecoveryTask?.cancel()
+            self.playbackRecoveryTask = nil
+            self.lastPlaybackRecoveryAttemptAt = .distantPast
+            self.lastPlaybackProgressAt = Date()
+            self.lastObservedPlaybackPosition = max(0, call.getDouble("position") ?? 0)
             self.lastSurfaceRect = call.getObject("rect")
             self.placeSurface(self.lastSurfaceRect)
             let replacing = self.itemID != id || self.itemURL != source ||
@@ -678,6 +814,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             guard self.active else { call.reject("No native item loaded"); return }
             if self.isPiPRequested { self.pipPausedByUser = false; self.pipResumeWanted = true }
             self.playingWanted = true
+            self.playbackRecoveryTask?.cancel()
+            self.playbackRecoveryTask = nil
+            self.lastPlaybackRecoveryAttemptAt = .distantPast
+            self.lastPlaybackProgressAt = Date()
+            self.lastObservedPlaybackPosition = self.position()
             do { try self.activateAudioSession() }
             catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
             self.player.playImmediately(atRate: self.playbackRate)
@@ -690,6 +831,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         DispatchQueue.main.async {
             if self.isPiPRequested { self.pipPausedByUser = true }
             self.playingWanted = false
+            self.playbackRecoveryTask?.cancel()
+            self.playbackRecoveryTask = nil
             self.player.pause()
             self.publishState()
             call.resolve(self.snapshot())
@@ -1130,17 +1273,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
         swipe.direction = .down
         swipe.delegate = self
-        overlay.addGestureRecognizer(swipe)
+        viewer.view.addGestureRecognizer(swipe)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(tapDoubleSeek(_:)))
         doubleTap.numberOfTapsRequired = 2
         doubleTap.cancelsTouchesInView = false
         doubleTap.delegate = self
-        overlay.addGestureRecognizer(doubleTap)
+        viewer.view.addGestureRecognizer(doubleTap)
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(tapVideoSurface(_:)))
         singleTap.require(toFail: doubleTap)
         singleTap.require(toFail: swipe)
         singleTap.delegate = self
-        overlay.addGestureRecognizer(singleTap)
+        viewer.view.addGestureRecognizer(singleTap)
         updateNativeControls()
     }
 
@@ -1671,6 +1814,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         if let observer = endObserver { NotificationCenter.default.removeObserver(observer) }
         pendingOpenTimeout?.cancel()
         controlsHideTask?.cancel()
+        playbackRecoveryTask?.cancel()
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        lifecycleObservers.removeAll()
         if let pending = pendingOpen { pending.reject("Native player released") }
         clearRemoteControls()
     }
