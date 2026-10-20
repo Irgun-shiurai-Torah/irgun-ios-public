@@ -12,7 +12,7 @@ This is an **additional** CI workflow. Do not mistake it for the original public
   notification callback, inline player, controls, one playing video, real decoded frames.
   This tests simulator delivery, **not** live APNs infrastructure.
 - **Mini, fullscreen and PiP:** real controls, Home/reopen, a single player, valid clocks
-  and moving decoded frames. Unsupported PiP is a **failure**, not a passing skip.
+  and moving decoded frames. Unsupported simulator PiP is an explicit XCTest skip, **not** proof that PiP works. Physical iPhone/iPad PiP verification is required.
 - **Internet interruptions:** real macOS PF drops external HTTP(S) traffic. An actual
   cache-busted Worker request must fail during blackout and succeed after restoration.
   It is a host-network simulation, not an iPhone Wi-Fi radio toggle.
@@ -78,12 +78,9 @@ persistence and video/audio handoff scenario with PR #26's comprehensive iOS
 regression suite. The separate account scenario is loaded from
 `.github/regression/account-regressions.swift` alongside the 11 extended scenarios.
 
-**Do not dispatch or test this PR until PR #45 passes and is merged into main.**
-The workflow is intentionally **manual-only**, with no `pull_request`, `push`,
-`workflow_call` or scheduled trigger. After PR #45 merges, rebase/refresh this
-branch onto the new main, update selectors for the final native AVPlayer, perform
-a static compatibility review, then explicitly enable and run the suite on
-iPhone and iPad. Leave the draft PR unmerged until the new run is genuinely green.
+PR #45 and PR #47 have merged into main. The extended suite is now eligible to run against the current native player.
+The workflow is normally manual-only. A **temporary branch-scoped `push` trigger** runs this staging suite after the PR #47 merge; remove it before PR #46 merges. The branch was refreshed with the merged main playback sources before running
+both iPhone and iPad simulator regressions. Leave the draft PR unmerged until the new run is genuinely green.
 
 All old `src/main.js`, `src/direct-media.js`, style and native player changes
 from PRs #25/#26 were deliberately excluded. They would overwrite modern
@@ -103,4 +100,4 @@ comment markers are run-specific, and report artifacts must remain credential-fr
 
 The first iPhone run exposed a native AVPlayer observation mismatch, asynchronous session-restoration race, and tests expecting controls to remain visible after their intended auto-hide timeout. The test harness has been corrected for these cases and now includes a simulator-only notification-permission control.
 
-Further simulator runs are paused until PR #47's background audio, network recovery, and offline-download fixes pass and merge. PR #46 remains a draft.
+PR #47 has merged after all four automated CI workflows passed. PR #46 remains a draft while its extended simulator tests run. Physical-device PiP verification is still required.

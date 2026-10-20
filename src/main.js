@@ -663,7 +663,9 @@ async function saveOffline(kind, id) {
   usageAnalytics.event('offline_listen_started', { shiurId:String(id || ''), mediaType:'audio', dedupeKey:`offline:${normalizedKind}:${id}`, cooldownMs:3000 });
   const rawId = normalizedKind === 'audio' ? rawAudioId(item) : videoId(item);
   const sourceId = normalizedKind === 'audio' ? rawId : mediaApiId(item, rawId);
-  const url = `${API}/download/${encodeURIComponent(sourceId)}?type=audio`;
+  // Use the Worker audio stream endpoint, which validates Drive responses and
+  // rejects HTML confirmation/error pages instead of saving them as MP3 files.
+  const url = `${API}/audio/${encodeURIComponent(sourceId)}`;
   const title = itemTitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const subtitle = itemSubtitle({ ...item, _kind: normalizedKind === 'audio' ? 'audio' : 'video' });
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
@@ -674,6 +676,8 @@ async function saveOffline(kind, id) {
   let listener = null;
   try {
     await Filesystem.mkdir({ directory: Directory.Data, path:'irgun-offline', recursive:true }).catch(() => {});
+    // A previous failed/partial transfer must never be mistaken for a fresh copy.
+    await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
     const fileInfo = await Filesystem.getUri({ directory: Directory.Data, path });
     listener = await FileTransfer.addListener('progress', progress => {
       if (String(progress?.url || '') !== url) return;
@@ -687,11 +691,17 @@ async function saveOffline(kind, id) {
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
+    const transfer = await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
     const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
+    const bytes = Number(stat?.size) || Number(transfer?.size) || Number(state.offlineJobs.get(key)?.bytes) || 0;
+    const responseCode = Number(transfer?.statusCode ?? transfer?.responseCode) || 0;
+    if ((responseCode && (responseCode < 200 || responseCode >= 300)) || bytes < 8192) {
+      await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
+      throw new Error(`Offline audio response was not a usable lecture file (HTTP ${responseCode || 'unknown'}, ${bytes} bytes)`);
+    }
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
-      uri:fileInfo.uri, path, bytes:Number(stat?.size) || Number(state.offlineJobs.get(key)?.total) || 0,
+      uri:fileInfo.uri, path, bytes,
       savedAt:Date.now()
     });
     state.offlineJobs.delete(key);
@@ -700,6 +710,7 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else refreshOfflineButtonsForKey(key);

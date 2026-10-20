@@ -1,8 +1,11 @@
 name: iOS Extended Regression Tests
 
-# Hold long-running simulator jobs until PR47's native playback fixes pass and merge.
+# PR47 is merged. Enable a temporary push trigger ONLY for this staging branch
+# so extended iPhone/iPad tests run now. Restore manual-only before merging PR46.
 on:
   workflow_dispatch:
+  push:
+    branches: [test/ios-regressions-pr25-pr26-after-pr45]
 
 permissions:
   contents: read
