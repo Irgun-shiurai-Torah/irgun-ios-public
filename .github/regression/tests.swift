@@ -347,8 +347,12 @@
         let target = snapshot()["id"] as? String ?? ""
         let position = number(snapshot(),"videoTime")
         try regressionPressHomeAndWaitForSpringBoard("SpringBoard must become foreground before APNs delivery")
-        XCTAssertNotEqual(app.state, .runningForeground,
-                          "Push delivery must wait until the app is actually backgrounded")
+        // XCTest's XCUIApplication.state can remain stale as .runningForeground
+        // while iOS continues our AVPlayer's background audio. SpringBoard's
+        // actual foreground state is the reliable OS-visible Home verification;
+        // the test still requires simctl delivery AND a native notification tap.
+        XCTAssertEqual(springboard.state, .runningForeground,
+                       "Push delivery requires SpringBoard to own the foreground")
         try regressionArmPush(target: target, previousActions: initial)
         let notification=springboard.descendants(matching:.any)
             .matching(NSPredicate(format:"label CONTAINS %@", "Irgun QA Playback")).firstMatch

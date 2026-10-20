@@ -7,16 +7,35 @@
         for _ in 0..<3 {
             let field = password ? app.webViews.secureTextFields.firstMatch : app.webViews.textFields.firstMatch
             XCTAssertTrue(field.waitForExistence(timeout:10),"Real native login field must exist")
+            // A failed sign-in deliberately preserves the email. Do not erase
+            // and retype an already-correct address: UIKit may place the caret
+            // at the start of a filled text field, so backspaces cannot clear it.
+            // Confirm BOTH the native field text and actual observed input state.
+            if !password {
+                let observed = snapshot()["account"] as? [String:Any] ?? [:]
+                let actual = (field.value as? String ?? "")
+                    .trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
+                let wanted = value.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
+                if actual == wanted &&
+                    Int(number(observed,lengthKey)) == value.utf16.count &&
+                    observed["authEmailValid"] as? Bool == true { return }
+            }
             field.tap()
             _ = try waitFor("Native login field receives focus before keyboard entry",timeout:15) {
                 ($0["account"] as? [String:Any])?[focusedKey] as? Bool == true
             }
             _ = app.keyboards.firstMatch.waitForExistence(timeout:2)
             let account = snapshot()["account"] as? [String:Any] ?? [:]
-            let deleteCount = max(Int(number(account,lengthKey)),value.utf16.count)+8
-            field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:deleteCount))
-            _ = try waitFor("Native keyboard clears only the focused login field",timeout:10) {
-                self.number($0["account"] as? [String:Any] ?? [:],lengthKey) == 0
+            let existingLength = Int(number(account,lengthKey))
+            if existingLength > 0 {
+                // Aim at the trailing end before deleting, rather than the
+                // field's midpoint which can position the caret at its start.
+                field.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+                field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,
+                                      count:existingLength+8))
+                _ = try waitFor("Native keyboard clears only the focused login field",timeout:10) {
+                    self.number($0["account"] as? [String:Any] ?? [:],lengthKey) == 0
+                }
             }
             field.typeText(value)
             let deadline = Date().addingTimeInterval(4)
