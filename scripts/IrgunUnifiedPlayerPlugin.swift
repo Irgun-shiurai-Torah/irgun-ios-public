@@ -329,9 +329,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private func reconcileBackgroundVideoLayer(isBackgrounded: Bool) {
         guard active else { return }
         if isBackgrounded {
-            // Explicit user PiP must keep its AVPlayerLayer attached.
-            guard mode == "video", !isPiPRequested,
-                  pipController?.isPictureInPictureActive != true else { return }
+            // Only the user's explicit PiP button may keep system PiP active.
+            // On iPadOS, an automatic PiP transition can race didEnterBackground:
+            // the controller may already report active before the WillStart
+            // delegate's stop request has completed. Stop that unsolicited
+            // session here too, instead of returning early and leaving the
+            // inline player hidden when the app is reopened.
+            guard !isPiPRequested else { return }
+            if pipController?.isPictureInPictureActive == true {
+                pipController?.stopPictureInPicture()
+            }
+            guard mode == "video" else { return }
             videoLayer.player = nil
             if playingWanted {
                 do { try activateAudioSession() }
