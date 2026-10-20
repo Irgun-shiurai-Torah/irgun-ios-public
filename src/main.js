@@ -140,7 +140,7 @@ const state = {
   authBusy: false,
   authMessage: '',
   authEmailDraft: '',
-  authVerifyEmail: ''
+  authVerifyEmail: '',
   authVerifyPassword: '',
   deleteDialog: false,
   deleteBusy: false,
