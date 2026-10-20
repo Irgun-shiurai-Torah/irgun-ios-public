@@ -125,23 +125,23 @@
                     let viewportHeight = number(s, "height")
                     let surfaceTop = number(native, "surfaceY")
                     let surfaceBottom = surfaceTop + number(native, "surfaceHeight")
+                    let directionUp: Bool
                     if targetY < 0 {
-                        app.webViews.firstMatch.swipeDown()
+                        directionUp = false
                     } else if viewportHeight > 0 && targetY > viewportHeight {
-                        app.webViews.firstMatch.swipeUp()
+                        directionUp = true
                     } else if native["active"] as? Bool == true &&
                               native["mode"] as? String == "video" &&
                               surfaceTop > 0 && targetY >= surfaceTop && targetY <= surfaceBottom {
-                        // The native AVPlayer is a UIKit overlay above WebView.
-                        // If a comment control is behind that surface, scroll it
-                        // below the player before tapping; otherwise repeated
-                        // taps/swipes can never reach the actual DOM button.
-                        app.webViews.firstMatch.swipeDown()
+                        // Move content out from underneath the native UIKit
+                        // player, but perform the swipe entirely below its frame.
+                        directionUp = false
                     } else {
-                        app.webViews.firstMatch.swipeUp()
+                        directionUp = targetY >= viewportHeight * 0.55
                     }
+                    regressionScroll(fullState, towardUp: directionUp)
                 } else {
-                    app.webViews.firstMatch.swipeUp()
+                    regressionScroll(fullState, towardUp: true)
                 }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
@@ -420,7 +420,12 @@
         }
         try touch("playlists")
         let playlistName="Irgun-QA-\(Int(Date().timeIntervalSince1970))"
-        try touch("playlistName"); app.textFields.firstMatch.typeText(playlistName + "\n")
+        try touch("playlistName")
+        let playlistField=app.textFields.firstMatch
+        XCTAssertTrue(playlistField.waitForExistence(timeout:8),"Playlist name field must be visible")
+        playlistField.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:5),"Native keyboard must open for playlist creation")
+        playlistField.typeText(playlistName + "\n")
         func hasPlaylist(_ s:[String:Any]) -> Bool { (s["playlists"] as? [[String:Any]] ?? []).contains { $0["name"] as? String == playlistName } }
         try awaitAccount("Playlist created") { hasPlaylist($0) }
         checked("QA playlist created")
