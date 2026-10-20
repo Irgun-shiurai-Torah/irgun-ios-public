@@ -139,7 +139,8 @@ const state = {
   authMode: 'login',
   authBusy: false,
   authMessage: '',
-  authVerifyEmail: '',
+  authEmailDraft: '',
+  authVerifyEmail: ''
   authVerifyPassword: '',
   deleteDialog: false,
   deleteBusy: false,
@@ -2573,6 +2574,9 @@ async function refreshLikeCounts() {
 }
 
 async function login(email, password) {
+  // login() rerenders the whole form while the request is in flight. Keep the
+  // entered email in state so a rejected password doesn't erase the email field.
+  state.authEmailDraft = String(email || '').trim();
   state.authBusy = true;
   state.authMessage = '';
   render();
@@ -5259,7 +5263,7 @@ function authHtml() {
       ${state.authMessage ? `<div class="form-message">${esc(state.authMessage)}</div>` : ''}
       <form id="authForm" class="form-stack">
         ${registerMode ? '<label>Name<input id="authName" autocomplete="name" required></label>' : ''}
-        <label>Email<input id="authEmail" type="email" autocomplete="email" required></label>
+        <label>Email<input id="authEmail" type="email" autocomplete="email" value="${esc(state.authEmailDraft || '')}" required></label>
         <label>Password<input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></label>
         <button class="form-submit" type="submit" ${state.authBusy ? 'disabled' : ''}>${state.authBusy ? 'Please wait...' : (registerMode ? 'Create Account' : 'Login')}</button>
       </form>
@@ -6921,6 +6925,10 @@ function bind() {
   document.getElementById('authVerificationCode')?.addEventListener('input',event=>{event.target.value=String(event.target.value||'').replace(/\D/g,'').slice(0,6);});
 
   const authForm = document.getElementById('authForm');
+  const authEmail = document.getElementById('authEmail');
+  if (authEmail) authEmail.addEventListener('input', event => {
+    state.authEmailDraft = event.target.value;
+  });
   if (authForm) authForm.addEventListener('submit', event => {
     event.preventDefault();
     const email = document.getElementById('authEmail').value.trim();
