@@ -826,13 +826,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
                 #if targetEnvironment(simulator)
-                self.simulatorFrameCount = 0
-                self.simulatorFrameTime = 0
-                let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
-                    kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-                ])
-                item.add(output)
-                self.simulatorFrameOutput = output
+                self.attachSimulatedFrameOutput(to: item)
                 #endif
                 self.itemEpoch += 1
                 self.player.replaceCurrentItem(with: item)
@@ -939,12 +933,25 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             if next == "audio", self.pipController?.isPictureInPictureActive == true {
                 self.pipController?.stopPictureInPicture()
             }
+            let previousMode = self.mode
             self.mode = next
-            // Reattach the same AVPlayer to its video layer on every return from
-            // Audio. Reassert play intent without replacing the AVPlayerItem or
-            // seeking away from the saved position.
+            // AVFoundation may suspend video decoding while the native surface
+            // is hidden for Audio. Rebuild only the AVPlayerLayer attachment
+            // when coming back to Video. Preserve the SAME AVPlayer/AVPlayerItem
+            // and clock, so the audio-to-video handoff never restarts the shiur.
             if next == "video" {
-                self.videoLayer.player = self.player
+                if previousMode == "audio" || self.videoLayer.player == nil {
+                    self.videoLayer.player = nil
+                    self.videoLayer.player = self.player
+                    #if targetEnvironment(simulator)
+                    // A simulator AVPlayerItemVideoOutput can remain stuck on
+                    // its last audio-only frame. Reattach the REAL decoded-frame
+                    // probe so the test still requires newly decoded pixels.
+                    if let item = self.player.currentItem {
+                        self.attachSimulatedFrameOutput(to: item)
+                    }
+                    #endif
+                }
                 if self.playingWanted {
                     self.lastObservedPlaybackPosition = self.position()
                     self.lastPlaybackProgressAt = Date()
@@ -1569,6 +1576,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     #if targetEnvironment(simulator)
     private func attachSimulatedFrameOutput(to item: AVPlayerItem) {
+        // The previous observer may have stopped delivering frames while the
+        // same item continued playing audio. Remove it before reconnecting a
+        // fresh AVPlayerItemVideoOutput; never fabricate a frame or advance a
+        // test counter from player time alone.
+        if let previous = simulatorFrameOutput,
+           item.outputs.contains(where: { $0 === previous }) {
+            item.remove(previous)
+        }
         simulatorFrameCount = 0
         simulatorFrameTime = 0
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
