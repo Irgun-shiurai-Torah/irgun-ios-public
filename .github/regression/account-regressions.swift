@@ -74,8 +74,11 @@
                 let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
                 return rects[key] != nil
             }
-            for _ in 0..<7 {
-                let s=account(), controls=s["controls"] as? [String: [String: Any]] ?? [:]
+            for _ in 0..<10 {
+                let fullState = snapshot()
+                let s = fullState["account"] as? [String: Any] ?? [:]
+                let native = fullState["nativePlayer"] as? [String: Any] ?? [:]
+                let controls = s["controls"] as? [String: [String: Any]] ?? [:]
                 report["collectionRequests"] = s["requests"] ?? []
                 report["lastScreen"] = s["screen"] as? String ?? ""
                 report["lastControlKeys"] = controls.keys.sorted()
@@ -117,9 +120,29 @@
                     let endX=number(rect,"x")>right ? left:right
                     origin.withOffset(CGVector(dx:startX,dy:y)).press(forDuration:0.05,
                         thenDragTo:origin.withOffset(CGVector(dx:endX,dy:y)))
-                } else if let rect = rects[key], number(rect,"y") < 0 {
-                    app.webViews.firstMatch.swipeDown()
-                } else { app.webViews.firstMatch.swipeUp() }
+                } else if let rect = rects[key] {
+                    let targetY = number(rect, "y")
+                    let viewportHeight = number(s, "height")
+                    let surfaceTop = number(native, "surfaceY")
+                    let surfaceBottom = surfaceTop + number(native, "surfaceHeight")
+                    if targetY < 0 {
+                        app.webViews.firstMatch.swipeDown()
+                    } else if viewportHeight > 0 && targetY > viewportHeight {
+                        app.webViews.firstMatch.swipeUp()
+                    } else if native["active"] as? Bool == true &&
+                              native["mode"] as? String == "video" &&
+                              surfaceTop > 0 && targetY >= surfaceTop && targetY <= surfaceBottom {
+                        // The native AVPlayer is a UIKit overlay above WebView.
+                        // If a comment control is behind that surface, scroll it
+                        // below the player before tapping; otherwise repeated
+                        // taps/swipes can never reach the actual DOM button.
+                        app.webViews.firstMatch.swipeDown()
+                    } else {
+                        app.webViews.firstMatch.swipeUp()
+                    }
+                } else {
+                    app.webViews.firstMatch.swipeUp()
+                }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }

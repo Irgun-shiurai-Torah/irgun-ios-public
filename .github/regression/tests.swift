@@ -223,26 +223,36 @@
 
     func testRegressionBackgroundAudioAndReopenControls() throws {
         try regressionActivateSample()
-        let start=number(snapshot(),"videoTime")
+        let initial = snapshot()
+        let initialNative = initial["nativePlayer"] as? [String: Any] ?? [:]
+        let start = number(initial, "videoTime")
+        let originalID = initialNative["id"] as? String ?? ""
+        let originalEpoch = number(initialNative, "itemEpoch")
+        XCTAssertFalse(originalID.isEmpty, "Background playback must start with a real native item")
         XCUIDevice.shared.press(.home)
         _ = try waitFor("Home really backgrounds the app",timeout:20) { _ in
             self.app.state == .runningBackground || self.app.state == .runningBackgroundSuspended
         }
-        let backgroundAudio=try waitFor("Native AVPlayer hands off to the real audio stream",timeout:25) {
-            let n=$0["nativePlayer"] as? [String:Any] ?? [:]
-            return n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
-                   n["playing"] as? Bool == true
+        let backgroundPlayback = try waitFor("The same native AVPlayer keeps playing while backgrounded",timeout:25) { state in
+            let n = state["nativePlayer"] as? [String: Any] ?? [:]
+            return n["active"] as? Bool == true && n["mode"] as? String == "video" &&
+                   n["playing"] as? Bool == true && n["id"] as? String == originalID &&
+                   self.number(state, "videoTime") >= max(0, start - 3)
         }
-        let audioStart=number(backgroundAudio,"videoTime")
+        let backgroundStart = number(backgroundPlayback, "videoTime")
         Thread.sleep(forTimeInterval:16)
-        let progressed=snapshot()
-        let progressedNative=progressed["nativePlayer"] as? [String:Any] ?? [:]
-        XCTAssertEqual(progressedNative["mode"] as? String,"audio")
-        XCTAssertEqual(progressedNative["playing"] as? Bool,true)
-        XCTAssertGreaterThan(number(progressed,"videoTime"),audioStart+3,
-                              "The same native AVPlayer must keep the lecture's audio clock moving in background")
+        let progressed = snapshot()
+        let progressedNative = progressed["nativePlayer"] as? [String: Any] ?? [:]
+        XCTAssertEqual(progressedNative["mode"] as? String, "video")
+        XCTAssertEqual(progressedNative["playing"] as? Bool, true)
+        XCTAssertEqual(progressedNative["id"] as? String, originalID,
+                       "Home must not replace the lecture or create a second player")
+        XCTAssertEqual(number(progressedNative, "itemEpoch"), originalEpoch,
+                       "Background playback must keep the same AVPlayerItem")
+        XCTAssertGreaterThan(number(progressed, "videoTime"), backgroundStart + 3,
+                             "The native player's audio clock must keep advancing in background")
         app.activate()
-        let resumed=try waitFor("Foreground restores the HLS video at the background audio position",timeout:90) {
+        let resumed = try waitFor("Foreground restores the HLS video at the background playback position",timeout:90) {
             $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
             $0["videoVisible"] as? Bool == true &&
             self.number($0,"videoTime") >= max(0,self.number(progressed,"videoTime")-3)
@@ -331,11 +341,20 @@
             ($0["pushActions"] as? Int ?? 0)>initial &&
             $0["pushWatchTarget"] as? Bool == true
         }
-        _ = try waitFor("Notification reopening restores inline player controls",timeout:75) {
+        let reopened = try waitFor("Notification reopening restores the same inline playing video",timeout:75) {
             $0["mode"] as? String == "video" && $0["pip"] as? Bool == false &&
-            $0["videoVisible"] as? Bool == true && $0["controlsVisible"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true && self.regressionSingleVideoOwner($0) &&
+            $0["videoVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true &&
+            self.regressionSingleVideoOwner($0) &&
             $0["id"] as? String == target && self.number($0,"videoTime") >= max(0,position-3)
+        }
+        // The native player intentionally starts with controls hidden and then
+        // auto-hides them, matching Android. If hidden after notification tap,
+        // reveal them with a real picture tap before exercising Pause/Play.
+        if reopened["controlsVisible"] as? Bool != true {
+            videoPoint(0.5,0.25).tap()
+            _ = try waitFor("Picture tap reveals controls after notification launch",timeout:12) {
+                $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
+            }
         }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause works after notification launch") {
