@@ -147,6 +147,9 @@
     const native=iosNativeActive() ? iosUnified.state : null;
     return JSON.stringify({...base,regression:{
       controls:selectors,rects:hitRects,libraryTabsRect,
+      // Actual WKWebView viewport: native gestures require CSS-pixel bounds.
+      // Without these, tests mis-classify offscreen controls and always scroll up.
+      width:innerWidth,height:innerHeight,
       screen:state.screen,
       lastClickSequence:Number(window.__ISTRegressionLastClick?.sequence||0),
       lastClickKey:String(window.__ISTRegressionLastClick?.key||''),

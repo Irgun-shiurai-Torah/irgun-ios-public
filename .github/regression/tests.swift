@@ -328,9 +328,12 @@
         // Exercise the SAME visible Shiurim > Watch path a user follows.
         // Do not rely on a hidden simulator diagnostic button or invoke JS.
         try regressionTap("shiurim")
-        try regressionWait("Visible playable lecture card before Watch action", timeout: 60) {
-            let controls = $0["controls"] as? [String:[String:Any]] ?? [:]
-            return controls["open"] != nil
+        // A playable Watch button may exist below the viewport. Waiting
+        // for it to be immediately visible is a deadlock: scroll it into view
+        // using real WKWebView gestures before requiring the actual DOM click.
+        try regressionWait("Audio-capable Watch card exists in loaded library", timeout: 60) {
+            let rects = $0["rects"] as? [String:[String:Any]] ?? [:]
+            return rects["open"] != nil
         }
         try regressionTap("open")
         _ = try waitFor("Real Watch control starts direct HLS or same-shiur MP4", timeout: 120) { s in
