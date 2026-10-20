@@ -229,6 +229,11 @@
                 $0["profileName"] as? String == text
             }
         }
+        if key=="playlistName" {
+            try regressionWait("Real keyboard entered the requested playlist name",timeout:10) {
+                $0["playlistName"] as? String == text
+            }
+        }
         regressionKeyboardDone()
     }
 
@@ -976,10 +981,7 @@
         try regressionTap("library")
         try regressionTap("playlists")
         if !(regression()["syncPlaylistNames"] as? [String] ?? []).contains(name) {
-            try regressionTap("playlistName")
-            let field=app.textFields.firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout:8))
-            field.typeText(name+"\n")
+            try regressionEnter("playlistName",name)
         }
         try regressionWait("Writer created playlist stored in authenticated account",timeout:90) {
             ($0["syncPlaylistNames"] as? [String] ?? []).contains(name)
