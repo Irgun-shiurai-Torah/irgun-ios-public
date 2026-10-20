@@ -310,6 +310,12 @@
             $0["qaCommentReturnedOwned"] as? Bool == true &&
             $0["qaCommentPhase"] as? String == "created"
         }
+        // Posting can leave the native keyboard open even after the composer
+        // clears. Dismiss it before scrolling to the comment's edit control.
+        try dismissNativeKeyboard()
+        _ = try waitFor("Comment composer keyboard closes before editing",timeout:10) { _ in
+            !self.app.keyboards.firstMatch.exists
+        }
         checked("Comment POST persisted, visible to its owner and submitted draft cleared")
         try touch("commentEdit")
         try awaitAccount("Owned comment edit UI opened") {
