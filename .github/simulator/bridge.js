@@ -57,6 +57,7 @@ function simulatorVisible(element) {
 
 window.ISTSimulator = {
   storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
+  reportedExpectedId: '', reportedExpectedVimeoId: '', reportedExpectedPrivacyHash: '',
   reportedExpectedSource: '', reportedSources: null,
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
   async nextStorePage() {
@@ -136,17 +137,60 @@ window.ISTSimulator = {
   async openReportedShiur() {
     if (simulatorOpening) return;
     simulatorOpening = true; simulatorError = '';
+    this.reportedExpectedId = '';
+    this.reportedExpectedVimeoId = '';
+    this.reportedExpectedPrivacyHash = '';
+    this.reportedExpectedSource = '';
+    this.reportedSources = null;
     try {
-      // Use the real loaded catalog and production source discovery. Do not
-      // substitute a fixture URL or change the player's source preference.
-      const video = state.videoById.get('1233236785:585d5d53db');
-      if (!video || !/פריזנט/.test(video.title || '') || !/עצות להצלחה/.test(video.title || '') || Number(video.duration) !== 3663)
-        throw new Error('Exact reported IST-DL6067 shiur is unavailable in the live catalog');
-      const sources = await loadIosDirectVideoSources(video);
-      if (!sources?.mp4) throw new Error('Reported shiur has no direct MP4');
-      this.reportedSources = sources;
-      this.reportedExpectedSource = sources.hls || sources.mp4;
-      await openWatch(videoId(video), 0);
+      // Prefer the originally reported shiur when it is still in the live
+      // catalog. If it has since been removed, find a real current unlisted
+      // Vimeo item with an owned MP4 source. Never invent a fixture URL.
+      const exactId = '1233236785:585d5d53db';
+      const exact = state.videoById.get(exactId);
+      const seen = new Set();
+      const candidates = [exact, ...state.videos.filter(video =>
+        /^\d+:[a-z0-9]+$/i.test(videoId(video)) &&
+        !video.directVideo && video.sourceType !== 'drive-library'
+      )].filter(video => {
+        if (!video) return false;
+        const id = videoId(video);
+        if (!/^\d+:[a-z0-9]+$/i.test(id) || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      }).slice(0, 48);
+
+      let selected = null;
+      let firstWithMp4 = null;
+      // Prefer an MP4-only item to keep coverage of the no-HLS fallback path.
+      // Check candidates in small parallel batches so a stale catalog entry
+      // cannot waste the entire XCTest timeout on sequential source lookups.
+      for (let offset = 0; offset < candidates.length; offset += 8) {
+        const batch = await Promise.all(candidates.slice(offset, offset + 8).map(async video => {
+          try { return { video, sources: await loadIosDirectVideoSources(video) }; }
+          catch (_) { return { video, sources: null }; }
+        }));
+        const withMp4 = batch.filter(result => result.sources?.mp4);
+        const mp4Only = withMp4.find(result => !result.sources.hls);
+        if (mp4Only) { selected = mp4Only; break; }
+        if (!firstWithMp4 && withMp4.length) firstWithMp4 = withMp4[0];
+      }
+      if (!selected) selected = firstWithMp4;
+      if (!selected) {
+        throw new Error('No live unlisted Vimeo shiur with a direct MP4 source was found in the current catalog');
+      }
+
+      const selectedId = videoId(selected.video);
+      const [vimeoId, privacyHash] = selectedId.split(':', 2);
+      if (!vimeoId || !privacyHash) {
+        throw new Error('Selected live shiur does not contain an unlisted Vimeo privacy hash');
+      }
+      this.reportedExpectedId = selectedId;
+      this.reportedExpectedVimeoId = vimeoId;
+      this.reportedExpectedPrivacyHash = privacyHash;
+      this.reportedSources = selected.sources;
+      this.reportedExpectedSource = selected.sources.hls || selected.sources.mp4;
+      await openWatch(selectedId, 0);
     } catch (error) { simulatorError = String(error.message || error); }
     finally { simulatorOpening = false; }
   },
@@ -267,6 +311,9 @@ window.ISTSimulator = {
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: native ? (String(native.sourceUrl||'').includes('.m3u8')?'hls-native':'mp4') : (state.watchVimeo?.player?.backend || ''),
       videoSource: native?.sourceUrl || video?.currentSrc || video?.src || '',
+      reportedExpectedId: this.reportedExpectedId,
+      reportedExpectedVimeoId: this.reportedExpectedVimeoId,
+      reportedExpectedPrivacyHash: this.reportedExpectedPrivacyHash,
       reportedExpectedSource: this.reportedExpectedSource, reportedSources: this.reportedSources,
       vimeoEmbed: document.getElementById('watchVimeoFrame')?.dataset?.vimeoSrc || '',
       fallbackBanner: Boolean(document.querySelector('.watch-hls-fallback-note')) || /HLS could not start.*Playing Vimeo/.test(document.body.innerText),

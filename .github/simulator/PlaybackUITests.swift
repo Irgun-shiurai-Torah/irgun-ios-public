@@ -427,20 +427,32 @@ final class PlaybackUITests: XCTestCase {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        let state = try waitFor("Reported IST-DL6067 must start as visible direct video", timeout: 150) {
-            $0["id"] as? String == "1233236785:585d5d53db" && $0["ready"] as? Bool == true &&
-            $0["mode"] as? String == "video" && $0["videoVisible"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true &&
-            ["mp4", "hls-native"].contains($0["backend"] as? String ?? "")
+        let state = try waitFor("A live unlisted shiur with a direct source must start visibly", timeout: 150) { s in
+            if !(s["error"] as? String ?? "").isEmpty { return true }
+            let expectedId = s["reportedExpectedId"] as? String ?? ""
+            return !expectedId.isEmpty && s["id"] as? String == expectedId &&
+                s["ready"] as? Bool == true && s["mode"] as? String == "video" &&
+                s["videoVisible"] as? Bool == true && s["videoPlaying"] as? Bool == true &&
+                ["mp4", "hls-native"].contains(s["backend"] as? String ?? "")
         }
+        let startupError = state["error"] as? String ?? ""
+        XCTAssertTrue(startupError.isEmpty, "Could not select a live unlisted shiur for direct playback: \(startupError)")
+        let expectedId = state["reportedExpectedId"] as? String ?? ""
+        let expectedVimeoId = state["reportedExpectedVimeoId"] as? String ?? ""
+        let expectedPrivacyHash = state["reportedExpectedPrivacyHash"] as? String ?? ""
+        XCTAssertFalse(expectedId.isEmpty)
+        XCTAssertFalse(expectedVimeoId.isEmpty)
+        XCTAssertFalse(expectedPrivacyHash.isEmpty, "Regression must retain a real unlisted Vimeo privacy hash")
+        XCTAssertEqual(state["id"] as? String, expectedId)
         XCTAssertEqual(state["videoSource"] as? String, state["reportedExpectedSource"] as? String)
         let sources = state["reportedSources"] as? [String: Any] ?? [:]
         if (sources["hls"] as? String ?? "").isEmpty {
             XCTAssertEqual(state["backend"] as? String, "mp4", "MP4-only shiur must not fall back to Vimeo")
         }
         let embed = URLComponents(string: state["vimeoEmbed"] as? String ?? "")
-        XCTAssertEqual(embed?.path, "/video/1233236785")
-        XCTAssertEqual(embed?.queryItems?.first { $0.name == "h" }?.value, "585d5d53db")
+        XCTAssertEqual(embed?.path, "/video/\(expectedVimeoId)")
+        XCTAssertEqual(embed?.queryItems?.first { $0.name == "h" }?.value, expectedPrivacyHash,
+                       "The unlisted Vimeo privacy hash must survive URL construction")
         XCTAssertEqual(state["directFallbackId"] as? String, "")
         XCTAssertFalse(state["fallbackBanner"] as? Bool ?? true)
         XCTAssertEqual(number(state, "playerCount"),
