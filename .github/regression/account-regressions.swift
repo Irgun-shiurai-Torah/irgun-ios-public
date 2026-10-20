@@ -147,14 +147,33 @@
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }
         func dismissNativeKeyboard() throws {
-            guard app.keyboards.firstMatch.exists else { return }
-            let done=app.buttons["Done"].firstMatch
-            if done.exists && done.isHittable { done.tap(); return }
-            for label in ["Return", "Go", "Done", "Log In"] {
-                let key=app.keyboards.buttons[label].firstMatch
-                if key.exists && key.isHittable { key.tap(); return }
+            let keyboard = app.keyboards.firstMatch
+            guard keyboard.exists else { return }
+            // Hardware, compact and iPad floating keyboards expose different
+            // dismissal buttons. Try the native controls first.
+            for label in ["Done","Return","Go","Log In","Hide keyboard","Hide Keyboard","Dismiss"] {
+                let appButton = app.buttons[label].firstMatch
+                if appButton.exists && appButton.isHittable { appButton.tap(); break }
+                let key = app.keyboards.buttons[label].firstMatch
+                if key.exists && key.isHittable { key.tap(); break }
             }
-            XCTFail("No native keyboard dismissal control"); throw Failure.timedOut("keyboard dismissal")
+            if app.keyboards.firstMatch.exists {
+                let activeKeyboard = app.keyboards.firstMatch
+                if activeKeyboard.isHittable { activeKeyboard.swipeDown() }
+            }
+            if app.keyboards.firstMatch.exists {
+                // On iPad the keyboard can remain floating without a Return/Done
+                // key. A real outside tap dismisses it; this point avoids forms.
+                app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.16)).tap()
+            }
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline && app.keyboards.firstMatch.exists {
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+            guard !app.keyboards.firstMatch.exists else {
+                XCTFail("Native keyboard remained visible after dismissal attempts")
+                throw Failure.timedOut("keyboard dismissal")
+            }
         }
         report["nativeLoginStartedAt"] = timestamp(); persistReport()
         try touch("account")
@@ -277,10 +296,13 @@
             $0["audioPlaying"] as? Bool == false && self.regressionSingleVideoOwner($0) &&
             self.number($0, "videoTime") >= max(0, audioEnd - 3)
         }
-        let videoFramesBefore = number(snapshot(), "frameTime")
-        _ = try waitFor("Actual video frames advance after Audio to Video", timeout: 60) {
+        let videoAfterSwitch = snapshot()
+        let decodedFramesBefore = number(videoAfterSwitch, "decodedFrames")
+        let videoPositionBefore = number(videoAfterSwitch, "videoTime")
+        _ = try waitFor("Actual native video frames advance after Audio to Video", timeout: 60) {
             $0["videoPlaying"] as? Bool == true && $0["videoVisible"] as? Bool == true &&
-            self.number($0, "frameTime") > videoFramesBefore + 0.5
+            self.number($0, "decodedFrames") > decodedFramesBefore &&
+            self.number($0, "videoTime") > videoPositionBefore + 0.5
         }
         checked("Audio to Video retains position and advances visible frames")
         XCTAssertEqual(account()["name"] as? String, originalName)

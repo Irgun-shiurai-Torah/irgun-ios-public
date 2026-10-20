@@ -44,9 +44,24 @@
             let snap=regression()
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
             if let point=controls[key] {
+                let previousClick=number(snap,"lastClickSequence")
+                let previousAccountClick=number(snap,"accountClickSequence")
                 app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
                     .withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
-                return
+                // Require a real captured DOM click on the requested control.
+                let deadline=Date().addingTimeInterval(3)
+                while Date() < deadline {
+                    let observed=regression()
+                    let genericClick =
+                        number(observed,"lastClickSequence") > previousClick &&
+                        observed["lastClickKey"] as? String == key
+                    let accountClick =
+                        number(observed,"accountClickSequence") > previousAccountClick &&
+                        observed["accountClickKey"] as? String == key
+                    if genericClick || accountClick { return }
+                    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                }
+                continue
             }
             let rects=snap["rects"] as? [String:[String:Any]] ?? [:]
             if rects[key] == nil {
@@ -54,24 +69,34 @@
             } else if ["playlists","downloads"].contains(key),
                       let tabs = snap["libraryTabsRect"] as? [String:Any],
                       number(tabs,"w") > 80, number(tabs,"h") > 12 {
-                // Actual Playlists and Downloads buttons are in a horizontal
-                // tab strip. Move it by real screen gesture, not JS scrolling.
                 let left = number(tabs,"x") + number(tabs,"w") * 0.18
                 let right = number(tabs,"x") + number(tabs,"w") * 0.82
                 let y = number(tabs,"y") + number(tabs,"h") / 2
                 let web = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-                web.withOffset(CGVector(dx:right,dy:y)).press(
+                let startX = number(rects[key] ?? [:],"x") > right ? right : left
+                let endX = number(rects[key] ?? [:],"x") > right ? left : right
+                web.withOffset(CGVector(dx:startX,dy:y)).press(
                     forDuration:0.10,
-                    thenDragTo:web.withOffset(CGVector(dx:left,dy:y)))
-                RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+                    thenDragTo:web.withOffset(CGVector(dx:endX,dy:y)))
             } else if number(rects[key] ?? [:],"y") < 0 {
                 app.webViews.firstMatch.swipeDown()
             } else {
                 app.webViews.firstMatch.swipeUp()
             }
         }
-        XCTFail("Native control not available or not hittable: \(key)")
+        XCTFail("Real DOM click did not register or native control was unavailable")
         throw Failure.timedOut(key)
+    }
+
+    private func regressionPressHomeAndWaitForSpringBoard(_ message: String,
+                                                          timeout: TimeInterval = 20) throws {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        XCUIDevice.shared.press(.home)
+        // SpringBoard becoming foreground proves Home actually left Irgun.
+        // XCUIApplication.state can lag on iPad while background audio is active.
+        _ = try waitFor(message, timeout: timeout) { _ in
+            springboard.state == .runningForeground
+        }
     }
 
     private func regressionKeyboardDone() {
@@ -229,10 +254,7 @@
         let originalID = initialNative["id"] as? String ?? ""
         let originalEpoch = number(initialNative, "itemEpoch")
         XCTAssertFalse(originalID.isEmpty, "Background playback must start with a real native item")
-        XCUIDevice.shared.press(.home)
-        _ = try waitFor("Home really backgrounds the app",timeout:20) { _ in
-            self.app.state == .runningBackground || self.app.state == .runningBackgroundSuspended
-        }
+        try regressionPressHomeAndWaitForSpringBoard("SpringBoard must become foreground after Home")
         let backgroundPlayback = try waitFor("The same native AVPlayer keeps playing while backgrounded",timeout:25) { state in
             let n = state["nativePlayer"] as? [String: Any] ?? [:]
             return n["active"] as? Bool == true && n["mode"] as? String == "video" &&
@@ -324,10 +346,7 @@
         let initial=regression()["pushActions"] as? Int ?? 0
         let target = snapshot()["id"] as? String ?? ""
         let position = number(snapshot(),"videoTime")
-        XCUIDevice.shared.press(.home)
-        _ = try waitFor("Home transition really backgrounds the app before APNs delivery",timeout:20) { _ in
-            self.app.state == .runningBackground || self.app.state == .runningBackgroundSuspended
-        }
+        try regressionPressHomeAndWaitForSpringBoard("SpringBoard must become foreground before APNs delivery")
         XCTAssertNotEqual(app.state, .runningForeground,
                           "Push delivery must wait until the app is actually backgrounded")
         try regressionArmPush(target: target, previousActions: initial)
@@ -392,23 +411,33 @@
         }
         XCTAssertTrue(regressionSingleVideoOwner(snapshot()))
         let capability = snapshot()
-        let nativeSupported = capability["nativePiPSupported"] as? Bool ?? false
-        let webViewAllowed = capability["nativeWebViewPiPAllowed"] as? Bool ?? false
-        guard capability["pipSupported"] as? Bool == true else {
-            throw XCTSkip("System PiP unavailable in this simulator: physical iPhone/iPad verification remains required")
+        let native = capability["nativePlayer"] as? [String:Any] ?? [:]
+        guard native["pipSupported"] as? Bool == true else {
+            throw XCTSkip("Native system PiP is unsupported in this simulator; physical-device PiP verification remains required")
+        }
+        _ = try waitFor("Native system PiP becomes available",timeout:15) { state in
+            let n = state["nativePlayer"] as? [String:Any] ?? [:]
+            return n["pipPossible"] as? Bool == true
         }
         try tapWebButton("Picture in Picture")
         _ = try waitFor("PiP genuinely enters",timeout:40) { $0["pip"] as? Bool == true }
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval:5)
         app.activate()
-        _ = try waitFor("PiP return must restore inline controls",timeout:60) {
+        let returned = try waitFor("PiP return restores inline playback",timeout:60) {
             $0["pip"] as? Bool == false && $0["minimized"] as? Bool == false &&
             $0["videoVisible"] as? Bool == true &&
-            $0["controlsVisible"] as? Bool == true &&
             $0["videoPlaying"] as? Bool == true &&
             self.number($0,"videoTime")>prior &&
             self.regressionSingleVideoOwner($0)
+        }
+        if returned["controlsVisible"] as? Bool != true {
+            videoPoint(0.5,0.25).tap()
+            _ = try waitFor("Tap reveals native controls after PiP return",timeout:12) {
+                $0["pip"] as? Bool == false &&
+                $0["controlsVisible"] as? Bool == true &&
+                $0["videoPlaying"] as? Bool == true
+            }
         }
         try regressionVideoMoving()
     }

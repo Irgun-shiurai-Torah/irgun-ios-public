@@ -38,6 +38,22 @@
     deletePlaylist: '[data-playlist-delete]',
     invalidateQA: '#ist-qa-invalidate-session',
   };
+  // Record the real DOM target of each synthesized UI tap. XCTest retries only
+  // when the intended click was not delivered; coordinates alone are not proof.
+  if (!window.__ISTRegressionClickObserverInstalled) {
+    window.__ISTRegressionClickObserverInstalled = true;
+    window.__ISTRegressionLastClick = {sequence:0,key:'',at:0};
+    document.addEventListener('click', event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const match = Object.entries(keys).find(([, selector]) => target?.closest?.(selector));
+      if (!match) return;
+      window.__ISTRegressionLastClick = {
+        sequence:Number(window.__ISTRegressionLastClick?.sequence || 0) + 1,
+        key:match[0],
+        at:Date.now()
+      };
+    }, true);
+  }
   let network = {online:false,at:0,error:false};
   let pushActions = 0;
   let pushWatchTarget = false;
@@ -131,6 +147,11 @@
     const native=iosNativeActive() ? iosUnified.state : null;
     return JSON.stringify({...base,regression:{
       controls:selectors,rects:hitRects,libraryTabsRect,
+      screen:state.screen,
+      lastClickSequence:Number(window.__ISTRegressionLastClick?.sequence||0),
+      lastClickKey:String(window.__ISTRegressionLastClick?.key||''),
+      accountClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),
+      accountClickKey:String(window.__ISTAccountLastClick?.key||''),
       libraryTabsScrollLeft:Number(tabs?.scrollLeft)||0,
       language:currentLanguage(),documentDir:document.documentElement.dir,
       documentLang:document.documentElement.lang||'',
