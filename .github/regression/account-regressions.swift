@@ -74,7 +74,8 @@
                 let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
                 return rects[key] != nil
             }
-            for _ in 0..<10 {
+            // Comments may sit below a long discussion; keep scrolling the safe WebView area below the native player until the exact QA comment control is reachable.
+            for _ in 0..<24 {
                 let fullState = snapshot()
                 let s = fullState["account"] as? [String: Any] ?? [:]
                 let native = fullState["nativePlayer"] as? [String: Any] ?? [:]
