@@ -33,6 +33,30 @@
         }
     }
 
+    private func regressionScroll(_ state: [String:Any], towardUp: Bool) {
+        let reg = state["regression"] as? [String:Any] ?? state
+        let width = number(reg,"width")
+        let height = number(reg,"height")
+        let native = state["nativePlayer"] as? [String:Any] ?? [:]
+        let surfaceBottom = number(native,"surfaceY") + number(native,"surfaceHeight")
+        // Scroll in the content area BELOW the native AVPlayer. A swipe from
+        // the WebView center can land on the UIKit video overlay on iPad and
+        // become a video tap instead of scrolling the page.
+        let lower = min(max(80,height-100),max(height*0.68,surfaceBottom+80))
+        let upper = max(surfaceBottom+30,min(lower-240,height*0.50))
+        guard lower-upper >= 90 else {
+            app.webViews.firstMatch.swipeUp()
+            return
+        }
+        let x=max(20,min(width-20,width*0.5))
+        let startY=towardUp ? lower : upper
+        let endY=towardUp ? upper : lower
+        let origin=app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+        origin.withOffset(CGVector(dx:x,dy:startY)).press(
+            forDuration:0.08,
+            thenDragTo:origin.withOffset(CGVector(dx:x,dy:endY)))
+    }
+
     private func regressionTap(_ key: String) throws {
         if key == "watchAudio" || key == "watchVideo" {
             try tapWebButton(key == "watchAudio" ? "Audio" : "Video")
@@ -41,7 +65,8 @@
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
         for _ in 0..<9 {
-            let snap=regression()
+            let fullState=snapshot()
+            let snap=fullState["regression"] as? [String:Any] ?? [:]
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
             if let point=controls[key] {
                 let previousClick=number(snap,"lastClickSequence")
@@ -61,11 +86,30 @@
                     if genericClick || accountClick { return }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
+                // WKWebView coordinate taps can miss an otherwise visible
+                // library tab after native overlays/layout changes. Retry the
+                // actual accessible button, not the same stale coordinates.
+                if key == "playlists" || key == "downloads" {
+                    let label = key == "playlists" ? "Playlists" : "Downloads"
+                    let button=app.webViews.buttons.matching(
+                        NSPredicate(format:"label CONTAINS[c] %@",label)
+                    ).firstMatch
+                    if button.exists && button.isHittable {
+                        button.tap()
+                        let fallbackDeadline=Date().addingTimeInterval(3)
+                        while Date()<fallbackDeadline {
+                            let observed=regression()
+                            if number(observed,"lastClickSequence") > previousClick &&
+                               observed["lastClickKey"] as? String == key { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                    }
+                }
                 continue
             }
             let rects=snap["rects"] as? [String:[String:Any]] ?? [:]
             if rects[key] == nil {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+                regressionScroll(fullState,towardUp:true)
             } else if ["playlists","downloads"].contains(key),
                       let tabs = snap["libraryTabsRect"] as? [String:Any],
                       number(tabs,"w") > 80, number(tabs,"h") > 12 {
@@ -74,17 +118,23 @@
                 let y = number(tabs,"y") + number(tabs,"h") / 2
                 let web = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
                 let startX = number(rects[key] ?? [:],"x") > right ? right : left
-                let endX = number(rects[key] ?? [:],"x") > right ? left : right
+                let endX = number(rects[key] ?? [:],"x") > right ? left:right
                 web.withOffset(CGVector(dx:startX,dy:y)).press(
                     forDuration:0.10,
                     thenDragTo:web.withOffset(CGVector(dx:endX,dy:y)))
-            } else if number(rects[key] ?? [:],"y") < 0 {
-                app.webViews.firstMatch.swipeDown()
             } else {
-                app.webViews.firstMatch.swipeUp()
+                let targetY=number(rects[key] ?? [:],"y")
+                let surfaceTop=number((fullState["nativePlayer"] as? [String:Any] ?? [:]),"surfaceY")
+                let surfaceBottom=surfaceTop+number((fullState["nativePlayer"] as? [String:Any] ?? [:]),"surfaceHeight")
+                let directionUp: Bool
+                if targetY < 0 { directionUp=false }
+                else if targetY > number(snap,"height") { directionUp=true }
+                else if surfaceTop > 0 && targetY >= surfaceTop && targetY <= surfaceBottom { directionUp=false }
+                else { directionUp=targetY >= number(snap,"height")*0.55 }
+                regressionScroll(fullState,towardUp:directionUp)
             }
         }
-        XCTFail("Real DOM click did not register or native control was unavailable")
+        XCTFail("Real DOM click did not register or native control was unavailable: \(key)")
         throw Failure.timedOut(key)
     }
 
@@ -109,6 +159,16 @@
         }
     }
 
+    private func regressionSelectAllText(_ field: XCUIElement) -> Bool {
+        field.press(forDuration:1.0)
+        let selectAll=app.descendants(matching:.any).matching(
+            NSPredicate(format:"label CONTAINS[c] %@", "Select All")
+        ).firstMatch
+        guard selectAll.waitForExistence(timeout:2),selectAll.isHittable else { return false }
+        selectAll.tap()
+        return true
+    }
+
     private func regressionEnter(_ key: String, _ text: String) throws {
         try regressionTap(key)
         let field=key=="loginPassword" ? app.secureTextFields.firstMatch : app.textFields.firstMatch
@@ -128,19 +188,41 @@
         }
         let old=(field.value as? String ?? "")
         if old != text {
-            if !old.isEmpty {
-                // Put the caret after existing text before deleting. A center
-                // tap can leave the caret at the start of a filled input.
-                field.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
-                field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,
-                                      count:old.utf16.count+8))
-                if key=="profileName" {
-                    try regressionWait("Real keyboard cleared the existing profile name",timeout:12) {
-                        $0["profileName"] as? String == ""
+            let needsSelectAll = ["profileName","playlistName"].contains(key) && !old.isEmpty
+            if needsSelectAll {
+                if regressionSelectAllText(field) {
+                    field.typeText(text)
+                } else {
+                    // Fall back to real keyboard deletion at the end of the
+                    // existing value, then verify the DOM value before typing.
+                    field.tap()
+                    field.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+                    field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,
+                                          count:old.utf16.count+12))
+                    let clearDeadline=Date().addingTimeInterval(3)
+                    while Date()<clearDeadline {
+                        let value=regression()[key=="profileName" ? "profileName" : "playlistName"] as? String
+                        if value == "" { break }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                    }
+                    let value=regression()[key=="profileName" ? "profileName" : "playlistName"] as? String
+                    if value == "" {
+                        field.typeText(text)
+                    } else if regressionSelectAllText(field) {
+                        field.typeText(text)
+                    } else {
+                        XCTFail("Could not reliably select or clear the existing text in \(key)")
+                        throw Failure.timedOut("select all text in \(key)")
                     }
                 }
+            } else {
+                if !old.isEmpty {
+                    field.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+                    field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,
+                                          count:old.utf16.count+8))
+                }
+                field.typeText(text)
             }
-            field.typeText(text)
         }
         if key=="profileName" {
             try regressionWait("Real keyboard entered the requested profile name",timeout:15) {
