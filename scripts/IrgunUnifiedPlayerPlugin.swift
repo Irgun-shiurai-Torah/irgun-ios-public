@@ -240,6 +240,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
     private var playbackRecoveryTask: DispatchWorkItem?
+    private var playbackWatchdogTask: DispatchWorkItem?
+    private var playbackRecoveryAttempts = 0
     private var lastObservedPlaybackPosition: Double = 0
     private var lastPlaybackProgressAt = Date()
     private var lastPlaybackRecoveryAttemptAt = Date.distantPast
@@ -306,6 +308,22 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         lifecycleObservers.append(NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.reconcileBackgroundVideoLayer(isBackgrounded: false) })
+        // A periodic AVPlayer time observer can stop firing when an HLS item
+        // stalls while timeControlStatus still says .playing. Keep a wall-clock
+        // watchdog independent of media time so those stalls can recover.
+        schedulePlaybackWatchdog()
+    }
+
+    private func schedulePlaybackWatchdog() {
+        playbackWatchdogTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            self.playbackWatchdogTask = nil
+            self.monitorPlaybackProgress()
+            self.schedulePlaybackWatchdog()
+        }
+        playbackWatchdogTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: task)
     }
 
     private func reconcileBackgroundVideoLayer(isBackgrounded: Bool) {
@@ -345,6 +363,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
            current < lastObservedPlaybackPosition - 1.0 {
             lastObservedPlaybackPosition = current
             lastPlaybackProgressAt = now
+            playbackRecoveryAttempts = 0
             playbackRecoveryTask?.cancel()
             playbackRecoveryTask = nil
             return
@@ -354,9 +373,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
     }
 
-    // AVPlayer can remain requested-to-play but stalled after a transient HLS
-    // network loss or iOS lifecycle interruption. Retry only while the user's
-    // play intent remains true; explicit Pause always cancels recovery.
+    // AVPlayer can remain requested-to-play but stalled after an HLS gap or
+    // lifecycle interruption. Retry only while the user's play intent remains
+    // true. If reasserting play does not move the clock, seek the SAME item to
+    // its current position to make AVFoundation rebuild the stalled read path.
     private func schedulePlaybackRecoveryIfNeeded() {
         guard active, playingWanted, !controlsMenuOpen, nativeSeekTarget == nil,
               let item = player.currentItem, item.status == .readyToPlay else {
@@ -382,6 +402,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             if current > expectedPosition + 0.75 {
                 self.lastObservedPlaybackPosition = current
                 self.lastPlaybackProgressAt = Date()
+                self.playbackRecoveryAttempts = 0
                 return
             }
             let now = Date()
@@ -390,20 +411,54 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 return
             }
             self.lastPlaybackRecoveryAttemptAt = now
+            self.playbackRecoveryAttempts += 1
             do {
                 try AVAudioSession.sharedInstance().setActive(true)
             } catch {
                 NSLog("Irgun AVPlayer recovery could not reactivate audio session: \\(error)")
             }
-            self.player.playImmediately(atRate: self.playbackRate)
-            self.publishState()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-                guard let self = self, self.active, self.playingWanted,
-                      self.generation == expectedGeneration,
-                      self.itemEpoch == expectedItemEpoch,
-                      self.player.currentItem === expectedItem,
-                      self.position() <= current + 0.75 else { return }
-                self.schedulePlaybackRecoveryIfNeeded()
+
+            let verifyRecovery: (Double) -> Void = { [weak self] afterPosition in
+                guard let self = self else { return }
+                self.lastObservedPlaybackPosition = self.position()
+                self.lastPlaybackProgressAt = Date()
+                self.publishState()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                    guard let self = self, self.active, self.playingWanted,
+                          self.generation == expectedGeneration,
+                          self.itemEpoch == expectedItemEpoch,
+                          self.player.currentItem === expectedItem,
+                          self.player.currentItem?.status == .readyToPlay else { return }
+                    let latest = self.position()
+                    if latest > afterPosition + 0.75 {
+                        self.lastObservedPlaybackPosition = latest
+                        self.lastPlaybackProgressAt = Date()
+                        self.playbackRecoveryAttempts = 0
+                        return
+                    }
+                    self.schedulePlaybackRecoveryIfNeeded()
+                }
+            }
+
+            if self.playbackRecoveryAttempts % 2 == 0 {
+                let target = CMTime(seconds: max(0, current), preferredTimescale: 600)
+                self.player.seek(
+                    to: target,
+                    toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)
+                ) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self = self, self.active, self.playingWanted,
+                              self.generation == expectedGeneration,
+                              self.itemEpoch == expectedItemEpoch,
+                              self.player.currentItem === expectedItem else { return }
+                        self.player.playImmediately(atRate: self.playbackRate)
+                        verifyRecovery(self.position())
+                    }
+                }
+            } else {
+                self.player.playImmediately(atRate: self.playbackRate)
+                verifyRecovery(current)
             }
         }
         playbackRecoveryTask = task
@@ -756,6 +811,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.playingWanted = call.getBool("autoplay") ?? false
             self.playbackRecoveryTask?.cancel()
             self.playbackRecoveryTask = nil
+            self.playbackRecoveryAttempts = 0
             self.lastPlaybackRecoveryAttemptAt = .distantPast
             self.lastPlaybackProgressAt = Date()
             self.lastObservedPlaybackPosition = max(0, call.getDouble("position") ?? 0)
@@ -816,6 +872,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.playingWanted = true
             self.playbackRecoveryTask?.cancel()
             self.playbackRecoveryTask = nil
+            self.playbackRecoveryAttempts = 0
             self.lastPlaybackRecoveryAttemptAt = .distantPast
             self.lastPlaybackProgressAt = Date()
             self.lastObservedPlaybackPosition = self.position()
@@ -883,6 +940,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.pipController?.stopPictureInPicture()
             }
             self.mode = next
+            // Reattach the same AVPlayer to its video layer on every return from
+            // Audio. Reassert play intent without replacing the AVPlayerItem or
+            // seeking away from the saved position.
+            if next == "video" {
+                self.videoLayer.player = self.player
+                if self.playingWanted {
+                    self.lastObservedPlaybackPosition = self.position()
+                    self.lastPlaybackProgressAt = Date()
+                    self.playbackRecoveryAttempts = 0
+                    self.player.playImmediately(atRate: self.playbackRate)
+                }
+            }
             // Re-entering Video from Audio must not expose controls automatically.
             self.setControlsVisible(false)
             self.placeSurface(self.lastSurfaceRect)
@@ -1760,6 +1829,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     @objc public func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.generation += 1
+            self.playbackRecoveryTask?.cancel()
+            self.playbackRecoveryTask = nil
+            self.playbackRecoveryAttempts = 0
             self.clearPendingQualityChange()
             self.qualityMaster = nil
             self.qualityMasterURL = nil
@@ -1806,6 +1878,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     deinit {
+        playbackWatchdogTask?.cancel()
+        playbackRecoveryTask?.cancel()
         qualityTimeout?.cancel()
         pipController?.stopPictureInPicture()
         playerObserver = nil
