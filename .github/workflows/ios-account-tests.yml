@@ -13,9 +13,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Runs share one dedicated non-admin server account; serialize across branches.
+  # Runs share one dedicated non-admin server account; queue them rather than
+  # cancelling another workflow halfway through account mutations or cleanup.
   group: ios-account-shared-test-account
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   account:
