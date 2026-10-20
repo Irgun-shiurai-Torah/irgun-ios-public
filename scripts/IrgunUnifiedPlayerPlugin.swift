@@ -623,14 +623,26 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     #if targetEnvironment(simulator)
     private func inspectDecodedVideoFrame() {
         guard let output = simulatorFrameOutput, active, mode == "video" else { return }
-        let at = output.itemTime(forHostTime: CACurrentMediaTime())
-        guard output.hasNewPixelBuffer(forItemTime: at) else { return }
-        var displayed = CMTime.invalid
-        if output.copyPixelBuffer(forItemTime: at, itemTimeForDisplay: &displayed) != nil {
+        // After switching away from video, AVPlayerItemVideoOutput's host-time
+        // mapping can remain behind the active AVPlayer clock. Check that
+        // mapping first, then ask for real decoded pixels near the actual
+        // current item time. Never advance counters from the clock alone.
+        let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+        let clockTime = position()
+        var candidates = [hostItemTime]
+        if abs(hostItemTime.seconds - clockTime) > 1.2 {
+            candidates.append(CMTime(seconds: max(0, clockTime - 0.15),
+                                     preferredTimescale: 600))
+        }
+        for at in candidates where at.isValid && at.seconds.isFinite {
+            guard output.hasNewPixelBuffer(forItemTime: at) else { continue }
+            var displayed = CMTime.invalid
+            guard output.copyPixelBuffer(forItemTime: at, itemTimeForDisplay: &displayed) != nil else { continue }
             let seconds = displayed.seconds.isFinite ? displayed.seconds : at.seconds
-            if seconds.isFinite, seconds > simulatorFrameTime {
+            if seconds.isFinite && seconds > simulatorFrameTime {
                 simulatorFrameTime = seconds
                 simulatorFrameCount += 1
+                break
             }
         }
     }
@@ -935,33 +947,48 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             }
             let previousMode = self.mode
             self.mode = next
-            // AVFoundation may suspend video decoding while the native surface
-            // is hidden for Audio. Rebuild only the AVPlayerLayer attachment
-            // when coming back to Video. Preserve the SAME AVPlayer/AVPlayerItem
-            // and clock, so the audio-to-video handoff never restarts the shiur.
+            // Make the native video surface visible BEFORE reconnecting the
+            // layer. Replacing an AVPlayerItemVideoOutput in mid-playback can
+            // leave its timebase frozen even while the audio clock advances;
+            // keep the original output and the same AVPlayerItem instead.
+            self.setControlsVisible(false)
+            self.placeSurface(self.lastSurfaceRect)
             if next == "video" {
-                if previousMode == "audio" || self.videoLayer.player == nil {
+                let returningFromAudio = previousMode == "audio"
+                if returningFromAudio || self.videoLayer.player == nil {
                     self.videoLayer.player = nil
                     self.videoLayer.player = self.player
-                    #if targetEnvironment(simulator)
-                    // A simulator AVPlayerItemVideoOutput can remain stuck on
-                    // its last audio-only frame. Reattach the REAL decoded-frame
-                    // probe so the test still requires newly decoded pixels.
-                    if let item = self.player.currentItem {
-                        self.attachSimulatedFrameOutput(to: item)
-                    }
-                    #endif
                 }
                 if self.playingWanted {
                     self.lastObservedPlaybackPosition = self.position()
                     self.lastPlaybackProgressAt = Date()
                     self.playbackRecoveryAttempts = 0
                     self.player.playImmediately(atRate: self.playbackRate)
+                    if returningFromAudio, let item = self.player.currentItem {
+                        // A seek to the CURRENT clock (not to the beginning)
+                        // asks AVFoundation to resume the video rendition that
+                        // may have been suspended while only audio was visible.
+                        // It never replaces the item or resets the shiur.
+                        let expectedGeneration = self.generation
+                        let expectedEpoch = self.itemEpoch
+                        let at = CMTime(seconds: self.position(), preferredTimescale: 600)
+                        self.player.seek(to: at,
+                                         toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                                         toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] _ in
+                            DispatchQueue.main.async {
+                                guard let self = self, self.active, self.mode == "video",
+                                      self.generation == expectedGeneration,
+                                      self.itemEpoch == expectedEpoch,
+                                      self.player.currentItem === item else { return }
+                                if self.playingWanted {
+                                    self.player.playImmediately(atRate: self.playbackRate)
+                                }
+                                self.publishState()
+                            }
+                        }
+                    }
                 }
             }
-            // Re-entering Video from Audio must not expose controls automatically.
-            self.setControlsVisible(false)
-            self.placeSurface(self.lastSurfaceRect)
             self.publishState()
             call.resolve(self.snapshot())
         }
