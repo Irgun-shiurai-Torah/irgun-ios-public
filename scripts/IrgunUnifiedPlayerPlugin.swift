@@ -1273,17 +1273,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
         swipe.direction = .down
         swipe.delegate = self
-        overlay.addGestureRecognizer(swipe)
+        viewer.view.addGestureRecognizer(swipe)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(tapDoubleSeek(_:)))
         doubleTap.numberOfTapsRequired = 2
         doubleTap.cancelsTouchesInView = false
         doubleTap.delegate = self
-        overlay.addGestureRecognizer(doubleTap)
+        viewer.view.addGestureRecognizer(doubleTap)
         let singleTap = UITapGestureRecognizer(target: self, action: #selector(tapVideoSurface(_:)))
         singleTap.require(toFail: doubleTap)
         singleTap.require(toFail: swipe)
         singleTap.delegate = self
-        overlay.addGestureRecognizer(singleTap)
+        viewer.view.addGestureRecognizer(singleTap)
         updateNativeControls()
     }
 
