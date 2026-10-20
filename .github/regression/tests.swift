@@ -112,11 +112,41 @@
     private func regressionEnter(_ key: String, _ text: String) throws {
         try regressionTap(key)
         let field=key=="loginPassword" ? app.secureTextFields.firstMatch : app.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 8), "Native keyboard field \(key) missing")
+        guard field.waitForExistence(timeout:8) else {
+            XCTFail("Native keyboard field \(key) missing")
+            throw Failure.timedOut(key)
+        }
+        // A verified DOM click doesn't prove XCTest has keyboard focus: after
+        // sign-in the profile form can display Name but leave UIKit unfocused.
+        field.tap()
+        if !app.keyboards.firstMatch.waitForExistence(timeout:5) {
+            field.coordinate(withNormalizedOffset:CGVector(dx:0.8,dy:0.5)).tap()
+        }
+        guard app.keyboards.firstMatch.waitForExistence(timeout:10) else {
+            XCTFail("Native keyboard did not open for \(key); refuse to synthesize blind typing")
+            throw Failure.timedOut("keyboard for \(key)")
+        }
         let old=(field.value as? String ?? "")
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue,
-                              count: max(old.count,text.count)+9))
-        field.typeText(text)
+        if old != text {
+            if !old.isEmpty {
+                // Put the caret after existing text before deleting. A center
+                // tap can leave the caret at the start of a filled input.
+                field.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+                field.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,
+                                      count:old.utf16.count+8))
+                if key=="profileName" {
+                    try regressionWait("Real keyboard cleared the existing profile name",timeout:12) {
+                        $0["profileName"] as? String == ""
+                    }
+                }
+            }
+            field.typeText(text)
+        }
+        if key=="profileName" {
+            try regressionWait("Real keyboard entered the requested profile name",timeout:15) {
+                $0["profileName"] as? String == text
+            }
+        }
         regressionKeyboardDone()
     }
 
