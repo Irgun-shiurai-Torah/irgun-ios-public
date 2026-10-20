@@ -65,13 +65,28 @@ import sys
 from pathlib import Path
 log=Path(sys.argv[1]).read_text(errors='replace')
 methods=sys.argv[2:]
+passed=0
+skipped=0
 for name in methods:
-    label="Test Case '-[SimulatorUITests.PlaybackUITests "+name+"]' passed ("
-    if label not in log:
-        print("FAIL: required native XCTest did not execute and pass: "+name)
-        raise SystemExit(1)
+    prefix="Test Case '-[SimulatorUITests.PlaybackUITests "+name+"]' "
+    if prefix+"passed (" in log:
+        passed+=1
+        continue
+    # Native system PiP is unavailable on some iOS Simulator runtimes. XCTest
+    # deliberately skips that hardware-only case; don't turn the expected skip
+    # into a red workflow after Xcode has correctly reported TEST SUCCEEDED.
+    if (name=="testRegressionMiniFullscreenPiPCycle"
+        and prefix+"skipped (" in log
+        and "Native system PiP is unsupported in this simulator; physical-device PiP verification remains required" in log):
+        skipped+=1
+        print("SKIP (expected simulator limitation; physical-device PiP still required): "+name)
+        continue
+    print("FAIL: required native XCTest did not execute and pass: "+name)
+    raise SystemExit(1)
 if "Executed 0 tests" in log:
     raise SystemExit("FAIL: the simulator ran zero tests")
-print("PASS: all",len(methods),"requested real XCTest methods executed and passed")
+if "** TEST SUCCEEDED **" not in log:
+    raise SystemExit("FAIL: xcodebuild did not report TEST SUCCEEDED")
+print("PASS:",passed,"requested XCTest methods passed;",skipped,"documented simulator-only skips")
 PY
 if [ "$group" = push ]; then wait "$sender"; fi
