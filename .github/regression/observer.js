@@ -163,6 +163,7 @@
       accountEmailMatchesSecret:undefined, // Test runner compares authenticated email privately.
       profileName:document.getElementById('profileName')?.value||'',
       profileNameShown:document.querySelector('.profile-line span')?.textContent?.trim()||'',
+      playlistName:document.getElementById('libraryPlaylistCreateName')?.value||'',
       loginForm:Boolean(document.getElementById('authForm')),
       loginError:Boolean(state.authMessage)&&!state.user,
       loginBusy:Boolean(state.authBusy),
