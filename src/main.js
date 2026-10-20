@@ -7791,14 +7791,11 @@ async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
     // goes into the SAME AVPlayer instance used by HLS video. The HTML audio
     // element is never opened, and the legacy background plugin is stopped.
     if (!item?.url || !item?.id) throw new Error('No native audio source available');
-    const preserveWatchForBackground = Boolean(
-      backgroundHandoff && state.backgroundVideoReturnToVideo && state.watchVideo
-    );
     const old=state.watchVimeo;
-    if (old?.isIrgunUnifiedNativeAVPlayer && !preserveWatchForBackground) await old.destroy();
+    if (old?.isIrgunUnifiedNativeAVPlayer) await old.destroy();
     state.watchVimeo=null;
     state.watchVimeoReady=false;
-    if (!preserveWatchForBackground) state.watchVideo=null;
+    state.watchVideo=null;
     state.watchHostedExternally=false;
     state.watchMinimized=false;
     state.watchPictureInPicture=false;
@@ -7820,8 +7817,7 @@ async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
     iosNativeLastHistoryAt=0;
     try {
       await iosUnified.open({
-        id:preserveWatchForBackground ? `video:${effective.id}` : `audio:${effective.kind}:${effective.id}`,
-        url:String(url),mode:'audio',
+        id:`audio:${effective.kind}:${effective.id}`,url:String(url),mode:'audio',
         title:effective.title,artist:effective.subtitle||'Irgun Shiurai Torah',
         position:Math.max(0,Number(resumeAt)||0),rate:state.playbackSpeed,autoplay:true
       });
@@ -8311,10 +8307,6 @@ function currentVideoClockForBackground() {
 }
 
 async function watchVideoIsActuallyPlayingForBackground(player = state.watchVimeo) {
-  if (iosNativeActive()) {
-    const native = iosUnified.state || {};
-    return native.mode === 'video' && native.playing === true && native.playRequested !== false;
-  }
   const directVideo = player?.video || player?.player?.v || null;
   if (directVideo) return Boolean(!directVideo.paused && !directVideo.ended);
   if (state.watchVideoPlaying) return true;
@@ -8341,7 +8333,6 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
   const video = state.watchVideo;
   const id = videoId(video);
   const oldPlayer = state.watchVimeo;
-  const nativeOwner = Boolean(iosNativeActive() && oldPlayer?.isIrgunUnifiedNativeAVPlayer);
 
   try {
     // Do not trust only the JS bookkeeping flag here. On the exact frozen-frame
@@ -8361,9 +8352,7 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
     // call playVideoAudio(). startAudio() issues audio.play() before its first
     // await, which gives iOS the best chance to register background audio before
     // WKWebView suspension.
-    if (!nativeOwner) {
-      try { oldPlayer?.setMuted?.(true); } catch (_) {}
-    }
+    try { oldPlayer?.setMuted?.(true); } catch (_) {}
 
     state.videoOwnsPlayback = false;
     state.watchMode = 'audio';
@@ -8384,17 +8373,10 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
     clearPersistentVideoMount();
     render();
 
-    // Native mode replaces the current item in the SAME AVPlayer. Do not
-    // pause/destroy its wrapper after the MP3 item has been opened.
-    if (!nativeOwner) {
-      try { oldPlayer?.pause?.(); } catch (_) {}
-      Promise.resolve(oldPlayer?.destroy?.()).catch(() => {});
-    }
+    try { oldPlayer?.pause?.(); } catch (_) {}
+    Promise.resolve(oldPlayer?.destroy?.()).catch(() => {});
     Promise.resolve(playback).then(() => {
       updatePlayerUi();
-      if (nativeOwner && !document.hidden && state.backgroundVideoAudioDidBackground) {
-        restoreVideoAfterBackgroundAudio();
-      }
     }).catch(error => {
       console.warn('Background video-to-audio handoff failed', source, error);
     });
@@ -8407,9 +8389,9 @@ async function handoffPlayingVideoToBackgroundAudio(source = 'background') {
 }
 
 function keepVideoPlayingOnBackground(source) {
-  if (document.hidden) state.backgroundVideoAudioDidBackground = true;
+  if (iosNativeActive()) return; // Native AVPlayer has no WebKit -> background handoff.
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
-  if (!iosNativeActive() && nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
+  if (nativeBackgroundAudioAvailable() && state.watchVideo && state.watchMode === 'video' && !state.watchPictureInPicture) {
     const player = state.watchVimeo;
     if (player?.player?.autoplayWanted === false || (!player?.player && !state.watchVideoPlaying)) return;
     if (!state.nativeBackgroundPending) state.nativeBackgroundMuted = Boolean(player?.video?.muted);
@@ -8496,33 +8478,6 @@ function restoreVideoAfterSystemPip(force = false) {
 
 function restoreVideoAfterBackgroundAudio() {
   if (iosNativeActive()) {
-    if (!document.hidden && state.backgroundVideoAudioDidBackground && !state.mediaSwitchBusy &&
-        state.backgroundVideoReturnToVideo && state.watchVideo && state.watchMode === 'audio' &&
-        iosUnified.state?.mode === 'audio' && state.current?.kind === 'video-audio') {
-      // The native AVPlayer played the lecture's MP3 while backgrounded. Reopen
-      // its HLS item at that clock when foregrounded; no second player is made.
-      state.watchResumeSeconds = Math.max(0, iosNativePosition());
-      state.backgroundVideoReturnToVideo = false;
-      state.backgroundVideoAudioDidBackground = false;
-      state.current = null;
-      state.watchMode = 'video';
-      state.videoOwnsPlayback = true;
-      state.playerOpen = false;
-      state.watchVimeo = null;
-      state.watchVimeoReady = false;
-      state.watchVimeoInitialization = null;
-      state.watchVimeoGeneration += 1;
-      state.watchHostedExternally = false;
-      state.watchMinimized = false;
-      state.watchPictureInPicture = false;
-      state.watchVideoPlaying = false;
-      clearPersistentVideoMount();
-      render();
-      hostCurrentWatchOverlay('full');
-      void initWatchVimeo(true, true).catch(error =>
-        console.warn('Could not restore native video after background audio', error));
-      return;
-    }
     void iosUnified.snapshot().catch(error=>console.warn('Native AVPlayer foreground snapshot failed',error));
     scheduleIosUnifiedSurface();
     return;

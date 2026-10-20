@@ -243,6 +243,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var lastObservedPlaybackPosition: Double = 0
     private var lastPlaybackProgressAt = Date()
     private var lastPlaybackRecoveryAttemptAt = Date.distantPast
+    private var lifecycleObservers: [NSObjectProtocol] = []
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
     override public func load() {
@@ -295,6 +296,43 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             // A real current-item completion drives same-folder audio advance.
             // Pause, buffering and layout changes must never look like EOF.
             self.notifyListeners("ended", data: self.snapshot())
+        }
+        // When the app goes Home, detach the video renderer, not the AVPlayerItem.
+        // This allows the existing player to continue its audio track using the
+        // background-audio entitlement. On return we reattach the same layer.
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.reconcileBackgroundVideoLayer(isBackgrounded: true) })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.reconcileBackgroundVideoLayer(isBackgrounded: false) })
+    }
+
+    private func reconcileBackgroundVideoLayer(isBackgrounded: Bool) {
+        guard active else { return }
+        if isBackgrounded {
+            // Explicit user PiP must keep its AVPlayerLayer attached.
+            guard mode == "video", !isPiPRequested,
+                  pipController?.isPictureInPictureActive != true else { return }
+            videoLayer.player = nil
+            if playingWanted {
+                do { try activateAudioSession() }
+                catch { NSLog("Irgun background playback session unavailable: \\(error)") }
+                // Do not replace the item or seek: the HLS audio track continues
+                // at its existing clock without a second decoder/player.
+                if player.rate < 0.01 { player.playImmediately(atRate: playbackRate) }
+                schedulePlaybackRecoveryIfNeeded()
+            }
+        } else {
+            if videoLayer.player == nil { videoLayer.player = player }
+            placeSurface(lastSurfaceRect)
+            guard playingWanted else { return }
+            if player.timeControlStatus != .playing {
+                do { try activateAudioSession() }
+                catch { NSLog("Irgun foreground playback session unavailable: \\(error)") }
+                player.playImmediately(atRate: playbackRate)
+                schedulePlaybackRecoveryIfNeeded()
+            }
         }
     }
 
@@ -1776,6 +1814,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         if let observer = endObserver { NotificationCenter.default.removeObserver(observer) }
         pendingOpenTimeout?.cancel()
         controlsHideTask?.cancel()
+        playbackRecoveryTask?.cancel()
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        lifecycleObservers.removeAll()
         if let pending = pendingOpen { pending.reject("Native player released") }
         clearRemoteControls()
     }
