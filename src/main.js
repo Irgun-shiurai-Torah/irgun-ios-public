@@ -4108,11 +4108,13 @@ async function expandPersistentWatch() {
 }
 
 
+let lastRenderedHomeLiveSignature = '';
 function homeHtml() {
   const trending = homeTrending();
   const recent = recentItems();
   const upcoming = futureScheduleEvents(3);
   const live = liveScheduleEvents();
+  lastRenderedHomeLiveSignature = live.map(event => [event.location,event.title,event.date].join(':')).join('|');
   const he = currentLanguage() === 'he';
   const heroTitle = IS_IOS
     ? (he ? 'שיעורים חיים, אלפי הקלטות והספרייה התורנית האישית שלכם — הכול באפליקציה אחת.' : 'Live shiurim, thousands of recordings, and your personal Torah library — all in one app.')
@@ -6302,8 +6304,10 @@ async function loadScheduleData(force = false) {
   }
 }
 
+
 async function loadLiveStatus(force = false) {
   if (state.liveStatusLoaded && !force) return;
+  const firstLoad = !state.liveStatusLoaded;
   try {
     const data = await publicJson(`/live-stream-status?v=${Date.now()}`);
     state.liveOverrides = new Set((data.enabledLocations || []).filter(location => LIVE_STREAMS[location]));
@@ -6311,8 +6315,19 @@ async function loadLiveStatus(force = false) {
     state.liveOverrides = new Set();
   }
   state.liveStatusLoaded = true;
-  if (state.screen.startsWith('live') || state.screen === 'home') render();
+  // A timed live event may start/end even when the API overrides are unchanged.
+  // Rebuild the Home feed only when its live cards actually change. Never rebuild
+  // an active Vimeo iframe merely because a status poll has completed.
+  if (state.screen === 'home') {
+    const current = liveScheduleEvents().map(event => [event.location,event.title,event.date].join(':')).join('|');
+    if (firstLoad || current !== lastRenderedHomeLiveSignature) render();
+  } else if (firstLoad && state.screen.startsWith('live')) render();
 }
+// Recheck live availability while Home is visible: no manual refresh needed.
+setInterval(() => {
+  if (!document.hidden && state.screen === 'home' && !state.loading && !state.error)
+    void loadLiveStatus(true);
+}, 60000);
 
 async function loadRecurringDonations(force = false) {
   if (!state.user || state.recurringLoading) return;
