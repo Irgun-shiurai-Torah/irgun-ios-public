@@ -1140,9 +1140,8 @@ function homeDiscoveryHtml() {
   const historyButton = '<button class="section-link" data-nav="library" data-open-history="1">' + (he ? 'היסטוריה' : 'History') + '</button>';
   const continueKicker = IS_IOS ? '' : '<span class="section-kicker">' + (he ? 'המשך' : 'CONTINUE') + '</span>';
   const continueBlock = continueRows.length
-    ? '<div class="section-head"><div>' + continueKicker + '<h2>' + (he ? 'המשך להאזין' : 'Continue Listening') + '</h2></div>' + (IS_IOS ? '' : historyButton) + '</div>'
+    ? '<div class="section-head' + (IS_IOS ? ' ios-home-inline-heading' : '') + '"><div>' + continueKicker + '<h2>' + (he ? 'המשך להאזין' : 'Continue Listening') + '</h2></div>' + historyButton + '</div>'
       + '<div class="list home-continue-list">' + continueRows.map(row => compactItem(row)).join('') + '</div>'
-      + (IS_IOS ? '<div class="home-section-footer">' + historyButton + '</div>' : '')
     : '';
   const followingKicker = IS_IOS ? '' : '<span class="section-kicker">' + (he ? 'במעקב' : 'FOLLOWING') + '</span>';
   const followingBlock = following.length
@@ -4116,17 +4115,17 @@ function homeHtml() {
   const live = liveScheduleEvents();
   lastRenderedHomeLiveSignature = live.map(event => [event.location,event.title,event.date].join(':')).join('|');
   const he = currentLanguage() === 'he';
-  const heroTitle = IS_IOS
-    ? (he ? 'שיעורים חיים, אלפי הקלטות והספרייה התורנית האישית שלכם — הכול באפליקציה אחת.' : 'Live shiurim, thousands of recordings, and your personal Torah library — all in one app.')
-    : 'Torah, wherever you are.';
-  const heroTagline = he ? 'תורה בכל מקום שבו אתם נמצאים.' : 'Torah, wherever you are.';
+  // The short Torah message is the headline; the longer explanation sits below it.
+  // Use the same existing translations on both iPhone and iPad.
+  const heroTitle = IS_IOS ? tr('Torah, wherever you are.') : 'Torah, wherever you are.';
+  const heroTagline = tr('Live shiurim, thousands of recordings, and your personal Torah library—all in one app.');
   const fullScheduleButton = '<button class="section-link" data-nav="schedule">' + tr('Full schedule') + '</button>';
   const browseAllButton = '<button class="section-link" data-nav="shiurim">' + tr('Browse all') + '</button>';
   // Keep an active live broadcast on Home; hide the entire section otherwise.
   // No "Next Shiur" fallback: Upcoming Shiurim already lists scheduled talks.
   const liveSection = live.length
     ? '<section class="section live-now-section">' +
-      '<div class="section-head"><h2>Live Now</h2><button class="section-link" data-nav="live">View live page</button></div>' +
+      '<div class="section-head' + (IS_IOS ? ' ios-home-inline-heading' : '') + '"><h2>Live Now</h2><button class="section-link" data-nav="live">View live page</button></div>' +
       '<div class="live-now-grid">' + live.slice(0,2).map(event => '<button class="live-now-card" data-nav="' + (event.location === 'Flatbush' ? 'live-flatbush' : 'live-boro') + '"><span class="live-pill"><i></i> LIVE</span><strong>' + esc(event.title || 'Live Broadcast') + '</strong><span>' + esc(event.speaker || event.location || '') + '</span><small>' + esc(event.location || '') + '</small></button>').join('') + '</div>' +
       '</section>'
     : '';
@@ -4143,16 +4142,14 @@ function homeHtml() {
     '<button class="home-shortcut" data-nav="library"><span>' + svgIcon('library') + '</span><div class="home-shortcut-copy"><strong>Your Library</strong></div></button>' +
     '</section>';
 
-  const upcomingBlock = '<section class="section"><div class="section-head"><div><span class="section-kicker">COMING UP</span><h2>Upcoming Shiurim</h2></div>' + (IS_IOS ? '' : fullScheduleButton) + '</div>' +
-    (upcoming.length ? '<div class="upcoming-home-list">' + upcoming.map(event => scheduleEventCard(event, true)).join('') + '</div>' : '<div class="empty">Current upcoming schedule will appear here.</div>') +
-    (IS_IOS ? '<div class="home-section-footer">' + fullScheduleButton + '</div>' : '') + '</section>';
+  const upcomingBlock = '<section class="section"><div class="section-head' + (IS_IOS ? ' ios-home-inline-heading' : '') + '"><div>' + (IS_IOS ? '' : '<span class="section-kicker">COMING UP</span>') + '<h2>Upcoming Shiurim</h2></div>' + fullScheduleButton + '</div>' +
+    (upcoming.length ? '<div class="upcoming-home-list">' + upcoming.map(event => scheduleEventCard(event, true)).join('') + '</div>' : '<div class="empty">Current upcoming schedule will appear here.</div>') + '</section>';
 
   const trendingBlock = '<section class="section"><div class="section-head"><div>' + (IS_IOS ? '' : '<span class="section-kicker">POPULAR NOW</span>') + '<h2>Trending Shiurim</h2></div><div class="segmented"><button data-trend-period="week" class="' + (state.homeTrendPeriod === 'week' ? 'active' : '') + '">This Week</button><button data-trend-period="month" class="' + (state.homeTrendPeriod === 'month' ? 'active' : '') + '">This Month</button></div></div>' +
     (trending.length ? '<div class="card-grid">' + trending.map(x => itemCard(x.item, { trendCount: x.count })).join('') + '</div>' : '<div class="empty">Trending shiurim will appear here.</div>') + '</section>';
 
-  const latestBlock = '<section class="section"><div class="section-head"><div>' + (IS_IOS ? '' : '<span class="section-kicker">NEW</span>') + '<h2>Latest Shiurim</h2></div>' + (IS_IOS ? '' : browseAllButton) + '</div>' +
-    '<div class="card-grid">' + recent.map(itemCard).join('') + '</div>' +
-    (IS_IOS ? '<div class="home-section-footer">' + browseAllButton + '</div>' : '') + '</section>';
+  const latestBlock = '<section class="section"><div class="section-head' + (IS_IOS ? ' ios-home-inline-heading' : '') + '"><div>' + (IS_IOS ? '' : '<span class="section-kicker">NEW</span>') + '<h2>Latest Shiurim</h2></div>' + browseAllButton + '</div>' +
+    '<div class="card-grid">' + recent.map(itemCard).join('') + '</div></section>';
 
   return hero + shortcuts + homeDiscoveryHtml() + liveSection + upcomingBlock + trendingBlock + latestBlock;
 }
