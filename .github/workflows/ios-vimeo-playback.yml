@@ -1,0 +1,44 @@
+name: iOS Vimeo Three-Way Playback
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ios-vimeo-mode.js'
+      - 'src/main.js'
+      - 'src/admin-website-parity.js'
+      - 'scripts/IrgunUnifiedPlayerPlugin.swift'
+      - 'scripts/test_ios_vimeo_modes.mjs'
+      - 'scripts/test_ios_playback.cjs'
+      - '.github/workflows/ios-vimeo-playback.yml'
+  push:
+    branches: [main, feat/ios-vimeo-three-way-playback-20261021]
+    paths:
+      - 'src/ios-vimeo-mode.js'
+      - 'src/main.js'
+      - 'src/admin-website-parity.js'
+      - 'scripts/IrgunUnifiedPlayerPlugin.swift'
+      - 'scripts/test_ios_vimeo_modes.mjs'
+      - 'scripts/test_ios_playback.cjs'
+      - '.github/workflows/ios-vimeo-playback.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  apple-vimeo-modes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check updated application modules
+        run: |
+          node --check src/main.js
+          node --check src/admin-website-parity.js
+          node --check src/ios-vimeo-mode.js
+          node --check scripts/test_ios_playback.cjs
+      - name: Run three-way routing and previous playback regressions
+        run: node --test scripts/test_ios_vimeo_modes.mjs scripts/test_ios_playback.cjs scripts/test_ios_vimeo_background.mjs scripts/test_ios_unified_avplayer.mjs scripts/test_ios_admin_website_parity.mjs

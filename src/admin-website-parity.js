@@ -85,12 +85,12 @@ export function planAdminDateChanges(csv,videos){
   return {items,counts};
 }
 
-export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKey,render,toast,ask}){
+export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKey,render,toast,ask,onIosVimeoVisibilityChanged=()=>{}}){
   const initial=()=>({
     panel:'',error:'',success:'',busy:false,busyAction:'',
     loaded:{},contact:{items:[],counts:{},q:'',status:'all'},
     comments:{items:[],page:1,total:0,hasMore:false,q:'',videoId:''},
-    routing:{videoMode:'direct',vimeoFallbackEnabled:true},
+    routing:{videoMode:'direct',vimeoFallbackEnabled:true,showVimeoOnlyWebsite:true,showVimeoOnlyApp:true,showVimeoOnlyIos:true,vimeoOnlyWebsiteMode:'vimeo',vimeoOnlyAppMode:'vimeo',vimeoOnlyIosMode:'vimeo'},
     cityAdmins:{items:[],cities:[]},cityNames:[],
     analytics:{live:{},history:{}},
     scheduleText:'',schedulePlan:null,datePlan:null,dateFileName:''
@@ -138,7 +138,23 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
   }
   function routingHtml(){
     const m=model.routing, option=(value,label,selected)=>'<option value="'+value+'" '+(selected?'selected':'')+'>'+label+'</option>';
-    return card('routing','<p>Sets playback behaviour for regular <strong>website</strong> videos; does not change native AVPlayer settings.</p><form data-hub-form="routing" class="admin-form-grid"><label>Video mode<select name="videoMode">'+option('direct','HLS → MP4',m.videoMode!=='vimeo')+option('vimeo','Vimeo only',m.videoMode==='vimeo')+'</select></label><label>Fallback<select name="vimeoFallbackEnabled">'+option('true','Vimeo fallback ON',m.vimeoFallbackEnabled!==false)+option('false','Vimeo fallback OFF (NetFree-safe)',m.vimeoFallbackEnabled===false)+'</select></label><p>Audio: Drive MP3 (fixed)</p>'+submit('Save website routing')+'</form>');
+    const select=(name,mode,enabled,form,label)=>
+      '<form data-hub-form="'+form+'" class="admin-form-grid">'+
+      '<label>Vimeo-only lectures on '+label+'<select name="'+name+'">'+
+        option('off','Off',mode==='off'||enabled===false)+
+        option('vimeo','Vimeo Player',mode==='vimeo'||(!mode&&enabled!==false))+
+        option('our-player','Our Player',mode==='our-player')+
+      '</select></label>'+submit('Save '+label+' playback')+'</form>';
+    return card('routing',
+      '<p>Website, Android and Apple have three <strong>independent</strong> Vimeo-only lecture settings. Off hides those lectures, Vimeo Player uses Vimeo, Our Player uses direct native HLS/MP4. Lectures copied to Drive are unaffected.</p>'+
+      select('vimeoOnlyWebsiteMode',m.vimeoOnlyWebsiteMode,m.showVimeoOnlyWebsite,'vimeo-website','WEBSITE')+
+      select('vimeoOnlyAppMode',m.vimeoOnlyAppMode,m.showVimeoOnlyApp,'vimeo-android','ANDROID')+
+      select('vimeoOnlyIosMode',m.vimeoOnlyIosMode,m.showVimeoOnlyIos,'vimeo-ios','APPLE')+
+      '<p>The regular website video routing options below are separate.</p>'+
+      '<form data-hub-form="routing" class="admin-form-grid">'+
+      '<label>Website video mode<select name="videoMode">'+option('direct','HLS → MP4',m.videoMode!=='vimeo')+option('vimeo','Vimeo only',m.videoMode==='vimeo')+'</select></label>'+
+      '<label>Website fallback<select name="vimeoFallbackEnabled">'+option('true','Vimeo fallback ON',m.vimeoFallbackEnabled!==false)+option('false','Vimeo fallback OFF (NetFree-safe)',m.vimeoFallbackEnabled===false)+'</select></label>'+
+      '<p>Audio: Drive MP3 (fixed)</p>'+submit('Save website routing')+'</form>');
   }
   function scheduleHtml(){
     const plan=model.schedulePlan;
@@ -371,6 +387,15 @@ export function createWebsiteAdminParity({apiJson,esc,isAdmin,isAdminMode,userKe
         model.comments.q=text(values.get('q')).trim();
         model.comments.videoId=text(values.get('videoId')).trim();
         model.comments.page=1;model.loaded.comments=false;void loadOpened(true);
+      }else if(['vimeo-website','vimeo-android','vimeo-ios'].includes(formName)){
+        const key=formName==='vimeo-website'?'vimeoOnlyWebsiteMode'
+          :formName==='vimeo-android'?'vimeoOnlyAppMode':'vimeoOnlyIosMode';
+        const mode=text(values.get(key));
+        void write(async()=>{
+          model.routing=await json('/admin/playback-routing',{[key]:mode});
+          if(formName==='vimeo-ios') onIosVimeoVisibilityChanged(mode);
+          notify('Vimeo-only playback setting saved. Other platforms are unchanged.');
+        });
       }else if(formName==='routing'){
         const next={videoMode:text(values.get('videoMode')),
           vimeoFallbackEnabled:text(values.get('vimeoFallbackEnabled'))==='true'};
