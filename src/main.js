@@ -4113,7 +4113,6 @@ function homeHtml() {
   const recent = recentItems();
   const upcoming = futureScheduleEvents(3);
   const live = liveScheduleEvents();
-  const next = upcoming[0];
   const he = currentLanguage() === 'he';
   const heroTitle = IS_IOS
     ? (he ? 'שיעורים חיים, אלפי הקלטות והספרייה התורנית האישית שלכם — הכול באפליקציה אחת.' : 'Live shiurim, thousands of recordings, and your personal Torah library — all in one app.')
@@ -4121,14 +4120,14 @@ function homeHtml() {
   const heroTagline = he ? 'תורה בכל מקום שבו אתם נמצאים.' : 'Torah, wherever you are.';
   const fullScheduleButton = '<button class="section-link" data-nav="schedule">' + tr('Full schedule') + '</button>';
   const browseAllButton = '<button class="section-link" data-nav="shiurim">' + tr('Browse all') + '</button>';
-  const liveSection = IS_IOS ? '' :
-    '<section class="section live-now-section"><div class="section-head"><div><span class="section-kicker">LIVE &amp; NEXT</span><h2>' + (live.length ? 'Live Now' : 'Next Shiur') + '</h2></div><button class="section-link" data-nav="live">View live page</button></div>' +
-    (live.length
-      ? '<div class="live-now-grid">' + live.slice(0,2).map(event => '<button class="live-now-card" data-nav="' + (event.location === 'Flatbush' ? 'live-flatbush' : 'live-boro') + '"><span class="live-pill"><i></i> LIVE</span><strong>' + esc(event.title || 'Live Broadcast') + '</strong><span>' + esc(event.speaker || event.location || '') + '</span><small>' + esc(event.location || '') + '</small></button>').join('') + '</div>'
-      : next
-        ? scheduleEventCard(next, true)
-        : '<div class="pro-empty"><strong>No upcoming shiur is posted yet.</strong><span>Open the schedule for the current flyers.</span><button data-nav="schedule">View Schedule</button></div>') +
-    '</section>';
+  // Keep an active live broadcast on Home; hide the entire section otherwise.
+  // No "Next Shiur" fallback: Upcoming Shiurim already lists scheduled talks.
+  const liveSection = live.length
+    ? '<section class="section live-now-section">' +
+      '<div class="section-head"><h2>Live Now</h2><button class="section-link" data-nav="live">View live page</button></div>' +
+      '<div class="live-now-grid">' + live.slice(0,2).map(event => '<button class="live-now-card" data-nav="' + (event.location === 'Flatbush' ? 'live-flatbush' : 'live-boro') + '"><span class="live-pill"><i></i> LIVE</span><strong>' + esc(event.title || 'Live Broadcast') + '</strong><span>' + esc(event.speaker || event.location || '') + '</span><small>' + esc(event.location || '') + '</small></button>').join('') + '</div>' +
+      '</section>'
+    : '';
 
   const hero = '<section class="hero pro-hero"><div class="hero-photo" aria-hidden="true"></div><div class="hero-overlay" aria-hidden="true"></div><div class="hero-content"><h1>' + heroTitle + '</h1>' +
     (IS_IOS ? '<p class="hero-subtitle">' + heroTagline + '</p>' : '') +
