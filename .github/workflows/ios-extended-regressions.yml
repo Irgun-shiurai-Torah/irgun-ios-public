@@ -16,6 +16,7 @@ permissions:
 # and cross-device cleanup. A same-SHA wait cannot exclude a different PR.
 concurrency:
   group: ios-account-shared-test-account
+  queue: max
   cancel-in-progress: false
 
 jobs:

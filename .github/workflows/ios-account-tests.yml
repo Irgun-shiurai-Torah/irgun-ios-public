@@ -16,6 +16,7 @@ concurrency:
   # Runs share one dedicated non-admin server account; queue them rather than
   # cancelling another workflow halfway through account mutations or cleanup.
   group: ios-account-shared-test-account
+  queue: max
   cancel-in-progress: false
 
 jobs:
