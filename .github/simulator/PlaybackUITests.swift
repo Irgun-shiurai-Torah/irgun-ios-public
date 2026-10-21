@@ -13,8 +13,15 @@ final class PlaybackUITests: XCTestCase {
             app.launchArguments.append("--irgun-reported-mp4")
         }
         app.launch()
-        _ = try waitFor("Library must load from the API", timeout: 90) {
-            ($0["libraryReady"] as? Bool == true) && self.number($0, "libraryCount") > 0
+        // A cold CI iPhone simulator can take longer than 90 seconds to
+        // finish its initial WebKit + live API bootstrap. The catalog can be
+        // present while the app is still rendering (pageLoading=true); don't
+        // tap into that transient state and mistake it for a playback failure.
+        // This is a bounded wait for REAL API content, not a fixture or skip.
+        _ = try waitFor("Library must finish loading from the API", timeout: 180) { state in
+            state["libraryReady"] as? Bool == true &&
+                self.number(state, "libraryCount") > 0 &&
+                state["pageLoading"] as? Bool == false
         }
     }
 
