@@ -184,15 +184,18 @@ test('iOS homepage matches the approved iPad screenshot layout',()=>{
   const subtitle=home.indexOf("'<p class=\"hero-subtitle\">' + heroTagline");
   assert.ok(headline>0 && subtitle>headline,
     'The short Torah statement must be the heading, and the longer message its subtitle');
-  assert.match(discover,/ios-home-inline-heading/);
+  assert.match(discover,/ios-home-stacked-heading/);
   assert.match(discover,/\+ historyButton \+ '<\/div>'/);
   assert.doesNotMatch(discover,/IS_IOS \? '<div class="home-section-footer">'\s*\+ historyButton/);
   assert.match(home,/ios-home-inline-heading/);
   assert.match(home,/<h2>Live Now<\/h2><button class="section-link" data-nav="live">View live page/);
   assert.match(home,/IS_IOS \? '' : '<span class="section-kicker">COMING UP<\/span>'/);
-  assert.match(home,/const upcomingBlock =[^\n]+\+ fullScheduleButton \+ '<\/div>'/);
-  assert.match(home,/const latestBlock =[^\n]+\+ browseAllButton \+ '<\/div>'/);
+  assert.match(home,/const upcomingBlock =[^\n]*ios-home-stacked-heading[^\n]*\+ fullScheduleButton \+ '<\/div>'/);
+  assert.match(home,/const latestBlock =[^\n]*ios-home-stacked-heading[^\n]*\+ browseAllButton \+ '<\/div>'/);
   assert.doesNotMatch(home,/IS_IOS \? '<div class="home-section-footer">'\s*\+ (fullScheduleButton|browseAllButton)/);
-  assert.match(css,/body\.irgun-ios \.ios-home-inline-heading \{/);
+  assert.match(css,/body\.irgun-ios \.ios-home-inline-heading \{/,
+    'Keep the Live Now link beside its title');
+  assert.match(css,/body\.irgun-ios \.ios-home-stacked-heading \{[^}]*flex-direction:column/,
+    'Move History, Full Schedule and Browse All directly below their titles');
   assert.match(css,/body\.irgun-ios \.pro-hero h1 \{[^}]*font-size:clamp\(32px,4vw,44px\)/);
 });
