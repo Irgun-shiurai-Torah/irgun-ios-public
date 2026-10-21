@@ -3334,3 +3334,148 @@ body.irgun-ios .pro-hero .counter-card span {
     transform:scale(1.12);
   }
 }
+
+
+/* Apple-only homepage design refinements, 2026-10-21. */
+body.irgun-ios .top-account {
+  max-width:140px;
+  min-height:44px;
+  padding:11px 14px;
+  font-size:12px;
+}
+body.irgun-ios .brand-logo-frame {
+  width:64px;
+  height:56px;
+  flex:0 0 64px;
+}
+body.irgun-ios .brand-logo-frame img { width:100%; height:100%; object-fit:contain; }
+body.irgun-ios .brand-copy strong { font-size:17px; line-height:1.15; }
+body.irgun-ios .brand-copy span { font-size:10.5px; line-height:1.25; }
+
+body.irgun-ios .pro-hero .hero-content { max-width:94%; }
+body.irgun-ios .pro-hero h1 {
+  max-width:700px;
+  font-size:clamp(23px,3.2vw,32px);
+  line-height:1.13;
+  letter-spacing:-.02em;
+}
+body.irgun-ios .pro-hero .hero-subtitle {
+  max-width:640px;
+  margin:8px 0 0;
+  color:rgba(255,255,255,.9);
+  font-size:15px;
+  font-weight:700;
+  line-height:1.45;
+}
+body.irgun-ios .home-section-footer {
+  display:flex;
+  justify-content:flex-end;
+  margin-top:10px;
+}
+body.irgun-ios .home-section-footer .section-link {
+  min-height:38px;
+  padding:9px 13px;
+  border-radius:11px;
+  font-size:12px;
+}
+
+body.irgun-ios .discover-speaker-card { gap:7px; padding:12px; }
+body.irgun-ios .discover-speaker-card strong {
+  font-size:14px;
+  font-weight:900;
+  line-height:1.3;
+  white-space:normal;
+}
+body.irgun-ios .discover-speaker-card small {
+  color:#43536a;
+  font-size:11px;
+  font-weight:850;
+  line-height:1.35;
+}
+body.irgun-ios .discover-speaker-tag { font-size:10px; }
+
+body.irgun-ios .schedule-event-date {
+  min-height:36px;
+  padding:8px 12px;
+  font-size:12px;
+  font-weight:900;
+}
+body.irgun-ios .schedule-event-date b { font-size:10px; }
+body.irgun-ios .schedule-event-main {
+  grid-template-columns:88px minmax(0,1fr);
+  gap:14px;
+  padding:15px;
+}
+body.irgun-ios .schedule-event-time {
+  font-size:14px;
+  font-weight:950;
+  line-height:1.35;
+}
+body.irgun-ios .schedule-event-copy h3 {
+  font-size:16px;
+  font-weight:900;
+  line-height:1.3;
+}
+body.irgun-ios .schedule-event-copy strong {
+  font-size:13px;
+  font-weight:850;
+  line-height:1.4;
+}
+body.irgun-ios .schedule-event-copy p {
+  font-size:12px;
+  font-weight:600;
+  line-height:1.45;
+}
+body.irgun-ios .schedule-event-card.compact .schedule-event-main {
+  grid-template-columns:82px minmax(0,1fr);
+  gap:12px;
+  padding:14px 15px;
+}
+body.irgun-ios .schedule-event-card.compact .schedule-event-copy h3 { font-size:15.5px; }
+
+@media (max-width:760px) {
+  body.irgun-ios .brand-logo-frame { width:58px; height:50px; flex-basis:58px; }
+  body.irgun-ios .brand-copy strong { font-size:15px; }
+  body.irgun-ios .brand-copy span { font-size:10px; }
+  body.irgun-ios .top-account {
+    max-width:128px;
+    min-height:42px;
+    padding:10px 11px;
+    font-size:11px;
+  }
+  body.irgun-ios .pro-hero h1 { font-size:clamp(23px,6.2vw,28px); }
+  body.irgun-ios .pro-hero .hero-subtitle { font-size:14px; }
+  body.irgun-ios .schedule-event-main,
+  body.irgun-ios .schedule-event-card.compact .schedule-event-main {
+    grid-template-columns:76px minmax(0,1fr);
+    gap:10px;
+    padding:13px;
+  }
+  body.irgun-ios .schedule-event-date { font-size:11.5px; }
+  body.irgun-ios .schedule-event-time { font-size:13px; }
+  body.irgun-ios .schedule-event-copy h3 { font-size:15px; }
+  body.irgun-ios .schedule-event-copy strong { font-size:12.5px; }
+  body.irgun-ios .schedule-event-copy p { font-size:11.5px; }
+}
+@media (max-width:390px) {
+  body.irgun-ios .brand-logo-frame { width:49px; height:44px; flex-basis:49px; }
+  body.irgun-ios .brand-copy strong { max-width:90px; font-size:13px; }
+  body.irgun-ios .brand-copy span { display:none; }
+  body.irgun-ios .top-account {
+    max-width:112px;
+    min-height:40px;
+    padding:9px 9px;
+    font-size:10.5px;
+  }
+  body.irgun-ios .pro-hero .hero-content { max-width:98%; padding-left:17px; padding-right:17px; }
+  body.irgun-ios .pro-hero h1 { font-size:23px; }
+  body.irgun-ios .schedule-event-main,
+  body.irgun-ios .schedule-event-card.compact .schedule-event-main {
+    grid-template-columns:70px minmax(0,1fr);
+    gap:9px;
+    padding:12px;
+  }
+  body.irgun-ios .schedule-event-copy h3 { font-size:14px; }
+  body.irgun-ios .schedule-event-copy p { font-size:11px; }
+  body.irgun-ios .discover-speaker-card strong { font-size:13.5px; }
+}
