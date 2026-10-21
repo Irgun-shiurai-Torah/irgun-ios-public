@@ -429,12 +429,26 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             return url.standardizedFileURL
         }
         guard url.scheme?.lowercased() == "https",
-              let host = url.host?.lowercased(),
-              host == "api.irgunshiuraitorah.com" || host == "irgunshiuraitorah.com" ||
-              host.hasSuffix(".irgunshiuraitorah.com") ||
-              host.hasSuffix(".cloudflarestream.com") ||
-              host.hasSuffix(".r2.dev") else { return nil }
-        return url
+              let host = url.host?.lowercased() else { return nil }
+        // Existing Drive/Irgun streams retain their current trust policy.
+        if host == "api.irgunshiuraitorah.com" || host == "irgunshiuraitorah.com" ||
+           host.hasSuffix(".irgunshiuraitorah.com") ||
+           host.hasSuffix(".cloudflarestream.com") ||
+           host.hasSuffix(".r2.dev") {
+            return url
+        }
+        // Vimeo recorded-file URLs from the trusted API descriptor are signed
+        // and redirect to Vimeo's own CDN. Reject iframe pages and lookalikes.
+        guard url.user == nil && url.password == nil &&
+              (url.port == nil || url.port == 443) && url.fragment == nil else { return nil }
+        if host == "player.vimeo.com" {
+            let path = url.path
+            return path.hasPrefix("/play/") ||
+                   path.hasPrefix("/progressive_redirect/") ||
+                   path.hasPrefix("/external/") ? url : nil
+        }
+        if host.hasSuffix(".vimeocdn.com") { return url }
+        return nil
     }
 
     private func activateAudioSession() throws {
