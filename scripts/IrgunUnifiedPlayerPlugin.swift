@@ -355,15 +355,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         } else {
             if videoLayer.player == nil {
                 videoLayer.player = player
-                #if targetEnvironment(simulator)
-                // Unlocking can leave the old AVPlayerItemVideoOutput frozen
-                // while the unchanged AVPlayer's audio clock keeps advancing.
-                // Reattach a genuine decoded-frame observer, preserving stats.
-                if mode == "video", let item = player.currentItem {
-                    attachSimulatedFrameOutput(to: item, resetStatistics: false)
-                    simulatorLastFrameObserverRefreshAt = CACurrentMediaTime()
-                }
-                #endif
+                // Keep the existing decoded-frame output with the retained
+                // item. Replacing it after backgrounding can freeze the new
+                // output's timebase while the same AVPlayer keeps playing.
             }
             placeSurface(lastSurfaceRect)
             guard playingWanted else { return }

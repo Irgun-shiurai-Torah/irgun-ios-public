@@ -4,7 +4,7 @@ test -n "$IRGUN_TEST_EMAIL" && test -n "$IRGUN_TEST_PASSWORD" || { echo "Missing
 node --check .github/regression/observer.js
 python3 -m py_compile .github/regression/*.py
 npm install --no-audit --no-fund
-node --test scripts/test_ios_account_observer.mjs scripts/test_ios_vimeo_modes.mjs scripts/test_ios_playback.cjs
+node --test scripts/test*.mjs scripts/test*.cjs
 python3 .github/simulator/prepare.py web
 # For this disposable test build, use PR #25's richer read-only account observer.
 # Do not overwrite production app code or inject the older account XCTest twice.

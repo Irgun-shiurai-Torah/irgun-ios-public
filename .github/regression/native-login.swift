@@ -69,3 +69,45 @@
                 self.number(account,"authSubmitCount") > before
         }
     }
+
+    // Shared by comments, login, offline and cross-device regression tests.
+    private func dismissNativeKeyboard() throws {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { return }
+        // Prefer a real swipe-down first. Avoid a global Done-button query,
+        // which can race with the keyboard disappearing during accessibility polling.
+        if keyboard.isHittable { keyboard.swipeDown() }
+        var deadline = Date().addingTimeInterval(3)
+        while Date() < deadline && app.keyboards.firstMatch.exists {
+            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+        }
+        if !app.keyboards.firstMatch.exists { return }
+        for label in ["Done","Return","Go","Log In"] {
+            let key = app.keyboards.buttons[label].firstMatch
+            if key.exists && key.isHittable {
+                key.tap()
+                deadline = Date().addingTimeInterval(3)
+                while Date() < deadline && app.keyboards.firstMatch.exists {
+                    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                }
+                if !app.keyboards.firstMatch.exists { return }
+                break
+            }
+        }
+        if app.keyboards.firstMatch.exists {
+            // Final outside tap in the app's top margin, not on the text field.
+            let frame = app.frame
+            if frame.width > 0 && frame.height > 40 {
+                app.coordinate(withNormalizedOffset:.zero).withOffset(
+                    CGVector(dx:frame.width*0.5,dy:24)).tap()
+            }
+        }
+        deadline = Date().addingTimeInterval(5)
+        while Date() < deadline && app.keyboards.firstMatch.exists {
+            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+        }
+        guard !app.keyboards.firstMatch.exists else {
+            XCTFail("Native keyboard remained visible after dismissal attempts")
+            throw Failure.timedOut("keyboard dismissal")
+        }
+    }
