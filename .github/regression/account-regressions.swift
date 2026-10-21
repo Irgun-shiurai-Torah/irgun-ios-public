@@ -350,16 +350,18 @@
         ).firstMatch
         XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
         nativeEditor.typeText(" updated")
-        try dismissNativeKeyboard()
-        _ = try waitFor("Native comment-edit keyboard closes before Save") { _ in
-            !self.app.keyboards.firstMatch.exists
-        }
+        XCTAssertTrue((nativeEditor.value as? String ?? "").contains(" updated"),
+                      "Real keyboard editing must reach the comment textarea")
+        // Return in a multiline comment editor inserts a newline rather than
+        // dismissing the keyboard. Tap the real Save action first, then demand
+        // that the saved editor loses focus and the native keyboard closes.
         let editBefore = successCount(account(), "/comments/edit", "PUT")
         try touch("commentSave")
         try awaitAccount("Comment edit persisted on server") {
             $0["qaCommentPhase"] as? String == "edited" &&
             successCount($0, "/comments/edit", "PUT") > editBefore
         }
+        try dismissNativeKeyboard()
         checked("Comment edit saved and verified")
         let deleteBefore = successCount(account(), "/comments/delete", "POST")
         try touch("commentDelete")

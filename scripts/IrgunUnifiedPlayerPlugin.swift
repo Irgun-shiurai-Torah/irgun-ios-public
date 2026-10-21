@@ -211,6 +211,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
+    private var simulatorLastFrameObserverRefreshAt: CFTimeInterval = 0
     // Simulator-only evidence for actual native double-tap delivery and AVPlayer seeking.
     private var doubleTapSeekCount = 0
     private var doubleTapSeekOffset = 0.0
@@ -350,7 +351,18 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 schedulePlaybackRecoveryIfNeeded()
             }
         } else {
-            if videoLayer.player == nil { videoLayer.player = player }
+            if videoLayer.player == nil {
+                videoLayer.player = player
+                #if targetEnvironment(simulator)
+                // Unlocking can leave the old AVPlayerItemVideoOutput frozen
+                // while the unchanged AVPlayer's audio clock keeps advancing.
+                // Reattach a genuine decoded-frame observer, preserving stats.
+                if mode == "video", let item = player.currentItem {
+                    attachSimulatedFrameOutput(to: item, resetStatistics: false)
+                    simulatorLastFrameObserverRefreshAt = CACurrentMediaTime()
+                }
+                #endif
+            }
             placeSurface(lastSurfaceRect)
             guard playingWanted else { return }
             if player.timeControlStatus != .playing {
@@ -635,8 +647,21 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         // mapping can remain behind the active AVPlayer clock. Check that
         // mapping first, then ask for real decoded pixels near the actual
         // current item time. Never advance counters from the clock alone.
-        let hostItemTime = output.itemTime(forHostTime: CACurrentMediaTime())
+        let hostNow = CACurrentMediaTime()
+        let hostItemTime = output.itemTime(forHostTime: hostNow)
         let clockTime = position()
+        // Do not count the AVPlayer clock as a decoded frame. If the actual
+        // pixel-buffer output has stalled after a lock or repeated mode
+        // switches, replace only that observation output; a true decoder stall
+        // still fails until fresh pixels genuinely arrive.
+        if simulatorFrameTime > 0 && simulatorFrameCount > 0 &&
+           clockTime - simulatorFrameTime > 7 &&
+           hostNow - simulatorLastFrameObserverRefreshAt > 10,
+           let item = player.currentItem {
+            simulatorLastFrameObserverRefreshAt = hostNow
+            attachSimulatedFrameOutput(to: item, resetStatistics: false)
+            return
+        }
         var candidates = [hostItemTime]
         if abs(hostItemTime.seconds - clockTime) > 1.2 {
             candidates.append(CMTime(seconds: max(0, clockTime - 0.15),
@@ -1610,7 +1635,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     #if targetEnvironment(simulator)
-    private func attachSimulatedFrameOutput(to item: AVPlayerItem) {
+    private func attachSimulatedFrameOutput(to item: AVPlayerItem,
+                                            resetStatistics: Bool = true) {
         // The previous observer may have stopped delivering frames while the
         // same item continued playing audio. Remove it before reconnecting a
         // fresh AVPlayerItemVideoOutput; never fabricate a frame or advance a
@@ -1619,8 +1645,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
            item.outputs.contains(where: { $0 === previous }) {
             item.remove(previous)
         }
-        simulatorFrameCount = 0
-        simulatorFrameTime = 0
+        if resetStatistics {
+            simulatorFrameCount = 0
+            simulatorFrameTime = 0
+        }
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
         ])

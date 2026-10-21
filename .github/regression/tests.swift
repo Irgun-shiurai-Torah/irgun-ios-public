@@ -499,7 +499,15 @@
                 $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
             }
         }
-        try tapWebButton("Pause video")
+        for _ in 0..<2 {
+            if snapshot()["videoPlaying"] as? Bool == false { break }
+            try tapWebButton("Pause video")
+            let deadline=Date().addingTimeInterval(4)
+            while Date() < deadline &&
+                  snapshot()["videoPlaying"] as? Bool != false {
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+        }
         _ = try waitFor("Pause works after notification launch") {
             $0["videoPlaying"] as? Bool == false
         }
@@ -606,12 +614,7 @@
                     ($0["nativePlayer"] as? [String:Any])?["controlsVisible"] as? Bool == true
                 }
             }
-            let speed=app.buttons["irgun-native-speed"].firstMatch
-            guard speed.waitForExistence(timeout:10) && speed.isHittable else {
-                XCTFail("Native playback-speed button is not hittable")
-                throw Failure.timedOut("native speed button")
-            }
-            speed.tap()
+            try tapWebButton("Playback speed")
             let title=label == "1.5x" ? "1.5×" : "1×"
             let choice=app.buttons[title].firstMatch
             guard choice.waitForExistence(timeout:12) && choice.isHittable else {

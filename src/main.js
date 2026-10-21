@@ -9140,6 +9140,10 @@ async function saveEditedComment(commentId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text })
     });
+    // A multiline iOS textarea keeps the keyboard open when Return is tapped.
+    // After Save succeeds, release focus before replacing the editor; leave
+    // focus and the unsaved draft intact if the request fails.
+    if (field && document.activeElement === field) field.blur();
     state.editingCommentId = '';
     await loadComments();
   } catch (error) {
