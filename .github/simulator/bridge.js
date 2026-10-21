@@ -1,6 +1,6 @@
 // Appended to main.js ONLY in the unsigned simulator workflow.
 // This exposes observations, not replacement playback behavior.
-import {simulatorHlsSourceReady} from '../.github/simulator/sample-selection.js';
+import {simulatorHlsSourceReady, selectIosAccountFixture} from '../.github/simulator/sample-selection.js';
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
 let simulatorError = '';
 let simulatorOpening = false;
@@ -59,21 +59,10 @@ function simulatorVisible(element) {
 // catalog. Choose an actual backed-up video with audio and a speaker, not the
 // newest Vimeo-only upload. Remember its ID across real process relaunches.
 window.__ISTQAChooseWatchButton = function(elements) {
-  const eligible = (elements || []).filter(element => {
-    const lecture = state.videoById?.get(String(element.dataset.watch || ''));
-    return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
-  });
   let saved = '';
   try { saved = localStorage.getItem('istIOSQABackedWatchId') || ''; } catch (_) {}
-  const candidates = [saved, '1235946832', '1235511026'];
-  for (const id of candidates) {
-    if (!['1235946832', '1235511026'].includes(id)) continue;
-    const element = eligible.find(el => String(el.dataset.watch) === id);
-    if (element) return element;
-  }
-  // Fail with a missing test fixture rather than silently selecting a
-  // Vimeo-only download or a speakerless lecture and misdiagnosing playback.
-  return null;
+  // Share exactly the same fixture-selection rules with the Node unit tests.
+  return selectIosAccountFixture(elements, state.videoById, saved);
 };
 document.addEventListener('click', event => {
   const element = event.target instanceof Element ? event.target.closest('[data-watch]') : null;

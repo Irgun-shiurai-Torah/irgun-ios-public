@@ -107,33 +107,49 @@ final class PlaybackUITests: XCTestCase {
                 "Keep playing at bottom of app": "irgun-native-mini"
             ]
             if let identifier = mappings[label] {
-                // Use the actual, currently hittable UIKit button bounds.
-                // An AX query plus .tap() can take longer than the eight-second
-                // controller lifetime on iPad, even after hittable was true.
-                if native["controlsVisible"] as? Bool == true && native["playRequested"] as? Bool == true &&
-                   number(native,"controlsHideRemaining") < 5 {
-                    videoPoint(0.5, 0.25).tap()
-                    _ = try waitFor("Picture tap refreshes expiring control display", timeout: 5) { s in
-                        let n = s["nativePlayer"] as? [String: Any] ?? [:]
-                        // The timer may expire while XCTest delivers the tap;
-                        // in that case the same tap already reveals a fresh UI.
-                        return n["controlsVisible"] as? Bool == false || self.number(n,"controlsHideRemaining") >= 6
+                let isPlayButton = identifier == "irgun-native-play"
+                let initialPlayTaps = number(native, "playButtonTaps")
+                // XCTest may spend multiple seconds synthesizing an iPad touch.
+                // Controls auto-hide at eight seconds, so a coordinate tap
+                // can reach the surface instead of the Play/Pause button.
+                // Retry ONLY when the real UIKit action counter did not advance.
+                for attempt in 0..<(isPlayButton ? 3 : 1) {
+                    let current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                    if current["controlsVisible"] as? Bool == true &&
+                       number(current,"controlsHideRemaining") < 5 {
+                        videoPoint(0.5, 0.25).tap()
                     }
+                    let afterRefresh = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                    if afterRefresh["controlsVisible"] as? Bool == false && afterRefresh["layout"] as? String != "mini" {
+                        videoPoint(0.5, 0.25).tap()
+                    }
+                    let ready = try waitFor("Visible native button: \(label)", timeout: 9) { s in
+                        let n = s["nativePlayer"] as? [String: Any] ?? [:]
+                        let buttons = n["buttons"] as? [String: [String: Any]] ?? [:]
+                        return n["controlsVisible"] as? Bool == true &&
+                            buttons[identifier]?["hittable"] as? Bool == true
+                    }
+                    let buttons = (ready["nativePlayer"] as? [String: Any])?["buttons"] as? [String: [String: Any]] ?? [:]
+                    let point = buttons[identifier] ?? [:]
+                    app.coordinate(withNormalizedOffset: .zero).withOffset(
+                        CGVector(dx: number(point,"x"),dy: number(point,"y"))).tap()
+                    if !isPlayButton { return }
+                    let predicate = NSPredicate { _, _ in
+                        let n = self.snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                        return self.number(n, "playButtonTaps") > initialPlayTaps
+                    }
+                    let expectation = XCTNSPredicateExpectation(predicate: predicate, object: NSObject())
+                    if XCTWaiter.wait(for: [expectation], timeout: 4) == .completed {
+                        let updated = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                        XCTAssertEqual(updated["playRequested"] as? Bool, label == "Play video",
+                                       "An acknowledged native Play/Pause tap must change playback intent")
+                        return
+                    }
+                    print("UITEST: native \(label) touch was missed by UIKit; retry \(attempt + 1)")
                 }
-                let current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-                if current["controlsVisible"] as? Bool == false && current["layout"] as? String != "mini" {
-                    videoPoint(0.5, 0.25).tap()
-                    _ = try waitFor("Tap reveals native controls", timeout: 5) { $0["controlsVisible"] as? Bool == true }
-                }
-                let ready = try waitFor("Visible native button: \(label)", timeout: 5) { s in
-                    let n = s["nativePlayer"] as? [String: Any] ?? [:]
-                    let buttons = n["buttons"] as? [String: [String: Any]] ?? [:]
-                    return n["controlsVisible"] as? Bool == true && buttons[identifier]?["hittable"] as? Bool == true
-                }
-                let buttons = (ready["nativePlayer"] as? [String: Any])?["buttons"] as? [String: [String: Any]] ?? [:]
-                let point = buttons[identifier] ?? [:]
-                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: number(point,"x"),dy: number(point,"y"))).tap()
-                return
+                evidence("native-play-button-touch-not-delivered")
+                XCTFail("A visible native Play/Pause button did not receive the actual simulator touch")
+                throw Failure.timedOut("Native Play/Pause touch delivery")
             }
         }
         // WebKit's AX tree can lag a replaced video surface. Touch the actual
@@ -450,8 +466,19 @@ final class PlaybackUITests: XCTestCase {
             print("COVERAGE NOTICE: current catalog has no unlisted video with a direct MP4; verifying backed-up native direct playback")
         }
         XCTAssertEqual(state["id"] as? String, expectedId)
-        XCTAssertEqual(state["videoSource"] as? String, state["reportedExpectedSource"] as? String)
         let sources = state["reportedSources"] as? [String: Any] ?? [:]
+        let actualSource = state["videoSource"] as? String ?? ""
+        let ownedSources = [sources["hls"] as? String, sources["mp4"] as? String]
+            .compactMap { $0 }.filter { !$0.isEmpty }
+        // A source advertised by the Worker may fail to start, in which case
+        // production correctly retries the other owned source. A real Vimeo
+        // fallback or an unknown URL must NOT be accepted by this test.
+        XCTAssertTrue(ownedSources.contains(actualSource),
+                      "The moving native video must use a Worker-advertised owned HLS or MP4 URL")
+        if actualSource == (sources["mp4"] as? String ?? "") &&
+           !(sources["hls"] as? String ?? "").isEmpty {
+            print("COVERAGE NOTICE: HLS was advertised but owned MP4 fallback started successfully")
+        }
         if (sources["hls"] as? String ?? "").isEmpty {
             XCTAssertEqual(state["backend"] as? String, "mp4", "MP4-only shiur must not fall back to Vimeo")
         }

@@ -208,6 +208,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var pipPausedByUser = false
     private var overlayOccluded = false
     #if targetEnvironment(simulator)
+    private var simulatorPlayButtonTaps = 0
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
@@ -728,6 +729,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
         #if targetEnvironment(simulator)
+        data["playButtonTaps"] = simulatorPlayButtonTaps
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
         data["controlsHideRemaining"] = max(0, controlsHideDeadline - ProcessInfo.processInfo.systemUptime)
@@ -1463,6 +1465,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
     @objc private func tapPlay() {
         guard active else { return }
+        #if targetEnvironment(simulator)
+        simulatorPlayButtonTaps += 1
+        #endif
         playingWanted.toggle()
         if playingWanted {
             try? activateAudioSession()
