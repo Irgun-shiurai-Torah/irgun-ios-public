@@ -16,6 +16,7 @@ import { createPaidQuestionController } from './paid-index-controller.js';
 import { verifiedPurchasedIds, mergeVerifiedPaidCatalog, paidCatalogAccountKey } from './paid-entitlements.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
 import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
+import { IOS_VIMEO_MODE_STORAGE_KEY, IOS_VIDEO_CATALOG_PATH, normalizeIosVimeoMode, isIosVimeoOnlyLecture, visibleIosLectureCatalog, iosVimeoWatchEngine, iosVideoDescriptorPath } from './ios-vimeo-mode.js';
 import { lectureFollowTargets, followVerb, isFollowTargetActive } from './follow-controls.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
 import { Capacitor, CapacitorHttp, registerPlugin } from '@capacitor/core';
@@ -116,6 +117,8 @@ const state = {
   iosNavRoot: 'home',
   iosNavPending: '',
   videos: [],
+  vimeoOnlyIosMode: normalizeIosVimeoMode(localStorage.getItem(IOS_VIMEO_MODE_STORAGE_KEY)),
+  showVimeoOnlyIos: localStorage.getItem(IOS_VIMEO_MODE_STORAGE_KEY) !== 'off',
   audioItems: [],
   videoById: new Map(),
   audioById: new Map(),
@@ -2408,6 +2411,59 @@ function enrichAudio(item) {
   return item;
 }
 
+
+function applyIosVimeoOnlyMode(nextMode) {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return false;
+  const mode=normalizeIosVimeoMode(nextMode);
+  const previous=state.vimeoOnlyIosMode;
+  state.vimeoOnlyIosMode=mode;
+  state.showVimeoOnlyIos=mode!=='off';
+  try { localStorage.setItem(IOS_VIMEO_MODE_STORAGE_KEY,mode); } catch (_) {}
+  if (previous===mode) return false;
+  // A mid-session change must never leave a hidden Vimeo-only lecture audible.
+  if (state.watchVideo && isIosVimeoOnlyLecture(state.watchVideo))
+    void closeWatch(false).catch(error=>console.warn('iOS Vimeo mode change: watch close failed',error));
+  if (mode==='off') {
+    state.videos=visibleIosLectureCatalog(state.videos,mode);
+    state.videoById=new Map(state.videos.map(v=>[videoId(v),v]));
+  }
+  return true;
+}
+
+async function loadIosVimeoOnlyMode() {
+  if (!IS_IOS || !Capacitor.isNativePlatform() || navigator.onLine===false)
+    return state.vimeoOnlyIosMode;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),5000);
+  try {
+    const response=await fetch(API+'/playback-routing?client=ios',{cache:'no-store',signal:controller.signal});
+    if (!response.ok) throw new Error('Apple Vimeo playback settings unavailable ('+response.status+')');
+    const settings=await response.json();
+    applyIosVimeoOnlyMode(normalizeIosVimeoMode(settings,state.vimeoOnlyIosMode));
+  } catch (error) {
+    // While offline or on old Workers preserve the user's last saved mode.
+    console.warn('Using last-known Apple Vimeo-only playback setting',error);
+  } finally {clearTimeout(timeout)}
+  return state.vimeoOnlyIosMode;
+}
+
+let iosVimeoModeRefreshAt=0;
+let iosVimeoModeRefreshPromise=null;
+function refreshIosVimeoModeOnReturn() {
+  if (!IS_IOS || !Capacitor.isNativePlatform() || document.hidden ||
+      navigator.onLine===false || !state.libraryReady || bootstrapInFlight ||
+      iosVimeoModeRefreshPromise || Date.now()-iosVimeoModeRefreshAt<12000) return;
+  iosVimeoModeRefreshAt=Date.now();
+  const previous=state.vimeoOnlyIosMode;
+  iosVimeoModeRefreshPromise=loadIosVimeoOnlyMode()
+    .then(mode=>{ if (mode!==previous && !bootstrapInFlight) return bootstrap({background:true}); })
+    .catch(error=>console.warn('Apple Vimeo-only settings refresh failed',error))
+    .finally(()=>{iosVimeoModeRefreshPromise=null});
+}
+function onAppleVimeoModeChangedInAdmin(mode) {
+  if (applyIosVimeoOnlyMode(mode)) void bootstrap({background:true});
+}
+
 async function bootstrapJsonOr(path, fallback) {
   try { return await bootstrapJson(path); } catch (_) { return fallback; }
 }
@@ -2427,9 +2483,10 @@ async function bootstrap(options = {}) {
   initNativeDownloader().catch(() => {});
   initIosPushListeners().catch(() => {});
   try {
+    await loadIosVimeoOnlyMode();
     await loadMetadata();
     const [videos, audios, week, month, all, counter, likeCounts] = await Promise.all([
-      bootstrapJson('/video-map?driveLibrary=1'),
+      bootstrapJson(IOS_VIDEO_CATALOG_PATH),
       bootstrapJsonOr('/audio-map', { items:[] }),
       bootstrapJsonOr('/trending?period=week&limit=2500', { items:[] }),
       bootstrapJsonOr('/trending?period=month&limit=2500', { items:[] }),
@@ -2438,7 +2495,7 @@ async function bootstrap(options = {}) {
       bootstrapJsonOr('/like-counts', {})
     ]);
 
-    state.videos = (Array.isArray(videos) ? videos : []).map(enrichVideo)
+    state.videos = visibleIosLectureCatalog((Array.isArray(videos) ? videos : []),state.vimeoOnlyIosMode).map(enrichVideo)
       .sort((a, b) => itemDate(b) - itemDate(a));
     state.audioItems = (audios.items || []).map(enrichAudio)
       .sort((a, b) => itemDate(b) - itemDate(a));
@@ -4982,7 +5039,8 @@ const websiteAdminParity=createWebsiteAdminParity({
   userKey:()=>String(state.user?.id||state.user?.email||''),
   render:()=>render(),
   toast:message=>setToast(message),
-  ask:message=>window.confirm(message)
+  ask:message=>window.confirm(message),
+  onIosVimeoVisibilityChanged:onAppleVimeoModeChangedInAdmin
 });
 
 function accountAdminHtml(){
@@ -5340,7 +5398,7 @@ async function loadIosDirectVideoSources(video) {
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = setTimeout(() => { try { controller?.abort(); } catch (_) {} }, 9000);
   try {
-    const response = await fetch(`${API}/media/${encodeURIComponent(id)}/source.json`, {
+    const response = await fetch(`${API}${iosVideoDescriptorPath(id)}`, {
       method: 'GET',
       cache: 'no-store',
       credentials: 'omit',
@@ -5522,13 +5580,26 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     if (!isCurrent()) throw new Error('Video initialization cancelled');
   };
   const videoKey = videoId(video);
+  const vimeoOnly = isIosVimeoOnlyLecture(video);
+  const engine = iosVimeoWatchEngine(video,state.vimeoOnlyIosMode,Boolean(iosUnified));
+  if (engine==='hidden') throw new Error('This Vimeo-only lecture is disabled in the Apple app');
+  if (engine==='vimeo') {
+    // Vimeo Player is a genuine Vimeo embed, not the native AVPlayer path.
+    // Relinquish the single native engine before starting WebKit media.
+    if (iosUnified?.active) await iosUnified.stop();
+    assertCurrent();
+    if (!window.Vimeo?.Player) throw new Error('Vimeo player unavailable on this network');
+    frame.style.display='block';
+    frame.src=frame.dataset.vimeoSrc || watchVimeoEmbedSrc(video,startSeconds);
+    return {player:new window.Vimeo.Player(frame),backend:'vimeo'};
+  }
   if (iosUnified) {
     const sources = await loadIosDirectVideoSources(video);
     assertCurrent();
     // An unlisted Vimeo ID can be "123456:privacycode". Do not strip its
     // privacy suffix: the Worker resolves this exact catalog ID at /download.
     const vimeoId = String(videoKey || '').trim();
-    const vimeoUrl = !video.directVideo && video.sourceType !== 'drive-library' &&
+    const vimeoUrl = !vimeoOnly && !video.directVideo && video.sourceType !== 'drive-library' &&
       /^\d+(?::[a-z0-9]+)?$/i.test(vimeoId)
       ? `${API}/download/${encodeURIComponent(vimeoId)}?type=vimeo` : '';
     // Prefer our own Drive HLS, then owned MP4, then Vimeo. A temporarily
@@ -5605,7 +5676,7 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
         } catch (retryError) {
           try { await directPlayer.destroy(); } catch (_) {}
           assertCurrent();
-          if (video.sourceType === 'drive-library') throw retryError;
+          if (video.sourceType === 'drive-library' || vimeoOnly) throw retryError;
           console.warn('iOS direct player failed after retry; using Vimeo fallback', retryError);
           state.watchDirectFallbackId = String(videoKey);
         }
@@ -5614,6 +5685,8 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
   }
 
   assertCurrent();
+  if (vimeoOnly && state.vimeoOnlyIosMode==='our-player')
+    throw new Error('Apple native recorded-video stream unavailable; Vimeo fallback is disabled');
   if (video.sourceType === 'drive-library') throw new Error('Drive video is processing or temporarily unavailable');
   if (!window.Vimeo || !window.Vimeo.Player) throw new Error('Vimeo fallback unavailable');
   frame.style.display = 'block';
@@ -5622,7 +5695,8 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
 }
 
 async function fallbackIosDirectVideoToVimeo(videoKey, detail = {}) {
-  if (state.watchVideo?.sourceType === 'drive-library') return;
+  if (state.watchVideo?.sourceType === 'drive-library' ||
+      (isIosVimeoOnlyLecture(state.watchVideo) && state.vimeoOnlyIosMode==='our-player')) return;
   if (!state.watchVideo || videoId(state.watchVideo) !== String(videoKey) || state.watchMode !== 'video') return;
   if (state.watchDirectFallbackId === String(videoKey)) return;
   const player = state.watchVimeo;
@@ -9267,6 +9341,7 @@ document.addEventListener('visibilitychange', () => {
   restoreVideoAfterBackgroundAudio();
   repairIosViewportAfterResume();
   if (state.error || state.offlineMode || state.usingCachedLibrary) bootstrap({ background:true });
+  else refreshIosVimeoModeOnReturn();
 });
 window.addEventListener('irgunNativeWillResignActive', () => {
   // willResignActive also fires for temporary interruptions such as Control
@@ -9282,10 +9357,12 @@ window.addEventListener('irgunNativeBackground', () => {
 window.addEventListener('irgunNativeForeground', () => {
   repairIosViewportAfterResume();
   restoreVideoAfterBackgroundAudio();
+  refreshIosVimeoModeOnReturn();
 });
 window.addEventListener('irgunNativeDidBecomeActive', () => {
   repairIosViewportAfterResume();
   restoreVideoAfterBackgroundAudio();
+  refreshIosVimeoModeOnReturn();
 });
 
 let iosInterruptedPlayback = null;
