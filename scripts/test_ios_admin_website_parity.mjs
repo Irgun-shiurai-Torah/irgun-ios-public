@@ -167,3 +167,32 @@ test('City Admin roles and buyer data reset before checking permissions after bo
   assert.match(main,/await checkAdminStatus\(true\);/);
   assert.match(main,/state\.adminPaidBuyersLoaded = false;/);
 });
+
+
+test('iOS homepage matches the approved iPad screenshot layout',()=>{
+  const main=readFileSync('src/main.js','utf8');
+  const css=readFileSync('src/style.css','utf8');
+  const begin=main.indexOf('function homeHtml() {');
+  const end=main.indexOf('\nfunction liveHtml()',begin);
+  assert.ok(begin>=0 && end>begin,'Live homepage renderer must exist');
+  const home=main.slice(begin,end);
+  const discover=main.slice(main.indexOf('function homeDiscoveryHtml() {'),
+    main.indexOf('function promiseWithTimeout('));
+  assert.match(home,/const heroTitle = IS_IOS \? tr\('Torah, wherever you are\.'\)/);
+  assert.match(home,/const heroTagline = tr\('Live shiurim, thousands of recordings, and your personal Torah library—all in one app\.'\)/);
+  const headline=home.indexOf("'<h1>' + heroTitle + '</h1>'");
+  const subtitle=home.indexOf("'<p class=\"hero-subtitle\">' + heroTagline");
+  assert.ok(headline>0 && subtitle>headline,
+    'The short Torah statement must be the heading, and the longer message its subtitle');
+  assert.match(discover,/ios-home-inline-heading/);
+  assert.match(discover,/\+ historyButton \+ '<\/div>'/);
+  assert.doesNotMatch(discover,/IS_IOS \? '<div class="home-section-footer">'\s*\+ historyButton/);
+  assert.match(home,/ios-home-inline-heading/);
+  assert.match(home,/<h2>Live Now<\/h2><button class="section-link" data-nav="live">View live page/);
+  assert.match(home,/IS_IOS \? '' : '<span class="section-kicker">COMING UP<\/span>'/);
+  assert.match(home,/const upcomingBlock =[^\n]+\+ fullScheduleButton \+ '<\/div>'/);
+  assert.match(home,/const latestBlock =[^\n]+\+ browseAllButton \+ '<\/div>'/);
+  assert.doesNotMatch(home,/IS_IOS \? '<div class="home-section-footer">'\s*\+ (fullScheduleButton|browseAllButton)/);
+  assert.match(css,/body\.irgun-ios \.ios-home-inline-heading \{/);
+  assert.match(css,/body\.irgun-ios \.pro-hero h1 \{[^}]*font-size:clamp\(32px,4vw,44px\)/);
+});
