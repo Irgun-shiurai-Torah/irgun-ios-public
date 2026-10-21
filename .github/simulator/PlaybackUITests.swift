@@ -430,20 +430,51 @@ final class PlaybackUITests: XCTestCase {
         let button = app.buttons["ist-simulator-open"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        let state = try waitFor("Reported IST-DL6067 must start as visible direct video", timeout: 150) {
-            $0["id"] as? String == "1233236785:585d5d53db" && $0["ready"] as? Bool == true &&
-            $0["mode"] as? String == "video" && $0["videoVisible"] as? Bool == true &&
-            $0["videoPlaying"] as? Bool == true &&
-            ["mp4", "hls-native"].contains($0["backend"] as? String ?? "")
+        // The historical IST-DL6067 entry may no longer be in the public
+        // catalog. The simulator first tries it, then discovers an actual
+        // current backed-up lecture via the PRODUCTION descriptor endpoint.
+        // It must still decode and play through our native/direct player.
+        let state = try waitFor("A current catalog shiur must start as visible direct video", timeout: 170) { s in
+            let selected = s["reportedSelectedId"] as? String ?? ""
+            return !selected.isEmpty && s["id"] as? String == selected &&
+                s["ready"] as? Bool == true && s["mode"] as? String == "video" &&
+                s["videoVisible"] as? Bool == true && s["videoPlaying"] as? Bool == true &&
+                ["mp4", "hls-native"].contains(s["backend"] as? String ?? "")
         }
-        XCTAssertEqual(state["videoSource"] as? String, state["reportedExpectedSource"] as? String)
+        let selected = state["reportedSelectedId"] as? String ?? ""
+        XCTAssertFalse(selected.isEmpty, "Must use a real catalog ID, never a placeholder")
         let sources = state["reportedSources"] as? [String: Any] ?? [:]
-        if (sources["hls"] as? String ?? "").isEmpty {
+        let hls = sources["hls"] as? String ?? ""
+        let mp4 = sources["mp4"] as? String ?? ""
+        XCTAssertTrue(!hls.isEmpty || !mp4.isEmpty, "Actual owned HLS or MP4 is required")
+        let playingSource = state["videoSource"] as? String ?? ""
+        XCTAssertTrue([hls, mp4].filter { !$0.isEmpty }.contains(playingSource),
+                      "The running decoder must use this shiur's actual HLS/MP4, not a Vimeo fallback")
+        if hls.isEmpty {
             XCTAssertEqual(state["backend"] as? String, "mp4", "MP4-only shiur must not fall back to Vimeo")
         }
-        let embed = URLComponents(string: state["vimeoEmbed"] as? String ?? "")
-        XCTAssertEqual(embed?.path, "/video/1233236785")
-        XCTAssertEqual(embed?.queryItems?.first { $0.name == "h" }?.value, "585d5d53db")
+        // Exercise the actual production unlisted-embed builder even when
+        // the historic entry is absent from today's API catalog. The hash
+        // must be its own h query value, never appended to the numeric ID.
+        let historic = URLComponents(string: state["reportedUnlistedPreview"] as? String ?? "")
+        XCTAssertEqual(historic?.path, "/video/1233236785")
+        XCTAssertEqual(historic?.queryItems?.first { $0.name == "h" }?.value, "585d5d53db")
+        let key = state["reportedVimeoKey"] as? String ?? ""
+        let parts = key.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        XCTAssertTrue(parts.count == 1 || parts.count == 2)
+        let candidate = URLComponents(string: state["reportedEmbedPreview"] as? String ?? "")
+        XCTAssertEqual(candidate?.path, "/video/" + (parts.first ?? ""))
+        XCTAssertEqual(candidate?.queryItems?.first { $0.name == "h" }?.value,
+                       parts.count == 2 ? parts[1] : nil)
+        // When the watch page renders an iframe, it must use this same
+        // production embed URL; direct AVPlayer must not display that iframe.
+        let rendered = state["vimeoEmbed"] as? String ?? ""
+        if !rendered.isEmpty {
+            let actual = URLComponents(string: rendered)
+            XCTAssertEqual(actual?.path, candidate?.path)
+            XCTAssertEqual(actual?.queryItems?.first { $0.name == "h" }?.value,
+                           candidate?.queryItems?.first { $0.name == "h" }?.value)
+        }
         XCTAssertEqual(state["directFallbackId"] as? String, "")
         XCTAssertFalse(state["fallbackBanner"] as? Bool ?? true)
         XCTAssertEqual(number(state, "playerCount"),
