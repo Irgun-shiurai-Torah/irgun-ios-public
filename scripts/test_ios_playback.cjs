@@ -5,6 +5,8 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
+const iosModeJs = fs.readFileSync(path.join(__dirname, '../src/ios-vimeo-mode.js'), 'utf8')
+  .replace(/\bexport\s+(?=(?:const|function)\s)/g,'');
 function extract(start, end) {
   const first = source.indexOf(start), last = source.indexOf(end, first);
   assert.ok(first >= 0 && last > first, `Missing source boundary: ${start}`);
@@ -23,6 +25,7 @@ function fixture() {
     watchVideo:video, videoById:new Map([['A',video]]), watchMode:'video',
     watchVimeo:null, watchVimeoReady:false, watchVimeoGeneration:1,
     watchVimeoInitialization:null, watchResumeSeconds:30, watchVideoPlaying:false,
+    vimeoOnlyIosMode:'vimeo',showVimeoOnlyIos:true,
     watchPictureInPicture:false, pipBackgroundReturnPending:false,
     pipWasBackgrounded:false, pipResumeWanted:false, pipRestoreBusy:false, backgroundPipPending:false
   };
@@ -54,6 +57,7 @@ function fixture() {
     render:()=>{}, hostCurrentWatchOverlay:()=>{}, loadComments:()=>{},
     createIosWatchPlayer:(_v,_f,_s,auto)=>new Promise((resolve,reject)=>pending.push({auto,resolve,reject}))
   });
+  vm.runInContext(iosModeJs, context);
   vm.runInContext(functions, context);
   function player(name, playing=false) {
     const handlers = new Map();
@@ -96,10 +100,11 @@ test('iOS source discovery accepts the reported MP4 without HLS',async()=>{
   const calls=[];
   const c=vm.createContext({IS_IOS:true,Capacitor:{isNativePlatform:()=>true},videoId:v=>v.id,API:'https://api.example.test',AbortController,setTimeout,clearTimeout,console,
     fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>({video:{hls:null,mp4:'https://media.example.test/IST-DL6067/video.mp4'}})};}});
+  vm.runInContext(iosModeJs, c);
   vm.runInContext(extract('const iosDirectVideoSourceCache', 'class IosDirectVideoAdapter'),c);
   const sources=await c.loadIosDirectVideoSources({id:'1233236785:585d5d53db'});
   assert.equal(sources.hls,'');assert.equal(sources.mp4,'https://media.example.test/IST-DL6067/video.mp4');
-  assert.equal(calls[0].url,'https://api.example.test/media/1233236785%3A585d5d53db/source.json');
+  assert.equal(calls[0].url,'https://api.example.test/media/1233236785%3A585d5d53db/source.json?client=ios');
 });
 test('MP4-only iOS player stays direct and keeps its requested position',async()=>{
   const f=fixture(),created=[];
@@ -802,12 +807,13 @@ test('Google pill matches Apple visible dimensions and typography',()=>{
   assert.match(css,/\.auth-social-buttons \.apple-signin-official-image\{[\s\S]*?width:calc\(100% - 4px\)[\s\S]*?max-width:356px[\s\S]*?height:52px!important/);
 });
 
-test('native Vimeo-only playback keeps the full unlisted privacy ID in the Worker lookup', async()=>{
-  const f=fixture(), opens=[];
-  f.state.watchVideo={id:'1233236785:585d5d53db',title:'Unlisted Vimeo-only shiur'};
+test('Apple Our Player uses signed Vimeo recorded-video HLS natively, preserving unlisted video ID', async()=>{
+  const f=fixture(),opens=[];
+  f.state.watchVideo={id:'1233236785:585d5d53db',title:'Unlisted Vimeo-only shiur',hasDriveVideo:false};
+  f.state.vimeoOnlyIosMode='our-player';
   f.state.playbackSpeed=1;
   f.context.API='https://api.example.test';
-  f.context.loadIosDirectVideoSources=async()=>null;
+  f.context.loadIosDirectVideoSources=async()=>({hls:'https://player.vimeo.com/play/123?signature=abc',mp4:'https://player.vimeo.com/progressive_redirect/123?signature=abc'});
   f.context.nativeVideoFrame=()=>({x:0,y:0,width:300,height:180});
   f.context.iosUnified={open:async value=>opens.push(value)};
   f.context.createIosNativeVideoAdapter=()=>({isNativeAVPlayer:true});
@@ -815,8 +821,33 @@ test('native Vimeo-only playback keeps the full unlisted privacy ID in the Worke
   const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,25,true);
   assert.equal(result.backend,'native');
   assert.equal(opens.length,1);
-  assert.equal(opens[0].url,'https://api.example.test/download/1233236785%3A585d5d53db?type=vimeo');
+  assert.equal(opens[0].id,'video:1233236785:585d5d53db');
+  assert.equal(opens[0].url,'https://player.vimeo.com/play/123?signature=abc');
   assert.equal(opens[0].position,25);
+});
+
+test('Apple Vimeo Player uses embedded Vimeo without creating native AVPlayer',async()=>{
+  const f=fixture(),opens=[],embeds=[];
+  f.state.watchVideo={id:'1233236785:585d5d53db',hasDriveVideo:false};
+  f.state.vimeoOnlyIosMode='vimeo';
+  f.frame.style={};f.frame.dataset={};
+  f.context.iosUnified={active:false,open:async value=>opens.push(value)};
+  f.context.window={Vimeo:{Player:function(frame){embeds.push(frame.src);}}};
+  vm.runInContext(extract('function watchVimeoEmbedSrc(', 'const iosDirectVideoSourceCache')+
+    extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  const result=await f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,23,true);
+  assert.equal(result.backend,'vimeo');
+  assert.equal(opens.length,0);
+  assert.equal(new URL(embeds[0]).searchParams.get('h'),'585d5d53db');
+});
+
+test('Apple Off rejects deep-link playback without launching a player',async()=>{
+  const f=fixture();
+  f.state.watchVideo={id:'1233236785:585d5d53db',hasDriveVideo:false};
+  f.state.vimeoOnlyIosMode='off';
+  f.context.iosUnified={active:false};
+  vm.runInContext(extract('async function createIosWatchPlayer(', 'async function fallbackIosDirectVideoToVimeo('),f.context);
+  await assert.rejects(f.context.createIosWatchPlayer(f.state.watchVideo,f.frame,0,true),/disabled in the Apple app/);
 });
 test('native video retries owned MP4 before Vimeo when HLS has failed',async()=>{
   const f=fixture(),attempts=[];

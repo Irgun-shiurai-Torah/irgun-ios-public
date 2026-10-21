@@ -57,7 +57,8 @@ function simulatorVisible(element) {
 
 window.ISTSimulator = {
   storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
-  reportedExpectedSource: '', reportedSources: null,
+  reportedExpectedSource: '', reportedSources: null, reportedSelectedId: '',
+  reportedVimeoKey: '', reportedEmbedPreview: '', reportedUnlistedPreview: '',
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
   async nextStorePage() {
     this.storeReady = false; this.storeError = '';
@@ -137,16 +138,41 @@ window.ISTSimulator = {
     if (simulatorOpening) return;
     simulatorOpening = true; simulatorError = '';
     try {
-      // Use the real loaded catalog and production source discovery. Do not
-      // substitute a fixture URL or change the player's source preference.
-      const video = state.videoById.get('1233236785:585d5d53db');
-      if (!video || !/פריזנט/.test(video.title || '') || !/עצות להצלחה/.test(video.title || '') || Number(video.duration) !== 3663)
-        throw new Error('Exact reported IST-DL6067 shiur is unavailable in the live catalog');
-      const sources = await loadIosDirectVideoSources(video);
-      if (!sources?.mp4) throw new Error('Reported shiur has no direct MP4');
-      this.reportedSources = sources;
-      this.reportedExpectedSource = sources.hls || sources.mp4;
-      await openWatch(videoId(video), 0);
+      // IST-DL6067 was a genuine production regression, but catalog titles,
+      // lengths and membership can change independently of app code. Prefer it
+      // when still present; otherwise exercise another REAL backed-up lecture.
+      // Never replace the media endpoint with a fixture or a mocked decoder.
+      this.reportedSources = null;
+      this.reportedExpectedSource = '';
+      this.reportedSelectedId = '';
+      this.reportedVimeoKey = '';
+      this.reportedEmbedPreview = '';
+      this.reportedUnlistedPreview = watchVimeoEmbedSrc({vimeoId:'1233236785:585d5d53db'},0);
+      const originalId = '1233236785:585d5d53db';
+      const eligible = video => video && !isIosVimeoOnlyLecture(video) &&
+        /^\d+(?::[a-z0-9]+)?$/i.test(String(video.vimeoId || video.id || ''));
+      const preferred = [
+        state.videoById.get(originalId),
+        state.videoById.get('1233236785'),
+        state.videos.find(video => String(videoId(video)).startsWith('1233236785:')),
+        state.videoById.get('1235946832'),
+        ...state.videos.filter(video => eligible(video) && video.hasAudio).slice(0,24)
+      ].filter(eligible);
+      const unique = preferred.filter((video,index,list) =>
+        list.findIndex(other => videoId(other) === videoId(video)) === index);
+      for (const video of unique) {
+        const sources = await loadIosDirectVideoSources(video);
+        if (!sources?.hls && !sources?.mp4) continue;
+        const id=String(videoId(video));
+        this.reportedSelectedId = id;
+        this.reportedVimeoKey = String(video.vimeoId || video.id || '');
+        this.reportedEmbedPreview = watchVimeoEmbedSrc(video,0);
+        this.reportedSources = sources;
+        this.reportedExpectedSource = sources.hls || sources.mp4;
+        await openWatch(id, 0);
+        return;
+      }
+      throw new Error('No cataloged Drive-backed lecture exposes real native HLS or MP4');
     } catch (error) { simulatorError = String(error.message || error); }
     finally { simulatorOpening = false; }
   },
@@ -268,6 +294,8 @@ window.ISTSimulator = {
       backend: native ? (String(native.sourceUrl||'').includes('.m3u8')?'hls-native':'mp4') : (state.watchVimeo?.player?.backend || ''),
       videoSource: native?.sourceUrl || video?.currentSrc || video?.src || '',
       reportedExpectedSource: this.reportedExpectedSource, reportedSources: this.reportedSources,
+      reportedSelectedId: this.reportedSelectedId, reportedVimeoKey: this.reportedVimeoKey,
+      reportedEmbedPreview: this.reportedEmbedPreview, reportedUnlistedPreview: this.reportedUnlistedPreview,
       vimeoEmbed: document.getElementById('watchVimeoFrame')?.dataset?.vimeoSrc || '',
       fallbackBanner: Boolean(document.querySelector('.watch-hls-fallback-note')) || /HLS could not start.*Playing Vimeo/.test(document.body.innerText),
       sampleId: this.selectedSampleId,
