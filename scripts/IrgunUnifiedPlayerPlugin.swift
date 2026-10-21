@@ -673,18 +673,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let hostItemTime = output.itemTime(forHostTime: hostNow)
         let clockTime = position()
         // Only true AVPlayerItemVideoOutput pixel buffers count as frames.
-        // A backward seek or HLS-to-MP4 recovery may put the clock BEHIND
-        // the previously observed frame time. Refresh on either sign of
-        // skew, but only after an actual wall-clock frame drought.
-        if player.timeControlStatus == .playing && simulatorFrameCount > 0 &&
-           hostNow - simulatorLastDecodedFrameAt > 7 &&
-           abs(clockTime - simulatorFrameTime) > 4 &&
-           hostNow - simulatorLastFrameObserverRefreshAt > 10,
-           let item = player.currentItem {
-            simulatorLastFrameObserverRefreshAt = hostNow
-            attachSimulatedFrameOutput(to: item, resetStatistics: false)
-            return
-        }
+        // Do not replace the output after a frame drought: AVFoundation can
+        // freeze a replacement output's timebase on an already-playing item.
+        // Keep the original output and query against the live item clock below.
         var candidates = [hostItemTime]
         if abs(hostItemTime.seconds - clockTime) > 1.2 {
             candidates.append(CMTime(seconds: max(0, clockTime - 0.15),

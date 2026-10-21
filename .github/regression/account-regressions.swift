@@ -57,7 +57,15 @@
             }
         }
         func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
+            try waitFor(message, timeout: 60) { state in
+                var observed = state["account"] as? [String: Any] ?? [:]
+                // Use live catalog/bootstrap state if the nested observer omits
+                // its readiness key after a native process restart.
+                if let libraryReady = state["libraryReady"] as? Bool {
+                    observed["ready"] = libraryReady && (state["pageLoading"] as? Bool != true)
+                }
+                return condition(observed)
+            }
         }
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
@@ -150,24 +158,35 @@
         func dismissNativeKeyboard() throws {
             let keyboard = app.keyboards.firstMatch
             guard keyboard.exists else { return }
-            // Hardware, compact and iPad floating keyboards expose different
-            // dismissal buttons. Try the native controls first.
-            for label in ["Done","Return","Go","Log In","Hide keyboard","Hide Keyboard","Dismiss"] {
-                let appButton = app.buttons[label].firstMatch
-                if appButton.exists && appButton.isHittable { appButton.tap(); break }
+            // Prefer a real swipe-down first. Avoid a global Done-button query,
+            // which can race with the keyboard disappearing during accessibility polling.
+            if keyboard.isHittable { keyboard.swipeDown() }
+            var deadline = Date().addingTimeInterval(3)
+            while Date() < deadline && app.keyboards.firstMatch.exists {
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+            if !app.keyboards.firstMatch.exists { return }
+            for label in ["Done","Return","Go","Log In"] {
                 let key = app.keyboards.buttons[label].firstMatch
-                if key.exists && key.isHittable { key.tap(); break }
+                if key.exists && key.isHittable {
+                    key.tap()
+                    deadline = Date().addingTimeInterval(3)
+                    while Date() < deadline && app.keyboards.firstMatch.exists {
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                    }
+                    if !app.keyboards.firstMatch.exists { return }
+                    break
+                }
             }
             if app.keyboards.firstMatch.exists {
-                let activeKeyboard = app.keyboards.firstMatch
-                if activeKeyboard.isHittable { activeKeyboard.swipeDown() }
+                // Final outside tap in the app's top margin, not on the text field.
+                let frame = app.frame
+                if frame.width > 0 && frame.height > 40 {
+                    app.coordinate(withNormalizedOffset:.zero).withOffset(
+                        CGVector(dx:frame.width*0.5,dy:24)).tap()
+                }
             }
-            if app.keyboards.firstMatch.exists {
-                // On iPad the keyboard can remain floating without a Return/Done
-                // key. A real outside tap dismisses it; this point avoids forms.
-                app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.16)).tap()
-            }
-            let deadline = Date().addingTimeInterval(5)
+            deadline = Date().addingTimeInterval(5)
             while Date() < deadline && app.keyboards.firstMatch.exists {
                 RunLoop.current.run(until:Date().addingTimeInterval(0.2))
             }
@@ -322,6 +341,9 @@
         try awaitAccount("Native keyboard entered the exact disposable QA comment") {
             $0["qaDraftValid"] as? Bool == true
         }
+        // The Post button can be covered by the iPhone keyboard. Close it
+        // with a real native gesture before locating/tapping the visible button.
+        try dismissNativeKeyboard()
         let postBefore = successCount(account(), "/comments", "POST")
         try touch("commentPost")
         try awaitAccount("QA comment POST accepted by the actual server") {

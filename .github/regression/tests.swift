@@ -150,13 +150,7 @@
     }
 
     private func regressionKeyboardDone() {
-        guard app.keyboards.firstMatch.exists else { return }
-        let done=app.buttons["Done"].firstMatch
-        if done.exists && done.isHittable { done.tap(); return }
-        for label in ["Done","Return","Go","Log In"] {
-            let btn=app.keyboards.buttons[label].firstMatch
-            if btn.exists && btn.isHittable { btn.tap(); return }
-        }
+        try? dismissNativeKeyboard()
     }
 
     private func regressionSelectAllText(_ field: XCUIElement) -> Bool {
@@ -988,6 +982,11 @@
         try regressionTap("playlists")
         if !(regression()["syncPlaylistNames"] as? [String] ?? []).contains(name) {
             try regressionEnter("playlistName",name)
+        }
+        // Dismissing the keyboard does not submit this form on every iOS keyboard.
+        // Tap the real Create button unless Return already saved the playlist.
+        if !(regression()["syncPlaylistNames"] as? [String] ?? []).contains(name) {
+            try regressionTap("createPlaylist")
         }
         try regressionWait("Writer created playlist stored in authenticated account",timeout:90) {
             ($0["syncPlaylistNames"] as? [String] ?? []).contains(name)
