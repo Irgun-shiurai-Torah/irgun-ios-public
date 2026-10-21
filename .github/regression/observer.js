@@ -112,9 +112,9 @@
     for (const [key,selector] of Object.entries(keys)) {
       const elements = [...document.querySelectorAll(selector)];
       let matches = elements;
-      if (key === 'open') {
-        const audioMatches = elements.filter(e=>state.videoById?.get(String(e.dataset.watch||''))?.hasAudio);
-        if (audioMatches.length) matches=audioMatches;
+      if (key === 'open' && state.screen === 'shiurim') {
+        const selected = window.__ISTQAChooseWatchButton?.(elements);
+        matches = selected ? [selected] : [];
       }
       const el = matches.find(e=>{
         const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;

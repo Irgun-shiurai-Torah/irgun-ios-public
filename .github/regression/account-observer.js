@@ -163,9 +163,11 @@ window.ISTAccountTest = { snapshot() {
   }
   for (const [key, query] of Object.entries(queries)) {
     let candidates = [...document.querySelectorAll(query)];
-    if (key === 'open') {
-      const playable = candidates.filter(el => state.videoById?.get(String(el.dataset.watch || ''))?.hasAudio === true);
-      if (playable.length) candidates = playable;
+    if (key === 'open' && state.screen === 'shiurim') {
+      // Keep the same real backed-up lecture when the app is relaunched:
+      // otherwise arbitrary recent Vimeo-only items can defeat these tests.
+      const fixed = window.__ISTQAChooseWatchButton?.(candidates);
+      candidates = fixed ? [fixed] : [];
     }
     if (['commentEdit','commentSave','commentDelete','commentEditText','commentKeyboardDone'].includes(key)) {
       if (!qaComment) candidates = [];

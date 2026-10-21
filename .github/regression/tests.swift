@@ -336,13 +336,13 @@
             return rects["open"] != nil
         }
         try regressionTap("open")
-        _ = try waitFor("Real Watch control starts direct HLS or same-shiur MP4", timeout: 120) { s in
+        _ = try waitFor("Real backed-up Watch control starts direct HLS or its own MP4", timeout: 120) { s in
             let source = s["videoSource"] as? String ?? ""
             let sameMP4 = s["backend"] as? String == "mp4" &&
                 source.contains("/media/") && source.contains("/video.mp4")
             return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
                 (s["backend"] as? String == "hls-native" || sameMP4) &&
-                !String(s["id"] as? String ?? "").isEmpty &&
+                ["1235946832","1235511026"].contains(s["id"] as? String ?? "") &&
                 s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
                 self.regressionSingleVideoOwner(s)
         }

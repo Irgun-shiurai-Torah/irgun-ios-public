@@ -55,6 +55,34 @@ function simulatorVisible(element) {
   return true;
 }
 
+// Disposable simulator-only test selection. Real users still see the unmodified
+// catalog. Choose an actual backed-up video with audio and a speaker, not the
+// newest Vimeo-only upload. Remember its ID across real process relaunches.
+window.__ISTQAChooseWatchButton = function(elements) {
+  const eligible = (elements || []).filter(element => {
+    const lecture = state.videoById?.get(String(element.dataset.watch || ''));
+    return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
+  });
+  let saved = '';
+  try { saved = localStorage.getItem('istIOSQABackedWatchId') || ''; } catch (_) {}
+  const candidates = [saved, '1235946832', '1235511026'];
+  for (const id of candidates) {
+    if (!['1235946832', '1235511026'].includes(id)) continue;
+    const element = eligible.find(el => String(el.dataset.watch) === id);
+    if (element) return element;
+  }
+  // Fail with a missing test fixture rather than silently selecting a
+  // Vimeo-only download or a speakerless lecture and misdiagnosing playback.
+  return null;
+};
+document.addEventListener('click', event => {
+  const element = event.target instanceof Element ? event.target.closest('[data-watch]') : null;
+  const id = String(element?.dataset.watch || '');
+  if (['1235946832','1235511026'].includes(id)) {
+    try { localStorage.setItem('istIOSQABackedWatchId', id); } catch (_) {}
+  }
+}, true);
+
 window.ISTSimulator = {
   storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
   reportedExpectedId: '', reportedExpectedVimeoId: '', reportedExpectedPrivacyHash: '',

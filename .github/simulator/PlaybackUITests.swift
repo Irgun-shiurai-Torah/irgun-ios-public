@@ -827,9 +827,13 @@ final class PlaybackUITests: XCTestCase {
         let initial = opened["nativePlayer"] as? [String: Any] ?? [:]
         try assertMovingVideo()
         videoPoint(0.5, 0.25).tap()
-        _ = try waitFor("A picture tap reveals controls during playback", timeout: 5) {
-            $0["controlsVisible"] as? Bool == true && $0["videoPlaying"] as? Bool == true
+        _ = try waitFor("Picture tap reveals controls without cancelling play intent", timeout: 8) { s in
+            let n = s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["controlsVisible"] as? Bool == true && n["playRequested"] as? Bool == true
         }
+        // Streaming can briefly buffer during this tap; demand actual new
+        // decoded frames and a moving clock, not just a saved play flag.
+        try assertMovingVideo()
         _ = try waitFor("Playing controls hide after eight seconds", timeout: 12) {
             $0["controlsVisible"] as? Bool == false && $0["videoPlaying"] as? Bool == true
         }

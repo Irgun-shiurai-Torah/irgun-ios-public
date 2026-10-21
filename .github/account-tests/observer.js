@@ -89,16 +89,13 @@ window.ISTAccountTest = { snapshot() {
   const controls = {}, controlRects = {}, controlScrollers = {};
   for (const [key, query] of Object.entries(queries)) {
     const rendered = [...document.querySelectorAll(query)];
-    // The newest lecture may be Vimeo-only or have no speaker metadata.
-    // Only select a real lecture with an actual speaker Follow button, so
-    // account tests exercise the feature instead of assuming every shiur
-    // has a speaker chip. This instrumentation does NOT alter live app UI.
-    const candidates = key === 'open'
-      ? rendered.filter(element => {
-          const lecture = state.videoById?.get(String(element.dataset.watch || ''));
-          return (lecture?._speakerIds || []).some(id => Boolean(String(speakerLabel(id) || '').trim()));
-        })
-      : rendered;
+    // The test must reopen the SAME server-backed lecture after relaunch.
+    // A first-speaker match changes as live uploads arrive, corrupting
+    // cleanup of Like/Follow and the post-restart assertions.
+    const fixed = key === 'open' && state.screen === 'shiurim'
+      ? window.__ISTQAChooseWatchButton?.(rendered) : null;
+    const candidates = key === 'open' && state.screen === 'shiurim'
+      ? (fixed ? [fixed] : []) : rendered;
     const element = candidates[0];
     if (element) {
       const r=element.getBoundingClientRect();

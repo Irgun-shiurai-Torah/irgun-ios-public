@@ -212,6 +212,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
     private var simulatorLastFrameObserverRefreshAt: CFTimeInterval = 0
+    private var simulatorLastDecodedFrameAt: CFTimeInterval = 0
     // Simulator-only evidence for actual native double-tap delivery and AVPlayer seeking.
     private var doubleTapSeekCount = 0
     private var doubleTapSeekOffset = 0.0
@@ -612,6 +613,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private func skip(seconds: Double, completion: ((Bool) -> Void)? = nil) -> (from: Double, target: Double) {
         let from = position()
         let target = max(0, from + seconds)
+        #if targetEnvironment(simulator)
+        if target < simulatorFrameTime - 2, let item = player.currentItem {
+            simulatorLastFrameObserverRefreshAt = CACurrentMediaTime()
+            attachSimulatedFrameOutput(to: item, resetStatistics: false)
+        }
+        #endif
         // Skip controls should land on the requested time, not the nearest HLS keyframe.
         // Explicit zero tolerances prevent a 15-second rewind from landing several seconds early.
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
@@ -650,12 +657,13 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let hostNow = CACurrentMediaTime()
         let hostItemTime = output.itemTime(forHostTime: hostNow)
         let clockTime = position()
-        // Do not count the AVPlayer clock as a decoded frame. If the actual
-        // pixel-buffer output has stalled after a lock or repeated mode
-        // switches, replace only that observation output; a true decoder stall
-        // still fails until fresh pixels genuinely arrive.
-        if simulatorFrameTime > 0 && simulatorFrameCount > 0 &&
-           clockTime - simulatorFrameTime > 7 &&
+        // Only true AVPlayerItemVideoOutput pixel buffers count as frames.
+        // A backward seek or HLS-to-MP4 recovery may put the clock BEHIND
+        // the previously observed frame time. Refresh on either sign of
+        // skew, but only after an actual wall-clock frame drought.
+        if player.timeControlStatus == .playing && simulatorFrameCount > 0 &&
+           hostNow - simulatorLastDecodedFrameAt > 7 &&
+           abs(clockTime - simulatorFrameTime) > 4 &&
            hostNow - simulatorLastFrameObserverRefreshAt > 10,
            let item = player.currentItem {
             simulatorLastFrameObserverRefreshAt = hostNow
@@ -675,6 +683,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             if seconds.isFinite && seconds > simulatorFrameTime {
                 simulatorFrameTime = seconds
                 simulatorFrameCount += 1
+                simulatorLastDecodedFrameAt = hostNow
                 break
             }
         }
@@ -1645,10 +1654,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
            item.outputs.contains(where: { $0 === previous }) {
             item.remove(previous)
         }
-        if resetStatistics {
-            simulatorFrameCount = 0
-            simulatorFrameTime = 0
-        }
+        if resetStatistics { simulatorFrameCount = 0 }
+        // A fresh output can legitimately resume at an EARLIER media time
+        // after a user rewind. Keep the lifetime decoded-frame count, but
+        // never hold the old rendition's future frameTime as a threshold.
+        simulatorFrameTime = 0
+        simulatorLastDecodedFrameAt = CACurrentMediaTime()
         let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
         ])
