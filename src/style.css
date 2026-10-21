@@ -3355,7 +3355,7 @@ body.irgun-ios .brand-copy span { font-size:10.5px; line-height:1.25; }
 body.irgun-ios .pro-hero .hero-content { max-width:94%; }
 body.irgun-ios .pro-hero h1 {
   max-width:700px;
-  font-size:clamp(23px,3.2vw,32px);
+  font-size:clamp(32px,4vw,44px);
   line-height:1.13;
   letter-spacing:-.02em;
 }
@@ -3364,8 +3364,26 @@ body.irgun-ios .pro-hero .hero-subtitle {
   margin:8px 0 0;
   color:rgba(255,255,255,.9);
   font-size:15px;
-  font-weight:700;
-  line-height:1.45;
+  font-weight:600;
+  line-height:1.5;
+}
+/* Review links sit next to the title they control, not at the far edge
+   of the tablet or after a long section of cards. */
+body.irgun-ios .ios-home-inline-heading {
+  display:flex;
+  justify-content:flex-start;
+  align-items:center;
+  flex-wrap:wrap;
+  column-gap:15px;
+  row-gap:6px;
+}
+body.irgun-ios .ios-home-inline-heading .section-link {
+  flex:0 0 auto;
+  margin:0;
+  padding:6px 2px;
+  font-size:12px;
+  line-height:1.25;
+  text-align:start;
 }
 body.irgun-ios .home-section-footer {
   display:flex;
