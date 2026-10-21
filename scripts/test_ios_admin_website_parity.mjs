@@ -180,7 +180,7 @@ test('iOS homepage matches the approved iPad screenshot layout',()=>{
     main.indexOf('function promiseWithTimeout('));
   assert.match(home,/const heroTitle = IS_IOS \? tr\('Torah, wherever you are\.'\)/);
   assert.match(home,/const heroTagline = tr\('Live shiurim, thousands of recordings, and your personal Torah library—all in one app\.'\)/);
-  const headline=home.indexOf("'<h1>' + heroTitle + '</h1>'");
+  const headline=home.indexOf("<h1>' + heroTitle + '</h1>'");
   const subtitle=home.indexOf("'<p class=\"hero-subtitle\">' + heroTagline");
   assert.ok(headline>0 && subtitle>headline,
     'The short Torah statement must be the heading, and the longer message its subtitle');
