@@ -8,15 +8,76 @@ on:
     branches: [test/ios-regressions-pr25-pr26-after-pr45]
 
 permissions:
+  actions: read
   contents: read
 
+# Keep this workflow's pending run from being cancelled by the PR account-check
+# workflow. The Ubuntu gate below serializes use of the shared QA account.
 concurrency:
-  # Same dedicated QA account as the existing iOS Account workflow.
-  group: ios-account-shared-test-account
+  group: ios-extended-regressions-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  wait-for-account-tests:
+    name: Wait for same-commit login/account tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Wait for the PR account workflow to finish before mutating its QA account
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SHA: ${{ github.sha }}
+          GH_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.request
+
+          repository = os.environ["GH_REPOSITORY"]
+          sha = os.environ["GH_SHA"]
+          current_run = int(os.environ["GH_RUN_ID"])
+          token = os.environ["GH_TOKEN"]
+          endpoint = f"https://api.github.com/repos/{repository}/actions/runs?per_page=100"
+          deadline = time.time() + 35 * 60
+          seen = False
+
+          while time.time() < deadline:
+              request = urllib.request.Request(endpoint, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  runs = json.load(response).get("workflow_runs", [])
+              matching = [
+                  run for run in runs
+                  if run.get("name") == "iOS Login & Account Tests"
+                  and run.get("head_sha") == sha
+                  and run.get("event") == "pull_request"
+                  and int(run.get("id", 0)) != current_run
+              ]
+              if matching:
+                  seen = True
+                  active = [run for run in matching if run.get("status") != "completed"]
+                  if not active:
+                      latest = max(matching, key=lambda run: run.get("created_at", ""))
+                      print("Matching PR account workflow finished:",
+                            latest.get("conclusion"), latest.get("html_url"))
+                      break
+                  print("Waiting for shared QA account:", [
+                      {"id": run.get("id"), "status": run.get("status")}
+                      for run in active
+                  ])
+              else:
+                  print("Waiting for matching PR account workflow to appear")
+              time.sleep(15)
+          else:
+              raise SystemExit("Timed out waiting for the matching PR account workflow")
+          if not seen:
+              raise SystemExit("No matching PR account workflow was observed")
+          PY
   device:
+    needs: wait-for-account-tests
     name: Extended ${{ matrix.family }} tests
     runs-on: macos-26
     timeout-minutes: 105
@@ -122,8 +183,8 @@ jobs:
 
   cross-device:
     name: iPhone account mutation to independently signed-in iPad
-    if: ${{ always() && !cancelled() }}
-    needs: device
+    if: ${{ always() && !cancelled() && needs.wait-for-account-tests.result == 'success' }}
+    needs: [wait-for-account-tests, device]
     runs-on: macos-26
     timeout-minutes: 90
     env:
