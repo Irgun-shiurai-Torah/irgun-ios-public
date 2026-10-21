@@ -114,53 +114,62 @@ final class PlaybackUITests: XCTestCase {
                 "Keep playing at bottom of app": "irgun-native-mini"
             ]
             if let identifier = mappings[label] {
-                let isPlay = identifier == "irgun-native-play"
-                let beforePlayTaps = number(native, "playButtonTaps")
-                // The video-surface gesture toggles chrome visibility. Never
-                // touch it while chrome is already shown: doing so hides the
-                // very button this test is trying to press.
-                for attempt in 0..<4 {
-                    let current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-                    if current["controlsVisible"] as? Bool != true {
-                        videoPoint(0.5, 0.25).tap()
-                        let revealPredicate = NSPredicate { _, _ in
-                            let observed = self.snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-                            return observed["controlsVisible"] as? Bool == true
+                let counts = native["controlTaps"] as? [String: Any] ?? [:]
+                let beforeTaps = number(counts, identifier)
+                for attempt in 0..<6 {
+                    // The loopback report is cached while UIKit is busy. Never
+                    // tap coordinates from before the eight-second hide timer.
+                    let fresh = try waitFor("Fresh native toolbar observation", timeout: 20) { state in
+                        let n = state["nativePlayer"] as? [String: Any] ?? [:]
+                        return self.number(n,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500
+                    }
+                    var current = fresh["nativePlayer"] as? [String: Any] ?? [:]
+                    if current["controlsVisible"] as? Bool == true &&
+                       number(current,"controlsHideRemaining") < 4 {
+                        // A real picture tap hides old chrome or reveals fresh
+                        // chrome if the timer expires during XCTest delivery.
+                        videoPoint(0.5,0.25).tap()
+                        _ = try waitFor("Expiring toolbar is hidden or freshly revealed", timeout: 10) { state in
+                            let n = state["nativePlayer"] as? [String: Any] ?? [:]
+                            return self.number(n,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500 &&
+                                (n["controlsVisible"] as? Bool == false || self.number(n,"controlsHideRemaining") >= 4)
                         }
-                        let reveal = XCTNSPredicateExpectation(predicate: revealPredicate, object: NSObject())
-                        if XCTWaiter.wait(for: [reveal], timeout: 5) != .completed {
-                            print("UITEST: true touch failed to reveal player controls; retry \(attempt + 1)")
-                            continue
+                        current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                    }
+                    if current["controlsVisible"] as? Bool != true {
+                        videoPoint(0.5,0.25).tap()
+                        _ = try waitFor("Real picture tap reveals current native controls", timeout: 10) { state in
+                            let n = state["nativePlayer"] as? [String: Any] ?? [:]
+                            return self.number(n,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500 &&
+                                n["controlsVisible"] as? Bool == true
                         }
                     }
                     let latest = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
                     let buttons = latest["buttons"] as? [String: [String: Any]] ?? [:]
-                    guard latest["controlsVisible"] as? Bool == true,
-                          buttons[identifier]?["hittable"] as? Bool == true else {
-                        // A hide timer can fire between observation and touch.
-                        // Retry with fresh actual UIKit geometry.
-                        continue
-                    }
+                    guard number(latest,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500,
+                          latest["controlsVisible"] as? Bool == true,
+                          number(latest,"controlsHideRemaining") >= 4,
+                          buttons[identifier]?["hittable"] as? Bool == true else { continue }
                     let point = buttons[identifier] ?? [:]
-                    app.coordinate(withNormalizedOffset: .zero).withOffset(
-                        CGVector(dx: number(point,"x"),dy: number(point,"y"))).tap()
-                    if !isPlay { return }
-                    let tappedPredicate = NSPredicate { _, _ in
-                        let observed = self.snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-                        return self.number(observed, "playButtonTaps") > beforePlayTaps
+                    app.coordinate(withNormalizedOffset:.zero).withOffset(CGVector(
+                        dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    let deliveredPredicate = NSPredicate { _, _ in
+                        let n = self.snapshot()["nativePlayer"] as? [String: Any] ?? [:]
+                        return self.number(n["controlTaps"] as? [String: Any] ?? [:],identifier) > beforeTaps
                     }
-                    let tapped = XCTNSPredicateExpectation(predicate: tappedPredicate, object: NSObject())
-                    if XCTWaiter.wait(for: [tapped], timeout: 4) == .completed {
+                    let delivered = XCTNSPredicateExpectation(predicate:deliveredPredicate,object:NSObject())
+                    if XCTWaiter.wait(for:[delivered],timeout:5) == .completed {
                         let observed = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
-                        XCTAssertEqual(observed["playRequested"] as? Bool,
-                                       label == "Play video",
-                                       "The native button must actually change the AVPlayer intent")
+                        if identifier == "irgun-native-play" {
+                            XCTAssertEqual(observed["playRequested"] as? Bool,label == "Play video",
+                                           "The real native tap must change playback intent")
+                        }
                         return
                     }
-                    print("UITEST: real native \(label) tap was missed; retry \(attempt + 1)")
+                    print("UITEST: native \(label) touch was not delivered before chrome expired; retry \(attempt + 1)")
                 }
                 evidence("native-button-touch-not-delivered")
-                XCTFail("A visible native player button never received a valid touch: \(label)")
+                XCTFail("Native UIKit did not receive the requested toolbar action: \(label)")
                 throw Failure.timedOut("Native player button \(label)")
             }
         }
