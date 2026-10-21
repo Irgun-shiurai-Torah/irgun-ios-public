@@ -4176,15 +4176,17 @@ let livePlaybackAwake = false;
 // Wake policy follows actual Vimeo playback rather than an event being scheduled.
 // Do not interfere with a recorded video that may still have its own player open.
 function syncLiveScreenAwake(playing) {
+  if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   const next = Boolean(playing && !document.hidden &&
-    (state.screen === 'live-boro' || state.screen === 'live-flatbush') &&
-    !(state.watchVideo && state.watchMode === 'video'));
+    (state.screen === 'live-boro' || state.screen === 'live-flatbush'));
   if (next === livePlaybackAwake) return;
   livePlaybackAwake = next;
-  if (!Capacitor.isNativePlatform()) return;
   Promise.resolve().then(() => {
     return IrgunVideoDisplay.livePlayback({playing:next});
-  }).catch(error => console.warn('Live video screen-awake update failed', error));
+  }).catch(error => {
+    if (livePlaybackAwake === next) livePlaybackAwake = !next;
+    console.warn('Live video screen-awake update failed', error);
+  });
 }
 function syncLivePlaybackAnalytics() {
   const frame = app.querySelector('.live-player-wrap iframe.live-frame');
@@ -4219,13 +4221,18 @@ function syncLivePlaybackAnalytics() {
     liveAnalyticsHandlers = [['play',play],['playing',play],['timeupdate',play],['pause',stop],['ended',stop],['error',stop]];
     for (const [name, handler] of liveAnalyticsHandlers) player.on(name, handler);
     // The frame may already be playing before the Vimeo API becomes available.
-    void player.getPaused().then(paused => { if (!paused) play(); }).catch(() => {});
+    void player.getPaused().then(paused => {
+      if (frame === liveAnalyticsFrame && !paused) play();
+    }).catch(() => {});
   } catch (error) { console.warn('Live playback analytics unavailable:', error); }
 }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) syncLiveScreenAwake(false);
   else if (liveAnalyticsPlayer && liveAnalyticsFrame) {
-    void liveAnalyticsPlayer.getPaused().then(paused => syncLiveScreenAwake(!paused)).catch(() => {});
+    const player = liveAnalyticsPlayer;
+    void player.getPaused().then(paused => {
+      if (player === liveAnalyticsPlayer) syncLiveScreenAwake(!paused);
+    }).catch(() => {});
   }
 });
 window.addEventListener('pagehide', () => syncLiveScreenAwake(false));
