@@ -1,0 +1,97 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { IOS_AUDIO_SPEEDS, validIosAudioSpeed, compactIosAudioSpeedHtml } from '../src/ios-audio-speed-popup.js';
+import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from '../src/ios-audio-start.js';
+
+const app = readFileSync('src/main.js', 'utf8');
+const audioUrl = id => `https://api.irgunshiuraitorah.com/audio/${encodeURIComponent(id)}`;
+
+test('compact menu has exactly one trigger and six selectable speeds', () => {
+  const html = compactIosAudioSpeedHtml(1.25);
+  assert.equal((html.match(/data-ios-speed-trigger/g) || []).length, 1);
+  assert.equal((html.match(/data-ios-speed-choice=/g) || []).length, 6);
+  assert.match(html, /aria-haspopup="menu" aria-expanded="false"/);
+  assert.match(html, /data-ios-speed-options[^>]*hidden/);
+  assert.match(html, /data-ios-speed-current>1\.25×/);
+  for (const rate of IOS_AUDIO_SPEEDS) assert.match(html, new RegExp(`data-ios-speed-choice="${rate}"`));
+  assert.equal((html.match(/aria-checked="true"/g) || []).length, 1);
+});
+
+test('Hebrew labels and only supported playback rates are accepted', () => {
+  assert.match(compactIosAudioSpeedHtml(1.5,'he'), /מהירות השמעה/);
+  assert.deepEqual(IOS_AUDIO_SPEEDS, [0.75,1,1.25,1.5,1.75,2]);
+  assert.equal(validIosAudioSpeed('1.75'),1.75);
+  for (const value of [0,-1,3,1.6,Infinity,'x']) assert.equal(validIosAudioSpeed(value), null);
+});
+
+test('original watch audio player has unchanged transport and no speed panel', () => {
+  const watch = app.slice(app.indexOf('function watchHtml()'),app.indexOf('function miniPlayerHtml()'));
+  assert.match(watch,/logoArtworkHtml\('large'\)/);
+  assert.match(watch,/id="watchAudioSeek"/);
+  assert.match(watch,/class="watch-audio-controls"/);
+  assert.match(watch,/data-skip="-15"/);
+  assert.match(watch,/data-skip="15"/);
+  assert.match(watch,/data-play-toggle="1"/);
+  assert.doesNotMatch(watch,/compactIosAudioSpeedHtml|data-ios-speed-trigger/);
+});
+
+test('full audio player retains artwork progress skip and play layout', () => {
+  const full = app.slice(app.indexOf('function fullPlayerHtml()'), app.indexOf('async function nativePushPermission('));
+  for (const exact of ['class="player-art', 'id="fullSeek"', 'class="time-row"', 'class="big-controls"', 'class="main-play"', 'data-skip="-${state.skipSeconds}"', 'data-skip="${state.skipSeconds}"', 'class="player-action-grid"']) assert.ok(full.includes(exact),exact);
+  assert.ok(full.indexOf('ios-speed-setting') > full.indexOf('player-action-grid'), 'Popup belongs below the original transport and actions');
+  assert.doesNotMatch(full,/data-speed-choice=/);
+});
+
+test('direct video audio prefers known working owned HLS and canonical ID', () => {
+  const candidates = iosDirectAudioCandidates({kind:'video-audio',id:'12345',sourceId:'IST-DL123',networkUrl:audioUrl('IST-DL123'),url:audioUrl('IST-DL123')},
+    {hls:'https://api.irgunshiuraitorah.com/hls/12345/master.m3u8',mp4:'https://api.irgunshiuraitorah.com/mp4/12345.mp4'},audioUrl);
+  assert.deepEqual(candidates, ['https://api.irgunshiuraitorah.com/hls/12345/master.m3u8','https://api.irgunshiuraitorah.com/mp4/12345.mp4',audioUrl('12345'),audioUrl('IST-DL123')]);
+});
+
+test('library-only and purchased audio retain their original direct URL', () => {
+  for (const kind of ['library-audio','paid-audio']) {
+    const url=audioUrl('audio-only-7');
+    assert.deepEqual(iosDirectAudioCandidates({kind,id:'audio-only-7',url,networkUrl:url},null,audioUrl),[url]);
+  }
+});
+
+test('corrupt offline item gets owned fallback but remains first priority', () => {
+  const urls=iosDirectAudioCandidates({kind:'video-audio',id:'12345',offline:true,url:'file:///Library/NoCloud/irgun-offline/sample.mp3',networkUrl:audioUrl('12345')},null,audioUrl);
+  assert.equal(urls[0], 'file:///Library/NoCloud/irgun-offline/sample.mp3');
+  assert.equal(urls[1],audioUrl('12345'));
+});
+
+test('first native failure falls back within same AVPlayer and keeps rate and position', async () => {
+  const calls=[],failures=[];
+  const urls=['https://fixture/hls.m3u8','https://fixture/video.mp4'];
+  const played=await openFirstPlayableIosAudio(urls,async url => {
+    calls.push({url,position:231,rate:1.5,mode:'audio'});
+    if (url===urls[0]) throw new Error('HLS temporarily unavailable');
+    return {playing:true,position:231,rate:1.5,mode:'audio'};
+  },()=>true,(error,url)=>failures.push({error:error.message,url}));
+  assert.equal(played.url,urls[1]);
+  assert.equal(calls.length,2);
+  assert.ok(calls.every(call=>call.position===231&&call.rate===1.5&&call.mode==='audio'));
+  assert.equal(failures.length,1);
+});
+
+test('a superseded tap cannot try another source or revive older playback', async () => {
+  let stillCurrent=true,calls=0;
+  await assert.rejects(openFirstPlayableIosAudio(['https://fixture/1','https://fixture/2'],async()=>{calls++;stillCurrent=false;throw Error('Old request');},()=>stillCurrent),/superseded/);
+  assert.equal(calls,1);
+});
+
+test('audio source failures surface a real error rather than report playing', async () => {
+  await assert.rejects(openFirstPlayableIosAudio(['https://fixture/unavailable'],async()=>{throw Error('Unplayable audio');}),/Unplayable audio/);
+});
+
+test('native direct playback and speed choice do not create an HTML player or re-open audio on speed change', () => {
+  const direct = app.slice(app.indexOf('let iosDirectAudioStartSequence'),app.indexOf('function togglePlay()'));
+  assert.match(direct,/openFirstPlayableIosAudio\(/);
+  assert.match(direct,/iosUnified\.open\(/);
+  assert.match(direct,/loadIosDirectVideoSources\(backedVideo\)/);
+  const setSpeed = app.slice(app.indexOf('async function setIosAudioPlaybackSpeed'),app.indexOf('function bind()'));
+  assert.match(setSpeed,/await iosUnified\.speed\(value\)/);
+  assert.doesNotMatch(setSpeed,/\.open\(|\.load\(|\.currentTime\s*=|render\(/);
+});

@@ -9,6 +9,7 @@ on:
       - feature/ios-android-design-parity-20261018
       - feature/ios-audio-library-sections-20261019
       - feat/ios-vimeo-three-way-playback-20261021
+      - fix/ios-direct-audio-compact-speed-preview-20261023
     paths-ignore:
       - "README*"
       - "**/*.md"
@@ -293,6 +294,9 @@ jobs:
           elif [ "$GITHUB_REF" = "refs/heads/feat/ios-vimeo-three-way-playback-20261021" ]; then
             # PR49: signed device-test build, never overwrite the live installer.
             RELEASE_TAG="ios-adhoc-pr49-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          elif [ "$GITHUB_REF" = "refs/heads/fix/ios-direct-audio-compact-speed-preview-20261023" ]; then
+            # Review-only test build; never overwrite production website installer.
+            RELEASE_TAG="ios-adhoc-audio-popup-review-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           fi
           RELEASE_DIR="$RUNNER_TEMP/ota-release"
           SITE_DIR="$RUNNER_TEMP/ota-site"
@@ -354,7 +358,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish wireless Ad Hoc IPA and manifest
-        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' || github.ref == 'refs/heads/feature/ios-audio-library-sections-20261019' || github.ref == 'refs/heads/feat/ios-vimeo-three-way-playback-20261021' }}
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/fix/ios-player-parity-catalog-20261017' || github.ref == 'refs/heads/feature/ios-android-design-parity-20261018' || github.ref == 'refs/heads/feature/ios-audio-library-sections-20261019' || github.ref == 'refs/heads/feat/ios-vimeo-three-way-playback-20261021' || github.ref == 'refs/heads/fix/ios-direct-audio-compact-speed-preview-20261023' }}
         env:
           GH_TOKEN: ${{ secrets.IRGUN_RELEASE_TOKEN || github.token }}
         shell: bash
