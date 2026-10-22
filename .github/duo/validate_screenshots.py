@@ -50,6 +50,37 @@ for file in files:
         )
         if result.returncode:
             raise SystemExit(f"Could not normalize one-pixel simulator offset for {file.name}: {result.stderr}")
+    # The Duo's inner display is sideways in its native open pose (hinge vertical).
+    # Its XCTest PNG bytes therefore contain an upright app rotated 90 degrees.
+    # Rotate those genuine framebuffer pixels clockwise once to deliver
+    # an upright *landscape* App Store image (2853x2007), with no cropping,
+    # synthetic artwork, device frame, or alteration to the app itself.
+    if pose == "unfolded":
+        result = subprocess.run(
+            ["sips", "-r", "90", str(file)],
+            capture_output=True, text=True,
+        )
+        if result.returncode:
+            raise SystemExit(
+                f"Could not correct unfolded display orientation for {file.name}: "
+                + result.stderr
+            )
+        target_width, target_height = target_height, target_width
+        rotated_report = subprocess.check_output(
+            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(file)],
+            text=True,
+        )
+        rotated_dimensions = [
+            int(line.split(":", 1)[1].strip())
+            for line in rotated_report.splitlines()
+            if "pixelWidth:" in line or "pixelHeight:" in line
+        ]
+        if rotated_dimensions != [target_width, target_height]:
+            raise SystemExit(
+                f"Unfolded rotation dimensions wrong for {file.name}: "
+                f"{rotated_dimensions}, expected {[target_width, target_height]}"
+            )
+
     summary.append({
         "file": file.name,
         "captured_width": width,
