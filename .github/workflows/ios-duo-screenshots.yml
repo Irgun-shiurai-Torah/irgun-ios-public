@@ -25,7 +25,6 @@ jobs:
       fail-fast: false
       matrix:
         pose: [folded, unfolded]
-    if: ${{ inputs.pose == 'both' || inputs.pose == matrix.pose }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
