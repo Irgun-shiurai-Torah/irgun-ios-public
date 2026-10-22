@@ -70,6 +70,14 @@
             try tapWebButton(key == "watchAudio" ? "Audio" : "Video")
             return
         }
+        if key == "profileSave" || key == "createPlaylist" {
+            let before = number(regression(),"lastClickSequence")
+            try tapNativeFormButton(key == "profileSave" ? ["Save Changes"] : ["Create Playlist","צור רשימה"])
+            try regressionWait("Real native form submit tap: " + key) {
+                self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
+            }
+            return
+        }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
         for _ in 0..<9 {
@@ -187,8 +195,8 @@
         }
     }
 
-    private func regressionKeyboardDone() {
-        try? dismissNativeKeyboard()
+    private func regressionKeyboardDone() throws {
+        try dismissNativeKeyboard()
     }
 
     private func regressionSelectAllText(_ field: XCUIElement) -> Bool {
@@ -266,7 +274,8 @@
                 $0["playlistName"] as? String == text
             }
         }
-        regressionKeyboardDone()
+        // The caller submits the actual form next. A generic Done accessory
+        // is not required before Save Changes or Create Playlist can be tapped.
     }
 
     private func regressionLogin() throws {
@@ -682,7 +691,7 @@
             }
             option.tap()
         }
-        regressionKeyboardDone()
+        try regressionKeyboardDone()
     }
 
     func testRegressionSpeedDefaultAndOnePointFiveAfterReopen() throws {

@@ -170,7 +170,7 @@ jobs:
             xcrun simctl io "$SIMULATOR_UDID" screenshot simulator-results/final-screen.png || true
             xcrun simctl spawn "$SIMULATOR_UDID" log show --last 20m --style compact \
               --predicate 'process == "IrgunShiuraiTorah" OR process == "SimulatorUITests-Runner"' \
-              > simulator-results/simulator.log 2>&1 || true
+              2>&1 | tail -c 8388608 > simulator-results/simulator.log || true
             xcrun simctl shutdown "$SIMULATOR_UDID" || true
           fi
 
@@ -179,7 +179,18 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ios-simulator-${{ matrix.family }}-${{ github.run_number }}
-          path: simulator-results/
+          # Keep complete XCTest logs/summaries and exported still evidence.
+          # The duplicate xcresult bundle and screen recordings can exceed 4 GB.
+          path: |
+            simulator-results/*.json
+            simulator-results/*.txt
+            simulator-results/*.log
+            simulator-results/final-screen.png
+            simulator-results/attachments/**/*.png
+            simulator-results/attachments/**/*.jpg
+            simulator-results/attachments/**/*.jpeg
+            simulator-results/attachments/**/*.heic
+            simulator-results/attachments/**/*.json
           if-no-files-found: warn
           retention-days: 14
 

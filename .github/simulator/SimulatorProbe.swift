@@ -20,6 +20,7 @@ final class SimulatorProbe {
     private var nativeKeyboardObserved = false
     private var nativeKeyboardVisible = false
     private var nativeKeyboardObservedAt = 0.0
+    private var nativeKeyboardFrame = CGRect.null
     private var latestState = [String:Any]()
     private var listener: NWListener?
     private let observationQueue = DispatchQueue(label: "org.irgun.simulator.observations")
@@ -36,10 +37,11 @@ final class SimulatorProbe {
         let label = UILabel()
         label.text = "Simulator diagnostics"
         label.font = .systemFont(ofSize: 9)
-        label.isAccessibilityElement = true
+        // Full observations travel over loopback. Publishing the same large,
+        // changing JSON value into AX makes each native UI query serialize it.
+        label.isAccessibilityElement = false
         label.accessibilityIdentifier = "ist-simulator-status"
         label.accessibilityLabel = "Simulator playback status"
-        label.accessibilityValue = "{}"
         label.translatesAutoresizingMaskIntoConstraints = false
         let button = UIButton(type: .system)
         button.setTitle("Open HLS test shiur", for: .normal)
@@ -147,6 +149,7 @@ final class SimulatorProbe {
                 } else if let frame = event.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
                           let window = self.window {
                     let local = window.convert(frame,from:nil)
+                    self.nativeKeyboardFrame = local
                     let intersection = window.bounds.intersection(local)
                     self.nativeKeyboardVisible = !intersection.isNull && intersection.height > 1 && intersection.width > 1
                 }
@@ -163,10 +166,14 @@ final class SimulatorProbe {
         state["nativeKeyboardObserved"] = nativeKeyboardObserved
         state["nativeKeyboardVisible"] = nativeKeyboardVisible
         state["nativeKeyboardObservedAt"] = nativeKeyboardObservedAt
+        if !nativeKeyboardFrame.isNull {
+            state["nativeKeyboardFrame"] = ["x":Double(nativeKeyboardFrame.minX),
+                "y":Double(nativeKeyboardFrame.minY),"width":Double(nativeKeyboardFrame.width),
+                "height":Double(nativeKeyboardFrame.height)]
+        }
+        state["nativeDiagnosticsVisible"] = panel?.isHidden == false
         state["nativeObservationPublishedAt"] = Date().timeIntervalSince1970 * 1000
-        if let merged = try? JSONSerialization.data(withJSONObject: state),
-           let value = String(data:merged,encoding:.utf8) {
-            status?.accessibilityValue = value
+        if let merged = try? JSONSerialization.data(withJSONObject: state) {
             observationLock.lock()
             observation = merged + Data([10])
             observationLock.unlock()
@@ -197,7 +204,11 @@ final class SimulatorProbe {
     @objc private func nextStorePage() { webView?.evaluateJavaScript("window.ISTSimulator?.nextStorePage()", completionHandler: nil) }
     @objc private func cleanCapture() {
         panel?.isHidden = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.panel?.isHidden = false }
+        publishObservation()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            self?.panel?.isHidden = false
+            self?.publishObservation()
+        }
     }
     @objc private func hideForAppControls() {
         // Keep diagnostics out of the app's touch path for the rest of this

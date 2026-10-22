@@ -6,7 +6,7 @@ import { selectIosAccountFixture } from '../.github/simulator/sample-selection.j
 
 // Execute the unmodified account observer in a read-only fake DOM. The test
 // checks real selection semantics without touching login data or network APIs.
-function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests'}={}) {
+function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId=''}={}) {
   class Element {}
   const listeners = new Map();
   const make = (id, y, title=false) => Object.assign(new Element(),{
@@ -26,7 +26,8 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
   const elements=[first,second,account,...(titleButton?[title]:[])];
   const document={
     addEventListener(name,callback){listeners.set(name,callback);},
-    getElementById:()=>null,
+    getElementById:id=>id==='commentText'?{value:commentDraft}:null,
+    activeElement:focusedId?{id:focusedId}:null,
     querySelectorAll(query){
       if(query==='[data-watch]')return [first,second,...(titleButton?[title]:[])];
       if(query==='.bottom-nav [data-nav="account"]')return [account];
@@ -106,3 +107,29 @@ for (const observer of ['account-tests','regression']) {
       'A generic open click must not prove that the saved fixture was reopened');
   });
 }
+
+test('comment observer reports actual composer focus independently of draft validity',()=> {
+  const draft='IST iOS QA 1792660000123 created';
+  const unfocused=snapshotFor({observer:'regression',commentDraft:draft});
+  assert.equal(unfocused.qaDraftValid,true);
+  assert.equal(unfocused.qaDraftMarker,'1792660000123');
+  assert.equal(unfocused.commentComposerFocused,false);
+  const focused=snapshotFor({observer:'regression',commentDraft:draft,focusedId:'commentText'});
+  assert.equal(focused.commentComposerFocused,true);
+  assert.equal(focused.qaDraftMarker,'1792660000123');
+});
+test('comment observer cannot accept a different disposable marker as the intended draft',()=> {
+  const observed=snapshotFor({observer:'regression',
+    commentDraft:'IST iOS QA 1792660000999 created',focusedId:'commentText'});
+  assert.equal(observed.commentComposerFocused,true);
+  assert.equal(observed.qaDraftValid,true);
+  assert.notEqual(observed.qaDraftMarker,'1792660000123');
+});
+test('comment observer exposes no arbitrary draft text or marker for an unrelated draft',()=> {
+  const draft='A private unrelated comment draft';
+  const observed=snapshotFor({observer:'regression',commentDraft:draft,focusedId:'commentText'});
+  assert.equal(observed.commentComposerFocused,true);
+  assert.equal(observed.qaDraftValid,false);
+  assert.equal(observed.qaDraftMarker,'');
+  assert.ok(!JSON.stringify(observed).includes(draft));
+});

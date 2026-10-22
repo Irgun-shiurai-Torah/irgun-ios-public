@@ -70,26 +70,28 @@
         }
     }
 
+    private func nativeKeyboardIsClosed() -> Bool {
+        let native = snapshot()
+        if native["nativeKeyboardObserved"] as? Bool == true {
+            // Prefer a genuine UIKit hide event over a retained offscreen AX node.
+            return native["nativeKeyboardVisible"] as? Bool == false
+        }
+        return !app.keyboards.firstMatch.exists
+    }
+
     // Shared by comments, login, offline and cross-device regression tests.
     private func dismissNativeKeyboard() throws {
-        func keyboardClosed() -> Bool {
-            let native = snapshot()
-            if native["nativeKeyboardObserved"] as? Bool == true {
-                // An offscreen Keyboard AX node can survive its real hide event.
-                // A show event still requires genuine native dismissal.
-                return native["nativeKeyboardVisible"] as? Bool == false
-            }
-            return !app.keyboards.firstMatch.exists
-        }
         func waitForClosure(_ seconds: TimeInterval) -> Bool {
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
-                if keyboardClosed() { return true }
+                if nativeKeyboardIsClosed() { return true }
                 RunLoop.current.run(until:Date().addingTimeInterval(0.2))
             }
-            return keyboardClosed()
+            return nativeKeyboardIsClosed()
         }
-        guard !keyboardClosed() else { return }
+        // Successful Post/Save blurs its own field asynchronously. Allow the
+        // real UIKit hide notification to arrive before looking for accessories.
+        if waitForClosure(3) { return }
         // WKWebView's Done accessory belongs to the app toolbar, not the
         // keyboard subtree. This is the same native control exercised by
         // the passing iPhone/iPad account suite. Return in a comment inserts

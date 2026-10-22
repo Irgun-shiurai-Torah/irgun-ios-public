@@ -167,3 +167,29 @@ test('City Admin roles and buyer data reset before checking permissions after bo
   assert.match(main,/await checkAdminStatus\(true\);/);
   assert.match(main,/state\.adminPaidBuyersLoaded = false;/);
 });
+
+
+test('iOS homepage navigation and live availability stay accessible',()=>{
+  // Position and styling are visually approved in the downloaded iOS build.
+  // Protect navigation and live availability without blocking previews for
+  // purely cosmetic changes.
+  const main=readFileSync('src/main.js','utf8');
+  const start=main.indexOf('function homeHtml() {');
+  const end=main.indexOf('\nfunction liveHtml()',start);
+  assert.ok(start>=0 && end>start,'Homepage renderer exists');
+  const home=main.slice(start,end);
+  const discover=main.slice(main.indexOf('function homeDiscoveryHtml() {'),
+    main.indexOf('function promiseWithTimeout('));
+  assert.match(discover,/data-open-history="1"/,
+    'History remains accessible through the Library navigation');
+  assert.match(home,/data-nav="schedule"/,
+    'Full Schedule remains accessible');
+  assert.match(home,/data-nav="shiurim"/,
+    'Browse All remains accessible');
+  assert.match(home,/data-nav="live"/,
+    'Watch Live remains accessible');
+  assert.match(home,/const liveSection = live.length/,
+    'Homepage shows active live events only when available');
+  assert.match(home,/live-flatbush/,
+    'Live cards navigate to the corresponding broadcast');
+});

@@ -9,6 +9,7 @@
     library: '.bottom-nav [data-nav="library"]',
     open: '[data-watch]',
     loginEmail: '#authEmail', loginPassword: '#authPassword',
+    commentText: '#commentText',
     loginSubmit: '#authForm button[type="submit"]',
     profileName: '#profileName', profileSave: '#profileForm button[type="submit"]',
     profileSection: '[data-account-section="profile"]',

@@ -76,6 +76,14 @@
                 try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
                 return
             }
+            if key == "commentPost" || key == "commentSave" {
+                let before = number(account(),"lastClickSequence")
+                try tapNativeFormButton([key == "commentPost" ? "Post Comment" : "Save"])
+                try awaitAccount("Real comment form submit tap: " + key) {
+                    self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
+                }
+                return
+            }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
             try awaitAccount("Account control rendered: " + key) {
@@ -299,16 +307,19 @@
         try touch("commentText")
         let nativeComposer = app.webViews.textViews.firstMatch
         XCTAssertTrue(nativeComposer.waitForExistence(timeout: 10), "Comment composer must exist")
+        nativeComposer.tap()
+        try awaitAccount("Exact comment composer has focus before native typing") {
+            $0["commentComposerFocused"] as? Bool == true
+        }
         nativeComposer.typeText("IST iOS QA \(commentMarker) created")
         // Prove native typing reached the actual comment form before allowing
         // a server mutation; typing into some other WKWebView textarea would
         // otherwise post an unrelated user's draft by accident.
         try awaitAccount("Native keyboard entered the exact disposable QA comment") {
-            $0["qaDraftValid"] as? Bool == true
+            $0["qaDraftValid"] as? Bool == true && $0["qaDraftMarker"] as? String == commentMarker
         }
-        // The Post button can be covered by the iPhone keyboard. Close it
-        // with a real native gesture before locating/tapping the visible button.
-        try dismissNativeKeyboard()
+        // Tap the real Post button through native accessibility; XCTest can
+        // scroll it into view without inserting Return into the comment.
         let postBefore = successCount(account(), "/comments", "POST")
         try touch("commentPost")
         try awaitAccount("QA comment POST accepted by the actual server") {
@@ -324,7 +335,7 @@
         // clears. Dismiss it before scrolling to the comment's edit control.
         try dismissNativeKeyboard()
         _ = try waitFor("Comment composer keyboard closes before editing",timeout:10) { _ in
-            !self.app.keyboards.firstMatch.exists
+            self.nativeKeyboardIsClosed()
         }
         checked("Comment POST persisted, visible to its owner and submitted draft cleared")
         try touch("commentEdit")
@@ -336,6 +347,13 @@
             NSPredicate(format: "value CONTAINS %@", commentMarker)
         ).firstMatch
         XCTAssertTrue(nativeEditor.waitForExistence(timeout: 10), "QA comment editor must exist")
+        if account()["commentEditorFocused"] as? Bool != true {
+            nativeEditor.tap()
+            nativeEditor.coordinate(withNormalizedOffset:CGVector(dx:0.95,dy:0.5)).tap()
+        }
+        try awaitAccount("Exact owned QA comment editor has focus before native typing") {
+            $0["commentEditorFocused"] as? Bool == true
+        }
         nativeEditor.typeText(" updated")
         XCTAssertTrue((nativeEditor.value as? String ?? "").contains(" updated"),
                       "Real keyboard editing must reach the comment textarea")

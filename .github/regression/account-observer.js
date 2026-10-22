@@ -145,9 +145,10 @@ window.ISTAccountTest = { snapshot() {
     String(qaMarker.videoId) === String(videoId(state.watchVideo));
   const qaToken = markerInScope && /^\d{12,16}$/.test(String(qaMarker.token))
     ? String(qaMarker.token) : '';
-  const qaDraftValid = /^IST iOS QA \d{12,16} created$/.test(
+  const qaDraftMatch = /^IST iOS QA (\d{12,16}) created$/.exec(
     String(document.getElementById('commentText')?.value || '').trim()
   );
+  const qaDraftValid = Boolean(qaDraftMatch);
   let qaComment = null, qaCommentPhase = 'absent';
   let qaCommentReturned = false, qaCommentReturnedOwned = false;
   if (qaToken && state.user) {
@@ -216,6 +217,9 @@ window.ISTAccountTest = { snapshot() {
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     watchHasAudio:Boolean(state.watchVideo?.hasAudio),
     qaCommentPhase,qaCommentVisible:Boolean(qaComment),qaDraftValid,
+    qaDraftMarker:qaDraftMatch?.[1] || '',
+    commentComposerFocused:document.activeElement?.id === 'commentText',
+    commentEditorFocused:Boolean(qaComment && document.activeElement?.id === 'editCommentText-' + String(qaComment.id)),
     qaCommentMarker:qaToken,
     qaCommentReturned,qaCommentReturnedOwned,
     commentCount:state.watchComments.length,

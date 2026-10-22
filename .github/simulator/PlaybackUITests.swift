@@ -115,6 +115,17 @@ final class PlaybackUITests: XCTestCase {
         }
     }
 
+    private func tapNativeFormButton(_ labels: [String]) throws {
+        let button = app.webViews.buttons.matching(NSPredicate(format:"label IN %@",labels)).firstMatch
+        guard button.waitForExistence(timeout:20) else {
+            XCTFail("The requested real form submit button is missing")
+            throw Failure.timedOut("Native form submit")
+        }
+        // XCUIElement.tap scrolls an offscreen element into view. Do not
+        // reject it before XCTest can expose a button covered by the keyboard.
+        button.tap()
+    }
+
     private func tapWebButton(_ label: String) throws {
         let hide = app.buttons["ist-simulator-hide-controls"]
         if hide.exists && hide.isHittable { hide.tap() }
@@ -986,8 +997,12 @@ final class PlaybackUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.7)
             let screenshot=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
             screenshot.name="store-\(name)"; screenshot.lifetime = .keepAlways; add(screenshot)
-            let ready=NSPredicate(format:"exists == true AND hittable == true")
-            XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:ready,object:app.buttons["ist-simulator-next-page"])],timeout:8),.completed)
+            // Wait for the real native panel timer over loopback. A cached AX
+            // query can time out even after UIKit has restored these controls.
+            _ = try waitFor("Screenshot controls return after clean capture",timeout:30) {
+                $0["nativeDiagnosticsVisible"] as? Bool == true &&
+                    self.number($0,"nativeObservationPublishedAt") > Date().timeIntervalSince1970*1000-1500
+            }
         }
     }
 

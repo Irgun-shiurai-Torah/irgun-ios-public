@@ -12,12 +12,14 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "IrgunVideoDisplay"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "playback", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "livePlayback", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setFullscreen", returnType: CAPPluginReturnPromise)
     ]
 
     private let motion = CMMotionManager()
     private var videoActive = false
     private var playbackIntended = false
+    private var livePlaybackActive = false
     private var mini = false
     private var pip = false
     private var fullscreen = false
@@ -35,8 +37,7 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             self.mini = call.getBool("mini") ?? false
             self.pip = call.getBool("pip") ?? false
             // A paused lecture does not hold the screen awake indefinitely.
-            UIApplication.shared.isIdleTimerDisabled =
-                self.videoActive && self.playbackIntended && !self.pip
+            self.refreshIdleTimer()
             if self.videoActive && !self.mini && !self.pip { self.startMotionIfNeeded() }
             else { self.motion.stopDeviceMotionUpdates(); self.sensorCandidate = ""; self.lastReported = "" }
             if !self.videoActive && self.fullscreen {
@@ -46,6 +47,21 @@ public class IrgunVideoDisplayPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             call.resolve()
         }
+    }
+
+    // Vimeo live iframe has no native AVPlayer item. Update only the idle
+    // policy; never create, pause, rotate or replace a media player.
+    @objc public func livePlayback(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.livePlaybackActive = call.getBool("playing") ?? false
+            self.refreshIdleTimer()
+            call.resolve()
+        }
+    }
+
+    private func refreshIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled =
+            (videoActive && playbackIntended && !pip) || livePlaybackActive
     }
 
     @objc public func setFullscreen(_ call: CAPPluginCall) {
