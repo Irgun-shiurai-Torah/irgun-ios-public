@@ -6,7 +6,7 @@ import { selectIosAccountFixture } from '../.github/simulator/sample-selection.j
 
 // Execute the unmodified account observer in a read-only fake DOM. The test
 // checks real selection semantics without touching login data or network APIs.
-function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId='',commentClick=null}={}) {
+function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId='',commentClick=null,clickKeys=[],pointerKey='',covered=false}={}) {
   class Element {}
   const listeners = new Map();
   const make = (id, y, title=false) => Object.assign(new Element(),{
@@ -35,9 +35,10 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
     },
     querySelector:()=>null,
     elementFromPoint(x,y){return elements.find(element=>{
+      if (covered) return false;
       const r=element.getBoundingClientRect();
       return x>=r.left&&x<=r.left+r.width&&y>=r.top&&y<=r.top+r.height;
-    })||null;}
+    })||(covered?{tagName:'SECTION',closest:q=>q==='.playlist-picker-backdrop'?{}:null}:null);}
   };
   const state={
     videoById:new Map([
@@ -63,6 +64,18 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
     // Real click listeners also receive clicks on a child inside the button.
     const child=Object.assign(new Element(),{closest:query=>button.closest(query)});
     listeners.get('click')({target:child});
+  }
+  for (const key of clickKeys) {
+    const query=context.window.__ISTAccountControlQueries[key];
+    const target=Object.assign(new Element(),{tagName:'BUTTON',
+      closest:q=>q===query?target:null});
+    listeners.get('click')({target});
+  }
+  if(pointerKey) {
+    const query=context.window.__ISTAccountControlQueries[pointerKey];
+    const target=Object.assign(new Element(),{tagName:'INPUT',value:'private input contents',
+      closest:q=>q===query?target:null});
+    listeners.get('pointerdown')({target,clientX:42,clientY:75});
   }
   return context.window.ISTAccountTest.snapshot();
 }
@@ -167,3 +180,40 @@ for (const [language,name] of [['en','New playlist name'],['he','שם רשימה
     assert.ok(input.includes(`placeholder="${name}"`));
   });
 }
+
+test('a captured Save click remains provable after a later unrelated click',()=>{
+  const before=snapshotFor({observer:'regression'});
+  assert.equal(before.clicks.save,undefined,'A rendered picker or button cannot invent a click');
+  const observed=snapshotFor({observer:'regression',clickKeys:['save','like']});
+  assert.equal(observed.lastClickKey,'like');
+  assert.equal(observed.clicks.save.key,'save');
+  assert.equal(observed.clicks.save.sequence,1);
+  assert.equal(observed.clicks.like.sequence,2);
+  assert.ok(observed.clicks.save.sequence>before.lastClickSequence,
+    'Late delivery must be checked against the original call baseline');
+  const onlyOther=snapshotFor({observer:'regression',clickKeys:['like']});
+  assert.equal(onlyOther.clicks.save,undefined,'A different real click must not confirm Save');
+});
+test('retained comment clicks still identify the exact server comment',()=>{
+  const observed=snapshotFor({observer:'regression',
+    commentClick:{kind:'commentSave',id:'another-comment'},clickKeys:['like']});
+  assert.equal(observed.lastClickKey,'like');
+  assert.equal(observed.clicks.commentSave.targetId,'another-comment');
+  assert.notEqual(observed.clicks.commentSave.targetId,'intended-comment');
+});
+test('hit-test evidence distinguishes a covered control from a missing DOM control',()=>{
+  const observed=snapshotFor({observer:'regression',covered:true});
+  assert.ok(observed.controlRects.account);
+  assert.equal(observed.controls.account,undefined);
+  assert.equal(observed.controlHitTests.account.targetHit,false);
+  assert.equal(observed.controlHitTests.account.inSaveDialog,true);
+  assert.equal(observed.controlHitTests.account.tag,'SECTION');
+});
+test('native pointer evidence records delivery without recording field contents',()=>{
+  const observed=snapshotFor({observer:'regression',pointerKey:'password'});
+  assert.equal(observed.lastPointer.key,'password');
+  assert.equal(observed.lastPointer.x,42);
+  assert.equal(observed.lastPointer.y,75);
+  assert.equal(observed.clicks.password,undefined,'Pointer delivery is not a confirmed click');
+  assert.ok(!JSON.stringify(observed).includes('private input contents'));
+});

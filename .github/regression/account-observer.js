@@ -22,6 +22,17 @@ window.__ISTAccountControlQueries = {
 if (!window.__ISTAccountClickObserverInstalled) {
   window.__ISTAccountClickObserverInstalled = true;
   window.__ISTAccountLastClick = { sequence:0, key:'', at:0 };
+  window.__ISTAccountClicks = {};
+  // Retain only allowlisted control identities and touch geometry. A delayed
+  // click must remain observable after a later click or a modal covers its
+  // original button; never retain labels, field contents or arbitrary IDs.
+  const controlKey = target => Object.entries(window.__ISTAccountControlQueries)
+    .find(([, query]) => target?.closest?.(query))?.[0] || '';
+  document.addEventListener('pointerdown', event => {
+    window.__ISTAccountLastPointer = {at:Date.now(),x:Number(event.clientX)||0,
+      y:Number(event.clientY)||0,key:controlKey(event.target),
+      tag:String(event.target?.tagName || '')};
+  }, true);
   document.addEventListener('click', event => {
     const target = event.target instanceof Element ? event.target : null;
     const match = Object.entries(window.__ISTAccountControlQueries).find(([, query]) => target?.closest?.(query));
@@ -34,6 +45,7 @@ if (!window.__ISTAccountClickObserverInstalled) {
         : commentAttribute ? String(target?.closest?.(match[1])?.dataset[commentAttribute] || '') : '',
       at:Date.now()
     };
+    window.__ISTAccountClicks[match[0]] = {...window.__ISTAccountLastClick};
   }, true);
   // The click listener can observe a Login tap even if HTML constraint
   // validation prevents the form's submit event. Count submissions and
@@ -136,7 +148,7 @@ window.ISTAccountTest = { snapshot() {
     history: '[data-library-section="history"]', likes: '[data-library-section="likes"]',
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
-  const controls = {}, controlRects = {}, controlScrollers = {};
+  const controls = {}, controlRects = {}, controlScrollers = {}, controlHitTests = {};
   let watchFixture = null;
   let qaMarker = window.__ISTAccountQaCommentMarker;
   if (!qaMarker) {
@@ -190,6 +202,11 @@ window.ISTAccountTest = { snapshot() {
     if (element) {
       const r=element.getBoundingClientRect();
       controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height};
+      const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      controlHitTests[key]={tag:String(hit?.tagName || ''),
+        key:Object.entries(queries).find(([,query])=>hit?.closest?.(query))?.[0] || '',
+        inSaveDialog:Boolean(hit?.closest?.('.playlist-picker-backdrop')),
+        targetHit:Boolean(hit && (hit===element || element.contains(hit))),disabled:Boolean(element.disabled)};
       const scroller=element.closest('.library-tabs-scroll');
       if(scroller && scroller.scrollWidth>scroller.clientWidth) {
         const box=scroller.getBoundingClientRect();
@@ -209,7 +226,10 @@ window.ISTAccountTest = { snapshot() {
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
   const native = iosNativeActive() ? iosUnified.state : null;
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,watchFixture,
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,controlHitTests,watchFixture,
+    clicks:Object.fromEntries(Object.entries(window.__ISTAccountClicks||{}).map(([key,value])=>[key,{...value}])),
+    lastPointer:{...(window.__ISTAccountLastPointer||{})},
+    watchScrollTop:Number(document.querySelector('.watch-scroll')?.scrollTop || 0),
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     lastClickTargetId:String(window.__ISTAccountLastClick?.targetId||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,

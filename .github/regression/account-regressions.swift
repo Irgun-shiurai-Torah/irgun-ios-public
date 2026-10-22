@@ -90,10 +90,55 @@
                 let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
                 return rects[key] != nil
             }
+            let requested = account()
+            let beforeClick = number(requested,"lastClickSequence")
+            func clickDelivered(_ observed: [String:Any]) -> Bool {
+                let click = (observed["clicks"] as? [String:[String:Any]])?[key] ?? [:]
+                guard number(click,"sequence") > beforeClick else { return false }
+                if key == "open" {
+                    return watchFixtureClickMatches(click,requested:requested,clickIdKey:"targetId")
+                }
+                if key == "commentSave" || key == "commentEdit" {
+                    let id = requested["qaCommentId"] as? String ?? ""
+                    return !id.isEmpty && click["targetId"] as? String == id
+                }
+                return true
+            }
+            func touchEvidence(_ state: [String:Any], _ stage: String) {
+                let observed = state["account"] as? [String:Any] ?? [:]
+                let native = state["nativePlayer"] as? [String:Any] ?? [:]
+                // Compact logs omit XCTest JSON attachments. Keep a strict
+                // allowlist here: no account identity, names or form values.
+                let safe: [String:Any] = ["stage":stage,"control":key,
+                    "observedAt":number(observed,"observedAt"),
+                    "screen":observed["screen"] ?? "",
+                    "rect":(observed["controlRects"] as? [String:Any])?[key] ?? [String:Any](),
+                    "hitTest":(observed["controlHitTests"] as? [String:Any])?[key] ?? [String:Any](),
+                    "click":(observed["clicks"] as? [String:Any])?[key] ?? [String:Any](),
+                    "lastClickKey":observed["lastClickKey"] ?? "",
+                    "lastClickSequence":number(observed,"lastClickSequence"),
+                    "lastPointer":observed["lastPointer"] ?? [String:Any](),
+                    "playlistPickerOpen":observed["playlistPickerOpen"] ?? false,
+                    "watchScrollTop":number(observed,"watchScrollTop"),
+                    "nativeSurfaceInteractive":native["surfaceInteractive"] ?? false,
+                    "nativeSurfaceX":number(native,"surfaceX"),
+                    "nativeSurfaceY":number(native,"surfaceY"),
+                    "nativeSurfaceWidth":number(native,"surfaceWidth"),
+                    "nativeSurfaceHeight":number(native,"surfaceHeight")]
+                report["touchEvidence"] = safe; persistReport()
+                if let data = try? JSONSerialization.data(withJSONObject:safe,options:[.sortedKeys]),
+                   let json = String(data:data,encoding:.utf8) { print("Account touch evidence: " + json) }
+            }
             // Comments may sit below a long discussion; keep scrolling the safe WebView area below the native player until the exact QA comment control is reachable.
-            for _ in 0..<24 {
+            for attempt in 0..<24 {
                 let fullState = snapshot()
                 let s = fullState["account"] as? [String: Any] ?? [:]
+                // Keep the original baseline across retries. The first native
+                // touch can arrive after its short polling window, opening a
+                // sheet that then hides the original button. Never lose that
+                // real captured click or toggle the action a second time.
+                if clickDelivered(s) { return }
+                if key == "save" { touchEvidence(fullState,"before attempt \(attempt)") }
                 let native = fullState["nativePlayer"] as? [String: Any] ?? [:]
                 let controls = s["controls"] as? [String: [String: Any]] ?? [:]
                 report["collectionRequests"] = s["requests"] ?? []
@@ -102,7 +147,6 @@
                 report["keyboardVisible"] = app.keyboards.firstMatch.exists
                 report["authBusy"] = s["authBusy"] as? Bool ?? false
                 persistReport()
-                let beforeClick = number(s,"lastClickSequence")
                 let fixtureTapped = key == "open" && tapWatchFixture(s)
                 if fixtureTapped || (key != "open" && controls[key] != nil) {
                     let point = controls[key] ?? [:]
@@ -134,12 +178,7 @@
                     let clickDeadline = Date().addingTimeInterval(3)
                     while Date() < clickDeadline {
                         let observed = account()
-                        let correctComment = key != "commentSave" && key != "commentEdit" ||
-                            (!(s["qaCommentId"] as? String ?? "").isEmpty &&
-                             observed["lastClickTargetId"] as? String == s["qaCommentId"] as? String)
-                        if number(observed,"lastClickSequence") > beforeClick,
-                           observed["lastClickKey"] as? String == key,
-                           (key != "open" || watchFixtureClickMatches(observed,requested:s)), correctComment { return }
+                        if clickDelivered(observed) { return }
                         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                     }
                     continue
@@ -182,6 +221,7 @@
                     regressionScroll(fullState, towardUp: true)
                 }
             }
+            touchEvidence(snapshot(),"failed after native touch/scroll attempts")
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }
         report["nativeLoginStartedAt"] = timestamp(); persistReport()
