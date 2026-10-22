@@ -49,6 +49,10 @@ jobs:
           set -euo pipefail
           mkdir -p duo-results
           xcodebuild -version | tee duo-results/xcode-version.txt
+          # The hosted Xcode 27 runner ships iOS 27.0; iPhone Duo only runs on iOS 27.1.
+          if ! xcrun simctl list runtimes | grep -q 'iOS 27.1 ('; then
+            xcodebuild -downloadPlatform iOS
+          fi
           xcrun simctl list devices available --json > duo-results/devices.json
           xcrun simctl list runtimes > duo-results/runtimes.txt
           python3 - <<'PY'
@@ -64,7 +68,8 @@ jobs:
               runtimes=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json'],text=True))['runtimes']
               ios=[t for t in runtimes if t.get('isAvailable') and 'iOS' in t['name']]
               if not ios:raise SystemExit('No installed iOS runtime is available.')
-              latest=max(ios,key=lambda t:t.get('version',''))
+              latest=next((t for t in ios if t.get('version','').startswith('27.1')),None)
+              if latest is None:raise SystemExit('iOS 27.1 simulator runtime required for iPhone Duo.')
               identifier=subprocess.check_output(['xcrun','simctl','create','Irgun iPhone Duo',duo['identifier'],latest['identifier']],text=True).strip()
               devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json'],text=True))['devices']
               matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('udid')==identifier]
