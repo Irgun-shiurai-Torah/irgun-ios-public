@@ -353,6 +353,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 schedulePlaybackRecoveryIfNeeded()
             }
         } else {
+            let restoringVideo = mode == "video" && videoLayer.player == nil
             if videoLayer.player == nil {
                 videoLayer.player = player
                 // Keep the existing decoded-frame output with the retained
@@ -361,11 +362,41 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             }
             placeSurface(lastSurfaceRect)
             guard playingWanted else { return }
+            if restoringVideo {
+                // A long iPad screen lock can suspend the video rendition
+                // while audio and timeControlStatus continue. Reconnecting the
+                // layer alone is insufficient: use the same current-position
+                // recovery as Audio -> Video, retaining the item and observer.
+                resumeVisibleVideoAtCurrentPosition()
+            }
             if player.timeControlStatus != .playing {
                 do { try activateAudioSession() }
                 catch { NSLog("Irgun foreground playback session unavailable: \\(error)") }
                 player.playImmediately(atRate: playbackRate)
                 schedulePlaybackRecoveryIfNeeded()
+            }
+        }
+    }
+
+    private func resumeVisibleVideoAtCurrentPosition() {
+        guard active, mode == "video", playingWanted,
+              let item = player.currentItem else { return }
+        let expectedGeneration = generation
+        let expectedEpoch = itemEpoch
+        let at = CMTime(seconds: position(), preferredTimescale: 600)
+        player.seek(to: at,
+                    toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] finished in
+            DispatchQueue.main.async {
+                guard finished, let self = self, self.active, self.mode == "video",
+                      self.generation == expectedGeneration,
+                      self.itemEpoch == expectedEpoch,
+                      self.player.currentItem === item else { return }
+                // A user Pause or item/mode change during the seek wins.
+                if self.playingWanted {
+                    self.player.playImmediately(atRate: self.playbackRate)
+                }
+                self.publishState()
             }
         }
     }
@@ -733,6 +764,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         data["controlsMenuOpen"] = controlsMenuOpen
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
+        if let output = simulatorFrameOutput {
+            let mappedTime = output.itemTime(forHostTime: CACurrentMediaTime()).seconds
+            data["frameOutputItemTime"] = mappedTime.isFinite ? mappedTime : -1
+            data["frameOutputAttached"] = player.currentItem?.outputs.contains(where: { $0 === output }) ?? false
+        } else {
+            data["frameOutputItemTime"] = -1
+            data["frameOutputAttached"] = false
+        }
+        data["decodedFrameAge"] = max(0, CACurrentMediaTime() - simulatorLastDecodedFrameAt)
         data["controlsHideRemaining"] = max(0, controlsHideDeadline - ProcessInfo.processInfo.systemUptime)
         data["doubleTapCount"] = doubleTapSeekCount
         data["doubleTapOffset"] = doubleTapSeekOffset
@@ -1009,28 +1049,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                     self.lastPlaybackProgressAt = Date()
                     self.playbackRecoveryAttempts = 0
                     self.player.playImmediately(atRate: self.playbackRate)
-                    if returningFromAudio, let item = self.player.currentItem {
-                        // A seek to the CURRENT clock (not to the beginning)
-                        // asks AVFoundation to resume the video rendition that
-                        // may have been suspended while only audio was visible.
-                        // It never replaces the item or resets the shiur.
-                        let expectedGeneration = self.generation
-                        let expectedEpoch = self.itemEpoch
-                        let at = CMTime(seconds: self.position(), preferredTimescale: 600)
-                        self.player.seek(to: at,
-                                         toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
-                                         toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] _ in
-                            DispatchQueue.main.async {
-                                guard let self = self, self.active, self.mode == "video",
-                                      self.generation == expectedGeneration,
-                                      self.itemEpoch == expectedEpoch,
-                                      self.player.currentItem === item else { return }
-                                if self.playingWanted {
-                                    self.player.playImmediately(atRate: self.playbackRate)
-                                }
-                                self.publishState()
-                            }
-                        }
+                    if returningFromAudio {
+                        self.resumeVisibleVideoAtCurrentPosition()
                     }
                 }
             }

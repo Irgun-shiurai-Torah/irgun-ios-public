@@ -165,6 +165,8 @@
       namePresent:readName.length>0,accountName:readName,
       accountEmailMatchesSecret:undefined, // Test runner compares authenticated email privately.
       profileName:document.getElementById('profileName')?.value||'',
+      focusedInputKey:Object.entries(keys).find(([,selector])=>
+        document.activeElement?.matches?.(selector))?.[0]||'',
       profileNameShown:document.querySelector('.profile-line span')?.textContent?.trim()||'',
       playlistName:document.getElementById('libraryPlaylistCreateName')?.value||'',
       loginForm:Boolean(document.getElementById('authForm')),

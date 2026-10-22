@@ -145,7 +145,28 @@
                 regressionScroll(fullState,towardUp:directionUp)
             }
         }
-        XCTFail("Real DOM click did not register or native control was unavailable: \(key)")
+        let finalState = snapshot()
+        let finalRegression = finalState["regression"] as? [String:Any] ?? [:]
+        let finalNative = finalState["nativePlayer"] as? [String:Any] ?? [:]
+        // Log only navigation/click geometry, never form values or credentials.
+        // The full XCTest attachments are not present in the compact CI logs.
+        let diagnostics: [String:Any] = [
+            "screen": finalRegression["screen"] ?? "",
+            "renderedScreen": finalState["renderedScreen"] ?? "",
+            "lastClickKey": finalRegression["lastClickKey"] ?? "",
+            "lastClickSequence": number(finalRegression,"lastClickSequence"),
+            "accountClickKey": finalRegression["accountClickKey"] ?? "",
+            "accountClickSequence": number(finalRegression,"accountClickSequence"),
+            "targetRect": (finalRegression["rects"] as? [String:Any])?[key] ?? [String:Any](),
+            "libraryTabsRect": finalRegression["libraryTabsRect"] ?? [String:Any](),
+            "libraryTabsScrollLeft": number(finalRegression,"libraryTabsScrollLeft"),
+            "nativeActive": finalNative["active"] ?? false,
+            "nativeMode": finalNative["mode"] ?? "",
+            "nativeSurfaceInteractive": finalNative["surfaceInteractive"] ?? false,
+            "nativeSurfaceY": number(finalNative,"surfaceY"),
+            "nativeSurfaceHeight": number(finalNative,"surfaceHeight")
+        ]
+        XCTFail("Real DOM click did not register or native control was unavailable: \(key). Navigation evidence: \(diagnostics)")
         throw Failure.timedOut(key)
     }
 
@@ -176,20 +197,20 @@
 
     private func regressionEnter(_ key: String, _ text: String) throws {
         try regressionTap(key)
-        let field=key=="loginPassword" ? app.secureTextFields.firstMatch : app.textFields.firstMatch
+        let field=key=="loginPassword" ? app.webViews.secureTextFields.firstMatch : app.webViews.textFields.firstMatch
         guard field.waitForExistence(timeout:8) else {
             XCTFail("Native keyboard field \(key) missing")
             throw Failure.timedOut(key)
         }
-        // A verified DOM click doesn't prove XCTest has keyboard focus: after
-        // sign-in the profile form can display Name but leave UIKit unfocused.
+        // Require focus on the exact DOM input before native typing. iPad can
+        // retain keyboard focus without exposing an on-screen Keyboard element
+        // (hardware/floating keyboard); visibility is not proof of input focus.
         field.tap()
-        if !app.keyboards.firstMatch.waitForExistence(timeout:5) {
+        if regression()["focusedInputKey"] as? String != key {
             field.coordinate(withNormalizedOffset:CGVector(dx:0.8,dy:0.5)).tap()
         }
-        guard app.keyboards.firstMatch.waitForExistence(timeout:10) else {
-            XCTFail("Native keyboard did not open for \(key); refuse to synthesize blind typing")
-            throw Failure.timedOut("keyboard for \(key)")
+        try regressionWait("Exact requested input has focus before native typing",timeout:15) {
+            $0["focusedInputKey"] as? String == key
         }
         let old=(field.value as? String ?? "")
         if old != text {
