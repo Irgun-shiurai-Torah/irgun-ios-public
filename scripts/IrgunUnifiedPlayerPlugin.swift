@@ -207,6 +207,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var pipResumeWanted = false
     private var pipPausedByUser = false
     private var overlayOccluded = false
+    private var nativeStateSequence = 0
     #if targetEnvironment(simulator)
     private var simulatorControlTaps: [String: Int] = [:]
     private var simulatorPictureSwipes = 0
@@ -723,10 +724,12 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     #endif
 
     private func snapshot() -> [String: Any] {
+        nativeStateSequence += 1
         #if targetEnvironment(simulator)
         inspectDecodedVideoFrame()
         #endif
         var data: [String: Any] = [
+            "stateSequence": nativeStateSequence,
             "id": itemID,
             "active": active,
             "mode": mode,

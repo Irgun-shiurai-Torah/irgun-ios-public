@@ -153,3 +153,17 @@ for (const kind of ['commentSave','commentEdit','commentDelete']) {
     assert.notEqual(wrong.lastClickTargetId,observed.lastClickTargetId);
   });
 }
+
+for (const [language,name] of [['en','New playlist name'],['he','שם רשימה חדשה']]) {
+  test(`playlist creation field has an explicit native accessible name in ${language}`,()=>{
+    const source=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+    const start=source.indexOf('function playlistLibraryHtml()');
+    const end=source.indexOf('\nfunction downloadsLibraryHtml()',start);
+    const render=new Function('state','currentLanguage','esc',source.slice(start,end)+'\nreturn playlistLibraryHtml();');
+    const html=render({playlists:[],activePlaylistId:''},()=>language,String);
+    const input=html.match(/<input\b[^>]*id="libraryPlaylistCreateName"[^>]*>/)?.[0];
+    assert.ok(input,'The real playlist form must contain its name input');
+    assert.ok(input.includes(`aria-label="${name}"`));
+    assert.ok(input.includes(`placeholder="${name}"`));
+  });
+}

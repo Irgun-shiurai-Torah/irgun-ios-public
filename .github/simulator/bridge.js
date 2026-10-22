@@ -180,6 +180,11 @@ window.ISTSimulator = {
       for (const video of unique) {
         const sources = await loadIosDirectVideoSources(video);
         if (!sources?.hls && !sources?.mp4) continue;
+        // Historical descriptors can outlive an incomplete/unreachable backup.
+        // Use the same real playlist/segment probe as the normal sample path;
+        // still require the actual decoder to use this owned source afterward.
+        if (!await simulatorHlsSourceReady(sources.hls) &&
+            !await simulatorHlsSourceReady(sources.mp4)) continue;
         const id=String(videoId(video));
         this.reportedSelectedId = id;
         this.reportedVimeoKey = String(video.vimeoId || video.id || '');

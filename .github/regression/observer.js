@@ -190,6 +190,7 @@
       videoSpeedChoice:native ? (Number(native.rate)||0) : (Number(videoSpeed?.value)||0),
       videoRate:native ? (Number(native.rate)||0) : (Number(state.watchVimeo?.video?.playbackRate)||0),
       configuredAudioRate:Number(state.playbackSpeed)||1,
+      storedPlaybackRate:Number(localStorage.getItem(SPEED_KEY))||1,
       audioRate:Number(audio.playbackRate)||0,
       playingAudio:native?.mode==='audio' ? native.playing===true : !audio.paused&&!audio.ended,
       audioSeconds:native?.mode==='audio' ? (Number(native.position)||0) : (Number(audio.currentTime)||0),

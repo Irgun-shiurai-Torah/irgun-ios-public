@@ -727,16 +727,27 @@
                        "Video must play at 1x after the user selects 1x")
         try chooseRealVideoSpeed("1.5x")
         try regressionWait("Native speed selection updates real video playback rate") {
-            abs(self.number($0,"videoRate")-1.5)<0.02
+            abs(self.number($0,"videoRate")-1.5)<0.02 &&
+            abs(self.number($0,"configuredAudioRate")-1.5)<0.02 &&
+            abs(self.number($0,"storedPlaybackRate")-1.5)<0.02
         }
         app.terminate()
         app.launch()
         try regressionWait("Session restored after player speed change",timeout:90) {
             $0["online"] as? Bool == true
         }
+        XCTAssertEqual(number(regression(),"storedPlaybackRate"),1.5,accuracy:0.02,
+                       "The saved speed itself must survive cold relaunch before opening video")
         // Real user navigation after a cold process relaunch, not the
         // test-only debug overlay; verify live decoder and 1.5x rate.
         try regressionOpenThroughActualLibrary()
+        _ = try waitFor("Relaunched native and web observations agree on persisted speed",timeout:20) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            let r=s["regression"] as? [String:Any] ?? [:]
+            return self.number(n,"observedAt") > Date().timeIntervalSince1970*1000-1500 &&
+                abs(self.number(n,"rate")-1.5)<0.02 && abs(self.number(n,"actualRate")-1.5)<0.02 &&
+                abs(self.number(s,"speed")-1.5)<0.02 && abs(self.number(r,"storedPlaybackRate")-1.5)<0.02
+        }
         XCTAssertEqual(number(snapshot(),"speed"),1.5,accuracy:0.02,
                        "User-selected speed should survive app relaunch")
         XCTAssertEqual(number(regression(),"videoSpeedChoice"),1.5,accuracy:0.02)
