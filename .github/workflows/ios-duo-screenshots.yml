@@ -85,6 +85,8 @@ jobs:
           set -euo pipefail
           echo "IOS_MARKETING_VERSION=$(node -p "require('./package.json').version.replace(/-ios$/, '')")" >> "$GITHUB_ENV"
           npm install --no-audit --no-fund
+          # Only this throwaway simulator checkout uses Capacitor 8.5 UIScene support.
+          npm install --no-save --no-package-lock --no-audit --no-fund @capacitor/core@8.5.3 @capacitor/ios@8.5.3 @capacitor/cli@8.5.3
           python3 .github/simulator/prepare.py web
           npm run build
           npx cap add ios
@@ -94,7 +96,9 @@ jobs:
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
           ruby scripts/patch_xcode_project.rb
           python3 .github/simulator/prepare.py native
+          python3 .github/duo/migrate_scene.py
           ruby .github/simulator/configure.rb
+          ruby .github/duo/add_scene.rb
           bash scripts/assert_no_direct_swiftuicore.sh
           if [ -f ios/App/Podfile ]; then (cd ios/App && pod install --repo-update); fi
       - name: Boot and set Duo fold position
@@ -150,21 +154,10 @@ jobs:
           mkdir -p simulator-results
           cp -R duo-results/attachments simulator-results/
           python3 .github/simulator/package_screenshots.py
+          python3 .github/duo/validate_screenshots.py
+          # Rebuild the archives if the simulator had a <=2px capture boundary offset.
+          python3 .github/simulator/package_screenshots.py
           mkdir -p duo-results/downloads
-          python3 - <<'PY'
-          from pathlib import Path
-          import os,subprocess
-          files=sorted(Path('simulator-results/app-store').glob('*.png'))
-          if len(files)!=26:
-              raise SystemExit('Expected 26 screenshots, found '+str(len(files)))
-          expected={'folded':(1398,2034),'unfolded':(2007,2853)}
-          expected_pixels=set(expected[os.environ['DUO_POSE']])
-          for file in files:
-              text=subprocess.check_output(['sips','-g','pixelWidth','-g','pixelHeight',str(file)],text=True)
-              vals=[int(x.split(': ')[1]) for x in text.splitlines() if 'pixelWidth:' in x or 'pixelHeight:' in x]
-              if len(vals)!=2 or set(vals)!=expected_pixels:
-                  raise SystemExit(f'{file}: {vals}; expected {expected[os.environ["DUO_POSE"]]} for {os.environ["DUO_POSE"]} panel')
-          PY
           cp simulator-results/screenshot-downloads/*.zip duo-results/downloads/
       - name: Upload PNGs and diagnostics
         if: always()
