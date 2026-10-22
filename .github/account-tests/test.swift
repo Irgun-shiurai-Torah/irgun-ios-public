@@ -18,6 +18,7 @@
         defer {
             report["finishedAt"] = timestamp()
             report["collectionRequests"] = (snapshot()["account"] as? [String: Any])?["requests"] ?? []
+            report["startup"] = (snapshot()["account"] as? [String:Any])?["startup"] ?? [String:Any]()
             if report["status"] as? String != "passed" { report["status"] = "failed" }
             // A native process restart clears typed form contents before evidence.
             app.terminate(); app.launch()
@@ -37,7 +38,8 @@
         }
         func successfulHistoryWrites(_ s: [String: Any]) -> Int {
             let requests = s["requests"] as? [[String: Any]] ?? []
-            return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
+            return requests.filter { $0["path"] as? String == "/history" &&
+                $0["method"] as? String == "POST" && $0["ok"] as? Bool == true }.count
         }
         func awaitSuccessfulFollowRequest(after previous: Int) throws {
             try awaitAccount("Follow request returned successfully") { s in
@@ -48,8 +50,20 @@
                     followRequests.last?["ok"] as? Bool == true
             }
         }
-        func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
+        func awaitAccount(_ message: String, timeout: TimeInterval = 60,
+                          _ condition: @escaping ([String: Any]) -> Bool) throws {
+            try waitFor(message, timeout: timeout) { condition($0["account"] as? [String: Any] ?? [:]) }
+        }
+        func awaitColdAccount(_ message: String, _ condition: @escaping ([String:Any]) -> Bool) throws {
+            // A process relaunch repeats the real cold catalog/session bootstrap.
+            // Match setUpWithError's bounded 180s startup allowance; 60s action
+            // waits remain unchanged. Require fresh successful account GETs as
+            // well as the original session/collection assertions, never a timer
+            // or cached logged-in flag alone.
+            try awaitAccount(message,timeout:180) { observed in
+                let startup=observed["startup"] as? [String:Any] ?? [:]
+                return startup["ready"] as? Bool == true && condition(observed)
+            }
         }
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
@@ -59,27 +73,33 @@
                 let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
                 return rects[key] != nil
             }
-            for _ in 0..<7 {
+            for _ in 0..<24 {
                 let s=account(), controls=s["controls"] as? [String: [String: Any]] ?? [:]
                 report["collectionRequests"] = s["requests"] ?? []
                 report["lastScreen"] = s["screen"] as? String ?? ""
                 report["lastControlKeys"] = controls.keys.sorted()
                 report["keyboardVisible"] = app.keyboards.firstMatch.exists
                 report["authBusy"] = s["authBusy"] as? Bool ?? false
+                report["lastTargetRect"] = (s["controlRects"] as? [String:[String:Any]])?[key] ?? [String:Any]()
                 persistReport()
-                if let point=controls[key] {
-                    let beforeClick = number(s,"lastClickSequence")
+                let beforeClick = number(s,"lastClickSequence")
+                let fixtureTapped = key == "open" && tapWatchFixture(s)
+                if fixtureTapped || (key != "open" && controls[key] != nil) {
+                    let point = controls[key] ?? [:]
                     let web=app.webViews.firstMatch, box=web.frame
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
-                    web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    if !fixtureTapped {
+                        web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    }
                     // A render can move a control between observation and touch.
                     // Continue only after the real native tap produced its click.
                     let clickDeadline = Date().addingTimeInterval(3)
                     while Date() < clickDeadline {
                         let observed = account()
                         if number(observed,"lastClickSequence") > beforeClick,
-                           observed["lastClickKey"] as? String == key { return }
+                           observed["lastClickKey"] as? String == key,
+                           key != "open" || watchFixtureClickMatches(observed,requested:s) { return }
                         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                     }
                     continue
@@ -98,9 +118,23 @@
                     let endX=number(rect,"x")>right ? left:right
                     origin.withOffset(CGVector(dx:startX,dy:y)).press(forDuration:0.05,
                         thenDragTo:origin.withOffset(CGVector(dx:endX,dy:y)))
-                } else if let rect = rects[key], number(rect,"y") < 0 {
-                    app.webViews.firstMatch.swipeDown()
-                } else { app.webViews.firstMatch.swipeUp() }
+                } else {
+                    // Full-screen flicks overshot the fixed lecture on iPhone
+                    // and alternated above/below it until the attempt limit.
+                    // Move a bounded distance, hold to stop inertia, then read
+                    // the real target rectangle again before deciding direction.
+                    let height=number(s,"height"), width=number(s,"width")
+                    let targetY=rects[key].map { number($0,"y") }
+                    let towardUp=targetY.map { $0 >= height*0.35 } ?? true
+                    let distance=min(260,max(100,abs((targetY ?? height)-height*0.5)))
+                    let startY=towardUp ? height*0.78 : height*0.32
+                    let endY=max(100,min(height-100,startY+(towardUp ? -distance:distance)))
+                    let origin=app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                    origin.withOffset(CGVector(dx:width*0.5,dy:startY)).press(
+                        forDuration:0.1,
+                        thenDragTo:origin.withOffset(CGVector(dx:width*0.5,dy:endY)),
+                        withVelocity:.slow,thenHoldForDuration:0.2)
+                }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }
@@ -222,7 +256,7 @@
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
-        try awaitAccount("Signed-in library reloads after playback") {
+        try awaitColdAccount("Signed-in library reloads after playback") {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true
         }
         try touch("library")
@@ -239,7 +273,7 @@
         checked("QA playlist created")
         let changed=account()
         app.terminate(); app.launch()
-        try awaitAccount("Session and playlist survive process restart") { $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true && hasPlaylist($0) }
+        try awaitColdAccount("Session and playlist survive process restart") { $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true && hasPlaylist($0) }
         XCTAssertEqual(values(account(),"likes").contains(id),values(changed,"likes").contains(id))
         XCTAssertEqual(values(account(),"later").contains(id),values(changed,"later").contains(id))
         XCTAssertEqual(values(account(),"follows").sorted(),values(changed,"follows").sorted())
@@ -274,7 +308,7 @@
         // Relaunch rather than depending on the same top-edge close control,
         // then require the restored server state and session to load normally.
         app.terminate(); app.launch()
-        try awaitAccount("Restored account reloads before logout") {
+        try awaitColdAccount("Restored account reloads before logout") {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
             values($0,"later").contains(id) == values(before,"later").contains(id) &&

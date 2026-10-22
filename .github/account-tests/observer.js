@@ -24,6 +24,7 @@ if (!window.__ISTAccountClickObserverInstalled) {
     window.__ISTAccountLastClick = {
       sequence:Number(window.__ISTAccountLastClick?.sequence || 0) + 1,
       key:match[0],
+      targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '') : '',
       at:Date.now()
     };
   }, true);
@@ -48,14 +49,16 @@ if (!window.__ISTAccountRequestObserverInstalled) {
   window.__ISTAccountRequestObserverInstalled = true;
   window.__ISTAccountRequests = [];
   const originalApiJson = apiJson;
-  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
+  const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history',
+    '/me','/notification-settings','/custom-playlists','/admin/status']);
   apiJson = async function(path, ...args) {
-    // Only log the fact that a history write completed. Never capture the
-    // request body, video identifier, account identity or authentication.
-    if (!allowed.has(path) || (path === '/history' && String(args[0]?.method || 'GET').toUpperCase() !== 'POST')) {
+    // Retain only scalar outcomes, including fresh reads during cold startup.
+    // Never capture bodies, media/account identifiers or authentication.
+    if (!allowed.has(path)) {
       return originalApiJson(path, ...args);
     }
-    const entry = {sequence:window.__ISTAccountRequests.length+1,path,startedAt:Date.now(),finishedAt:0,ok:false};
+    const entry = {sequence:window.__ISTAccountRequests.length+1,path,
+      method:String(args[0]?.method || 'GET').toUpperCase(),startedAt:Date.now(),finishedAt:0,ok:false};
     window.__ISTAccountRequests.push(entry);
     try {
       const result = await originalApiJson(path, ...args);
@@ -68,6 +71,19 @@ if (!window.__ISTAccountRequestObserverInstalled) {
       throw error;
     } finally { entry.finishedAt = Date.now(); }
   };
+}
+
+function accountStartupObservation() {
+  const requests=window.__ISTAccountRequests || [];
+  const required=['/me','/my-like-ids','/watch-later','/follows','/history','/notification-settings','/custom-playlists'];
+  const successfulReads=new Set(requests.filter(row=>row.method==='GET' && row.ok && row.finishedAt>0).map(row=>row.path));
+  return {libraryReady:Boolean(state.libraryReady),loading:Boolean(state.loading),
+    adminChecked:Boolean(state.adminChecked),scheduleLoading:Boolean(state.scheduleDataLoading),
+    liveStatusLoaded:Boolean(state.liveStatusLoaded),
+    pendingPaths:requests.filter(row=>!row.finishedAt).map(row=>row.path),
+    failedPaths:requests.filter(row=>row.finishedAt>0 && !row.ok).map(row=>row.path),
+    missingReadPaths:required.filter(path=>!successfulReads.has(path)),
+    ready:Boolean(state.libraryReady && !state.loading && state.user && required.every(path=>successfulReads.has(path)))};
 }
 
 window.ISTAccountTest = { snapshot() {
@@ -87,19 +103,20 @@ window.ISTAccountTest = { snapshot() {
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
+  let watchFixture = null;
   for (const [key, query] of Object.entries(queries)) {
     const rendered = [...document.querySelectorAll(query)];
-    // The newest lecture may be Vimeo-only or have no speaker metadata.
-    // Only select a real lecture with an actual speaker Follow button, so
-    // account tests exercise the feature instead of assuming every shiur
-    // has a speaker chip. This instrumentation does NOT alter live app UI.
-    const candidates = key === 'open'
-      ? rendered.filter(element => {
-          const lecture = state.videoById?.get(String(element.dataset.watch || ''));
-          return (lecture?._speakerIds || []).some(id => Boolean(String(speakerLabel(id) || '').trim()));
-        })
-      : rendered;
+    // The test must reopen the SAME server-backed lecture after relaunch.
+    // A first-speaker match changes as live uploads arrive, corrupting
+    // cleanup of Like/Follow and the post-restart assertions.
+    const fixed = key === 'open' && state.screen === 'shiurim'
+      ? window.__ISTQAChooseWatchButton?.(rendered) : null;
+    const candidates = key === 'open' && state.screen === 'shiurim'
+      ? (fixed ? [fixed] : []) : rendered;
     const element = candidates[0];
+    if (key === 'open' && element) {
+      watchFixture = {id:String(element.dataset.watch || ''), title:String(element.textContent || '').trim()};
+    }
     if (element) {
       const r=element.getBoundingClientRect();
       controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height};
@@ -121,8 +138,10 @@ window.ISTAccountTest = { snapshot() {
     });
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,watchFixture,
+    startup:accountStartupObservation(),
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
+    lastClickTargetId:String(window.__ISTAccountLastClick?.targetId||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.rawAudioId||x.videoId||x.id||x.vimeoId||'').replace(/^audio:/,'')),

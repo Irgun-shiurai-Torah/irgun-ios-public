@@ -23,3 +23,26 @@ export async function simulatorHlsSourceReady(url, request = fetch, depth = 0) {
   } catch (_) { return false; }
   finally { clearTimeout(timer); }
 }
+
+// The account regression suite must keep the same real backed-up lecture
+// across relaunches. Missing or unusable fixtures are a test failure, not a
+// reason to silently pick the newest (possibly Vimeo-only) catalog entry.
+export const IOS_ACCOUNT_SAMPLE_IDS = Object.freeze(['1235946832', '1235511026']);
+
+export function selectIosAccountFixture(elements, videosById, savedId = '') {
+  const eligible = (elements || []).filter(element => {
+    const lecture = videosById?.get(String(element.dataset.watch || ''));
+    return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
+  });
+  for (const id of [savedId, ...IOS_ACCOUNT_SAMPLE_IDS]) {
+    if (!IOS_ACCOUNT_SAMPLE_IDS.includes(String(id))) continue;
+    const found = eligible.find(element => String(element.dataset.watch || '') === id);
+    if (found) {
+      // Native XCTest can identify the existing title button by its real label.
+      // Cover buttons all share 'Watch' and stale coordinates can hit a neighbour.
+      return eligible.find(element => String(element.dataset.watch || '') === id &&
+        element.classList?.contains('media-title')) || found;
+    }
+  }
+  return null;
+}

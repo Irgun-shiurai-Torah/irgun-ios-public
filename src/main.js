@@ -967,7 +967,7 @@ function playlistLibraryHtml() {
   const he = currentLanguage() === 'he';
   const active = state.playlists.find(row => row.id === state.activePlaylistId);
   if (active) return `<section class="local-library-panel"><div class="section-head"><div><button class="back-inline" data-playlist-back="1">${he?'→ כל הרשימות':'← All playlists'}</button><h2>${esc(active.name)}</h2><p>${active.items.length} ${he?'פריטים':'items'} · ${he?'מסונכרן לחשבון':'synced to your account'}</p></div>${active.items.length ? `<button class="section-link" data-playlist-play="${esc(active.id)}" data-playlist-index="0">${svgIcon('play')} ${he?'נגן הכל':'Play All'}</button>` : ''}</div><div class="playlist-detail-list">${active.items.length ? active.items.map((ref,index)=>playlistItemHtml(ref,active.id,index)).join('') : `<div class="empty">${he?'הרשימה ריקה. הוסיפו שיעורים מכרטיסי השיעור או מהנגן.':'This playlist is empty. Add shiurim from a card or the player.'}</div>`}</div><button class="small-btn danger playlist-delete" data-playlist-delete="${esc(active.id)}">${he?'מחק רשימה':'Delete Playlist'}</button></section>`;
-  return `<section class="local-library-panel"><div class="section-head"><div><h2>${he?'רשימות השמעה':'Playlists'}</h2><p>${he?'צרו רשימות משלכם לנושאים, השבוע או כל סדר האזנה.':'Create your own lists for topics, this week, or any listening order.'}</p></div></div><form id="libraryPlaylistCreateForm" class="playlist-create-form"><input id="libraryPlaylistCreateName" maxlength="80" placeholder="${he?'שם רשימה חדשה':'New playlist name'}" required><button type="submit">${he?'צור רשימה':'Create Playlist'}</button></form><div class="playlist-card-grid">${state.playlists.length ? state.playlists.map(pl=>`<button class="playlist-card" data-playlist-open="${esc(pl.id)}"><span>${svgIcon('playlist')}</span><strong>${esc(pl.name)}</strong><small>${pl.items.length} ${he?'פריטים':'items'}</small></button>`).join('') : `<div class="empty">${he?'עדיין אין רשימות.':'No playlists yet.'}</div>`}</div><p class="device-only-note">${he?'הרשימות נשמרות בחשבון שלך ומסתנכרנות בין מכשירים.':'These playlists are saved to your account and sync across devices.'}</p></section>`;
+  return `<section class="local-library-panel"><div class="section-head"><div><h2>${he?'רשימות השמעה':'Playlists'}</h2><p>${he?'צרו רשימות משלכם לנושאים, השבוע או כל סדר האזנה.':'Create your own lists for topics, this week, or any listening order.'}</p></div></div><form id="libraryPlaylistCreateForm" class="playlist-create-form"><input id="libraryPlaylistCreateName" maxlength="80" aria-label="${he?'שם רשימה חדשה':'New playlist name'}" placeholder="${he?'שם רשימה חדשה':'New playlist name'}" required><button type="submit">${he?'צור רשימה':'Create Playlist'}</button></form><div class="playlist-card-grid">${state.playlists.length ? state.playlists.map(pl=>`<button class="playlist-card" data-playlist-open="${esc(pl.id)}"><span>${svgIcon('playlist')}</span><strong>${esc(pl.name)}</strong><small>${pl.items.length} ${he?'פריטים':'items'}</small></button>`).join('') : `<div class="empty">${he?'עדיין אין רשימות.':'No playlists yet.'}</div>`}</div><p class="device-only-note">${he?'הרשימות נשמרות בחשבון שלך ומסתנכרנות בין מכשירים.':'These playlists are saved to your account and sync across devices.'}</p></section>`;
 }
 
 function downloadsLibraryHtml() {
@@ -5423,7 +5423,7 @@ function commentsHtml() {
     return `<article class="comment-card">
       <div class="comment-head"><strong>${esc(comment.author || 'Anonymous')}</strong><span>${esc(fmtDate(comment.created))}</span></div>
       ${editing
-        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
+        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" aria-label="Save comment" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
         : `<p>${esc(comment.text || '')}</p>${owner ? `<div class="comment-actions"><button data-edit-comment="${esc(comment.id)}">Edit</button><button data-delete-comment="${esc(comment.id)}">Delete</button></div>` : ''}`}
     </article>`;
   }).join('');
@@ -8335,6 +8335,9 @@ audio.addEventListener('error', () => {
 });
 
 async function openWatch(id, requestedTime = null, options = {}) {
+  // Closing owns the old player's teardown. Do not let it stop or clear a
+  // newly selected lecture while history/native bridge calls are pending.
+  if (watchClosePromise) await watchClosePromise;
   state.paidPlaybackGeneration++;
   const video = state.videoById.get(String(id));
   if (!video) return;
@@ -8647,7 +8650,22 @@ async function preserveWatchTime() {
   }
 }
 
+let watchClosePromise = null;
 async function closeWatch(save = true) {
+  if (watchClosePromise) return watchClosePromise;
+  if (!state.watchVideo) return;
+  // Invalidate source discovery BEFORE stop() rejects a pending native open.
+  // Otherwise its catch can launch the next MP4/Vimeo source while this close
+  // still awaits stop(), leaving an orphan native video after Watch disappears.
+  state.watchVimeoGeneration += 1;
+  state.watchVimeoInitialization = null;
+  const closing = Promise.resolve().then(() => finishClosingWatch(save));
+  watchClosePromise = closing;
+  try { await closing; }
+  finally { if (watchClosePromise === closing) watchClosePromise = null; }
+}
+
+async function finishClosingWatch(save) {
   if (!state.watchVideo) return;
   if (iosNativeActive() && String(iosUnified.id)===`video:${videoId(state.watchVideo)}`) {
     const wasAudio=state.watchMode==='audio';
@@ -8910,6 +8928,8 @@ function watchPlayerInitializationIsCurrent(initialization) {
 }
 
 async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false) {
+  // A render during history persistence must not restart the closing Watch.
+  if (watchClosePromise) return;
   const pending = state.watchVimeoInitialization;
   if (watchPlayerInitializationIsCurrent(pending)) {
     // render() may arrive first. Preserve the subsequent explicit Play request.
@@ -9280,6 +9300,9 @@ async function saveEditedComment(commentId) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text })
     });
+    // After a successful edit, release the native iOS keyboard without
+    // touching the editor or draft if the API request fails.
+    if (field && document.activeElement === field) field.blur();
     state.editingCommentId = '';
     await loadComments();
   } catch (error) {

@@ -7,17 +7,25 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
   const native = registerPlugin('IrgunUnifiedPlayer');
   let current = null;
   let listenerPromise = null;
+  let latestNativeSequence = 0;
+  let latestOpenRequest = 0;
   const listeners = new Set();
   const keyOf = data => String(data?.id || '');
   const read = () => current;
-  const emit = value => {
-    if (!value) return;
-    if (current?.active && value.id && value.id !== current.id) return;
+  const emit = (value, replacingOwner = false) => {
+    if (!value) return false;
+    // Bridge promises and native events can arrive out of creation order.
+    // Old replies must not overwrite newer speed, intent or preferences.
+    const sequence = Number(value.stateSequence) || 0;
+    if (sequence > 0 && sequence < latestNativeSequence) return false;
+    if (!replacingOwner && current?.active && value.id && value.id !== current.id) return false;
+    latestNativeSequence = Math.max(latestNativeSequence,sequence);
     current = {...current,...value};
     try { onState(current); } catch (error) { console.warn('Native AVPlayer UI update failed',error); }
     for (const fn of listeners) {
       try { fn(current); } catch (error) { console.warn('Native AVPlayer observer failed',error); }
     }
+    return true;
   };
   const ready = async () => {
     if (!listenerPromise) {
@@ -57,11 +65,15 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
         return current;
       }
       // Once source changes the SAME AVPlayer is reused with a new item.
+      const request=++latestOpenRequest;
       const snapshot=await native.open({id:String(id),url:String(url),title:String(title||'Shiur'),
         artist:String(artist||''),mode,autoplay:Boolean(autoplay),
         position:Math.max(0,Number(position)||0),rate:safeRate,rect:rect||{}});
-      current={...snapshot,active:true,sourceUrl:String(url)};
-      emit(current);
+      if (request!==latestOpenRequest) return current;
+      if (!emit({...snapshot,active:true,sourceUrl:String(url)},true) && current?.id===String(id)) {
+        // A newer event arrived while open's older response was in flight.
+        current={...current,sourceUrl:String(url)};
+      }
       return current;
     },
     async snapshot() {
@@ -109,7 +121,9 @@ export function createIosUnifiedAVPlayer({capacitor, registerPlugin, onState = (
     async stop() {
       if (!current?.active) return;
       const last=current;
-      await native.stop();
+      latestOpenRequest++;
+      const stopped=await native.stop();
+      latestNativeSequence=Math.max(latestNativeSequence,Number(stopped?.stateSequence)||0);
       current=null;
       return last;
     }

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter} from '../src/ios-native-avplayer.js';
 
 function testEngine({ios=true, nativeFail=false}={}){
-  const calls=[],watchers={};let epoch=0,now=40,mode='video',playing=false,rate=1,id='',url='';
+  const calls=[],watchers={};let epoch=0,now=40,mode='video',playing=false,rate=1,id='',url='',sequence=0;
   const native={
     addListener:async(name,fn)=>{watchers[name]=fn;return {remove:async()=>{delete watchers[name];}};},
     open:async opts=>{
@@ -25,7 +25,7 @@ function testEngine({ios=true, nativeFail=false}={}){
     pause:async()=>{calls.push(['pause']);playing=false;return snap();},
     stop:async()=>{calls.push(['stop']);id='';url='';playing=false;return snap();}
   };
-  function snap(){return {id,position:now,duration:3600,mode,playing,active:Boolean(id),rate,itemEpoch:epoch,sameItem:Boolean(id)};}
+  function snap(){return {id,position:now,duration:3600,mode,playing,active:Boolean(id),rate,itemEpoch:epoch,sameItem:Boolean(id),stateSequence:++sequence};}
   const notifications=[];
   const engine=createIosUnifiedAVPlayer({
     capacitor:{getPlatform:()=>ios?'ios':'android',isNativePlatform:()=>true},
@@ -74,6 +74,44 @@ test('failed native open never starts WebKit fallback or claims AVPlayer is acti
   assert.equal(t.calls.filter(x=>x[0]==='open').length,1);
 });
 test('Android does not register or instantiate iOS native playback',()=>assert.equal(testEngine({ios:false}).engine,null));
+
+test('a delayed layout reply cannot overwrite a newer native speed selection',async()=>{
+  const t=testEngine();await t.engine.open({id:'video:123',url});
+  let finish;
+  const old={...t.engine.state};
+  t.native.setLayout=()=>new Promise(resolve=>{finish=resolve;});
+  const layout=t.engine.layout('inline',{});
+  await t.engine.speed(1.5);
+  const notifications=t.notifications.length;
+  finish(old);await layout;
+  assert.equal(t.engine.state.rate,1.5);
+  assert.equal(t.notifications.length,notifications,'Do not persist or publish the old speed again');
+});
+test('out-of-order native events cannot roll back playback intent or rate',async()=>{
+  const t=testEngine();await t.engine.open({id:'video:123',url,autoplay:true});
+  const old={...t.engine.state};
+  await t.engine.speed(1.5);await t.engine.pause();
+  t.watchers.state(old);
+  assert.equal(t.engine.state.playing,false);
+  assert.equal(t.engine.state.rate,1.5);
+});
+test('a queued active event from before stop cannot resurrect the stopped player',async()=>{
+  const t=testEngine();await t.engine.open({id:'video:123',url,autoplay:true});
+  const old={...t.engine.state};await t.engine.stop();
+  t.watchers.state(old);assert.equal(t.engine.active,false);
+});
+test('an older open reply cannot rename a newer source for the same lecture',async()=>{
+  const t=testEngine();await t.engine.open({id:'video:123',url});
+  let finishFirst;const base=t.engine.state.stateSequence;
+  t.native.open=options=> options.url.endsWith('first.mp4')
+    ? new Promise(resolve=>{finishFirst=()=>resolve({...t.engine.state,stateSequence:base+1});})
+    : Promise.resolve({...t.engine.state,stateSequence:base+2});
+  const first=t.engine.open({id:'video:123',url:'https://fixture/first.mp4'});
+  await Promise.resolve();
+  await t.engine.open({id:'video:123',url:'https://fixture/newest.mp4'});
+  finishFirst();await first;
+  assert.equal(t.engine.state.sourceUrl,'https://fixture/newest.mp4');
+});
 test('native playback toolbar receives direct callbacks and does not allocate a player',async()=>{
   const calls=[];
   const t=testEngine(),engine=createIosUnifiedAVPlayer({

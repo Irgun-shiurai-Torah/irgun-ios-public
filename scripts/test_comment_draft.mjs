@@ -120,3 +120,55 @@ test('empty and whitespace-only drafts are never posted', async () => {
   await h.postComment();
   assert.equal(h.events.posts.length, 0);
 });
+
+const editStart = source.indexOf('async function saveEditedComment(');
+const editEnd = source.indexOf('\nasync function deleteComment(',editStart);
+assert.ok(editStart >= 0 && editEnd > editStart);
+const makeSaveEdit = new Function('state','document','preserveWatchTime','apiJson','loadComments','alert',
+  source.slice(editStart,editEnd) + '\nreturn saveEditedComment;');
+function editHarness({fail=false,text='  Revised comment  '}={}) {
+  const field = {value:text,blurred:false,blur(){this.blurred=true;}};
+  const state = {editingCommentId:'owned-comment'};
+  const requests = [], errors = [];
+  let loads=0;
+  const document = {activeElement:field,getElementById:id=>id==='editCommentText-owned-comment'?field:null};
+  const save = makeSaveEdit(state,document,async()=>{},async(url,options)=>{
+    requests.push({url,options}); if(fail)throw Error('Save failed');
+  },async()=>{loads++;},error=>errors.push(error));
+  return {field,state,requests,errors,save,get loads(){return loads;}};
+}
+test('saving an edited comment updates the exact ID and dismisses its focused editor after success',async()=>{
+  const h=editHarness();await h.save('owned-comment');
+  assert.equal(h.requests.length,1);
+  assert.equal(h.requests[0].url,'/comments/owned-comment');
+  assert.equal(h.requests[0].options.method,'PUT');
+  assert.deepEqual(JSON.parse(h.requests[0].options.body),{text:'Revised comment'});
+  assert.equal(h.field.blurred,true);
+  assert.equal(h.state.editingCommentId,'');
+  assert.equal(h.loads,1);
+});
+test('failed edited-comment save preserves the editor and draft for correction',async()=>{
+  const h=editHarness({fail:true});await h.save('owned-comment');
+  assert.equal(h.field.blurred,false);
+  assert.equal(h.state.editingCommentId,'owned-comment');
+  assert.equal(h.field.value,'  Revised comment  ');
+  assert.equal(h.loads,0);assert.deepEqual(h.errors,['Save failed']);
+});
+test('missing or empty edited-comment input never sends a PUT',async()=>{
+  const h=editHarness({text:' \n '});
+  await h.save('owned-comment');await h.save('another-comment');
+  assert.equal(h.requests.length,0);assert.equal(h.field.blurred,false);
+});
+test('only the owned active comment exposes the uniquely named Save comment action',()=>{
+  const start=source.indexOf('function commentsHtml()');
+  const end=source.indexOf('\nfunction watchVimeoEmbedSrc(',start);
+  const render=new Function('state','esc','fmtDate',source.slice(start,end)+'\nreturn commentsHtml();');
+  const state={user:{id:7},editingCommentId:'owned',watchComments:[
+    {id:'owned',user_id:7,text:'draft'}, {id:'other',user_id:8,text:'other user'}
+  ]};
+  const html=render(state,String,()=> '');
+  assert.match(html,/<button[^>]*aria-label="Save comment"[^>]*data-save-comment="owned">Save<\/button>/);
+  assert.equal((html.match(/data-save-comment=/g)||[]).length,1);
+  state.editingCommentId='other';
+  assert.doesNotMatch(render(state,String,()=>''),/data-save-comment=/);
+});
