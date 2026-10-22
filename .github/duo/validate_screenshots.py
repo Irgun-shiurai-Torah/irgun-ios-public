@@ -43,28 +43,51 @@ for file in files:
         )
 
     if (width, height) != (target_width, target_height):
+        # sips may silently leave the source unchanged when --out points back
+        # at the input file. Write to a separate path and atomically replace.
+        normalized = file.with_name(file.stem + ".normalized.png")
         result = subprocess.run(
             ["sips", "-z", str(target_height), str(target_width),
-             "--out", str(file), str(file)],
+             "--out", str(normalized), str(file)],
             capture_output=True, text=True,
         )
-        if result.returncode:
-            raise SystemExit(f"Could not normalize one-pixel simulator offset for {file.name}: {result.stderr}")
+        if result.returncode or not normalized.exists():
+            raise SystemExit(
+                f"Could not normalize one-pixel simulator offset for {file.name}: "
+                + result.stderr
+            )
+        normalized.replace(file)
+        actual = subprocess.check_output(
+            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(file)],
+            text=True,
+        )
+        actual_size = [
+            int(line.split(":", 1)[1].strip())
+            for line in actual.splitlines()
+            if "pixelWidth:" in line or "pixelHeight:" in line
+        ]
+        if actual_size != [target_width, target_height]:
+            raise SystemExit(
+                f"Normalization failed for {file.name}: {actual_size}, "
+                f"expected {[target_width, target_height]}"
+            )
     # The Duo's inner display is sideways in its native open pose (hinge vertical).
     # Its XCTest PNG bytes therefore contain an upright app rotated 90 degrees.
     # Rotate those genuine framebuffer pixels clockwise once to deliver
     # an upright *landscape* App Store image (2853x2007), with no cropping,
     # synthetic artwork, device frame, or alteration to the app itself.
     if pose == "unfolded":
+        rotated = file.with_name(file.stem + ".rotated.png")
         result = subprocess.run(
-            ["sips", "-r", "90", str(file)],
+            ["sips", "-r", "90", "--out", str(rotated), str(file)],
             capture_output=True, text=True,
         )
-        if result.returncode:
+        if result.returncode or not rotated.exists():
             raise SystemExit(
                 f"Could not correct unfolded display orientation for {file.name}: "
                 + result.stderr
             )
+        rotated.replace(file)
         target_width, target_height = target_height, target_width
         rotated_report = subprocess.check_output(
             ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(file)],
