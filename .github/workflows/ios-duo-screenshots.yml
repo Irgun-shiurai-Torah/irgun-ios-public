@@ -1,6 +1,10 @@
 name: iPhone Duo Screenshots
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/ios-duo-screenshots.yml
+      - .github/duo/**
   workflow_dispatch:
     inputs:
       pose:
@@ -19,12 +23,12 @@ permissions:
 jobs:
   screenshot:
     name: Duo ${{ matrix.pose }} screenshots
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        pose: ${{ fromJSON(inputs.pose == 'folded' && '["folded"]' || inputs.pose == 'unfolded' && '["unfolded"]' || '["folded","unfolded"]') }}
+        pose: [folded, unfolded]
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
@@ -53,7 +57,18 @@ jobs:
           devices=json.loads(Path('duo-results/devices.json').read_text())['devices']
           matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('isAvailable') and 'iPhone Duo' in d['name']]
           if not matches:
-              raise SystemExit('iPhone Duo simulator is not installed on this runner. Install an Xcode 27.1 image with Duo runtime.')
+              import subprocess
+              types=json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json'],text=True))['devicetypes']
+              duo=next((t for t in types if 'iPhone Duo' in t['name']),None)
+              if not duo:raise SystemExit('Selected Xcode has no iPhone Duo simulator device type.')
+              runtimes=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json'],text=True))['runtimes']
+              ios=[t for t in runtimes if t.get('isAvailable') and 'iOS' in t['name']]
+              if not ios:raise SystemExit('No installed iOS runtime is available.')
+              latest=max(ios,key=lambda t:t.get('version',''))
+              identifier=subprocess.check_output(['xcrun','simctl','create','Irgun iPhone Duo',duo['identifier'],latest['identifier']],text=True).strip()
+              devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json'],text=True))['devices']
+              matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('udid')==identifier]
+              if not matches:raise SystemExit('Could not create iPhone Duo simulator.')
           runtime,d=matches[0]
           print('Selected', d['name'], runtime, d['udid'])
           Path('duo-results/selected-device.json').write_text(json.dumps({'runtime':runtime,**d},indent=2))
