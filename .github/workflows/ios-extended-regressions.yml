@@ -1,11 +1,9 @@
 name: iOS Extended Regression Tests
 
-# PR47 is merged. Enable a temporary push trigger ONLY for this staging branch
-# so extended iPhone/iPad tests run now. Restore manual-only before merging PR46.
+# Run the dedicated-account extended suite explicitly when needed.
+# Account and branch locks below preserve isolation across manual runs.
 on:
   workflow_dispatch:
-  push:
-    branches: [test/ios-regressions-pr25-pr26-after-pr45]
 
 permissions:
   actions: read
