@@ -8269,6 +8269,9 @@ audio.addEventListener('error', () => {
 });
 
 async function openWatch(id, requestedTime = null, options = {}) {
+  // Closing owns the old player's teardown. Do not let it stop or clear a
+  // newly selected lecture while history/native bridge calls are pending.
+  if (watchClosePromise) await watchClosePromise;
   state.paidPlaybackGeneration++;
   const video = state.videoById.get(String(id));
   if (!video) return;
@@ -8581,7 +8584,22 @@ async function preserveWatchTime() {
   }
 }
 
+let watchClosePromise = null;
 async function closeWatch(save = true) {
+  if (watchClosePromise) return watchClosePromise;
+  if (!state.watchVideo) return;
+  // Invalidate source discovery BEFORE stop() rejects a pending native open.
+  // Otherwise its catch can launch the next MP4/Vimeo source while this close
+  // still awaits stop(), leaving an orphan native video after Watch disappears.
+  state.watchVimeoGeneration += 1;
+  state.watchVimeoInitialization = null;
+  const closing = Promise.resolve().then(() => finishClosingWatch(save));
+  watchClosePromise = closing;
+  try { await closing; }
+  finally { if (watchClosePromise === closing) watchClosePromise = null; }
+}
+
+async function finishClosingWatch(save) {
   if (!state.watchVideo) return;
   if (iosNativeActive() && String(iosUnified.id)===`video:${videoId(state.watchVideo)}`) {
     const wasAudio=state.watchMode==='audio';
@@ -8844,6 +8862,8 @@ function watchPlayerInitializationIsCurrent(initialization) {
 }
 
 async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false) {
+  // A render during history persistence must not restart the closing Watch.
+  if (watchClosePromise) return;
   const pending = state.watchVimeoInitialization;
   if (watchPlayerInitializationIsCurrent(pending)) {
     // render() may arrive first. Preserve the subsequent explicit Play request.

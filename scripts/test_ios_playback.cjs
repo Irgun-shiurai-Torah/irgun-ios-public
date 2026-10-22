@@ -13,6 +13,7 @@ function extract(start, end) {
   return source.slice(first, last);
 }
 const functions = [
+  extract('let watchClosePromise = null;', 'async function closeWatch('),
   extract('function watchPlayerInitializationIsCurrent(', 'async function loadComments('),
   extract('function keepVideoPlayingOnBackground(', 'function restoreVideoAfterBackgroundAudio('),
   extract('async function openWatch(', 'function currentVideoClockForBackground(')
