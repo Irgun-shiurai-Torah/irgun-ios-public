@@ -33,8 +33,8 @@ data.pop("UIMainStoryboardFile", None)
 info_file.write_bytes(plistlib.dumps(data, sort_keys=False))
 
 source = delegate_file.read_text()
-method = "func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,"
-if method not in source:
+has_scene_hook = re.search(r"func\s+application\s*\(\s*_\s+application:\s*UIApplication,\s*configurationForConnecting\b", source)
+if not has_scene_hook:
     method_code = '''
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
