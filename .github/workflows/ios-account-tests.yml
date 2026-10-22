@@ -180,11 +180,12 @@ jobs:
               keys={'checks','credentialsRecorded','startedAt','finishedAt','nativeLoginStartedAt','accountMutationsStartedAt','accountMutationsFinishedAt','status','evidenceCredentialsCleared','stage','lastScreen','lastControlKeys','keyboardVisible','authBusy','authFormValid','authEmailValid','authPasswordValid','authEmailLength','authPasswordLength','authSubmitCount','authInvalidFieldKey'}
               safe={key:value[key] for key in keys if key in value}
               # Export only scalar request outcomes from the strict observer allowlist.
-              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history'}
+              allowed_paths={'/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history','/me','/notification-settings','/custom-playlists','/admin/status'}
               requests=[]
               for item in value.get('collectionRequests',[]):
                   if not isinstance(item,dict) or item.get('path') not in allowed_paths: continue
                   clean={'path':item['path']}
+                  if item.get('method') in {'GET','POST'}: clean['method']=item['method']
                   for key in ['sequence','startedAt','finishedAt','status']:
                       number=item.get(key)
                       if isinstance(number,(int,float)) and not isinstance(number,bool): clean[key]=number
@@ -192,6 +193,11 @@ jobs:
                       if isinstance(item.get(key),bool): clean[key]=item[key]
                   requests.append(clean)
               safe['collectionRequests']=requests
+              startup=value.get('startup',{})
+              if isinstance(startup,dict):
+                  safe['startup']={key:startup[key] for key in ['libraryReady','loading','adminChecked','scheduleLoading','liveStatusLoaded','ready'] if isinstance(startup.get(key),bool)}
+                  for key in ['pendingPaths','failedPaths','missingReadPaths']:
+                      safe['startup'][key]=[path for path in startup.get(key,[]) if isinstance(path,str) and path in allowed_paths]
               safe['evidenceCredentialsCleared']=cleared
               if safe.get('status')=='running':
                   safe['status']='failed'

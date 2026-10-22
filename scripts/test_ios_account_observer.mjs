@@ -6,7 +6,7 @@ import { selectIosAccountFixture } from '../.github/simulator/sample-selection.j
 
 // Execute the unmodified account observer in a read-only fake DOM. The test
 // checks real selection semantics without touching login data or network APIs.
-function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId='',commentClick=null,clickKeys=[],pointerKey='',covered=false}={}) {
+function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId='',commentClick=null,clickKeys=[],pointerKey='',covered=false,returnContext=false,apiJsonImpl=async()=>({})}={}) {
   class Element {}
   const listeners = new Map();
   const make = (id, y, title=false) => Object.assign(new Element(),{
@@ -49,7 +49,7 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
     myLikes:new Set(),watchLater:new Set(),follows:new Map(),history:[],playlists:[],
     user:null,isAdmin:false,watchVideo:null,watchVimeo:null,authBusy:false,watchComments:[]
   };
-  const context={window:{},document,state,Element,apiJson:async()=>({}),apiFetch:async()=>({}),
+  const context={window:{},document,state,Element,apiJson:apiJsonImpl,apiFetch:async()=>({}),
     innerWidth:390,innerHeight:844,iosNativeActive:()=>false,audio:{currentTime:0,paused:true,ended:false},
     speakerLabel:id=>id==='rav-tested'?'Rav Tested':'',
     videoId:item=>String(item?.id||'')};
@@ -77,7 +77,7 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
       closest:q=>q===query?target:null});
     listeners.get('pointerdown')({target,clientX:42,clientY:75});
   }
-  return context.window.ISTAccountTest.snapshot();
+  return returnContext?context:context.window.ISTAccountTest.snapshot();
 }
 test('account UI test selects a real speaker Follow lecture, not newest unattributed video',()=>{
   const snapshot=snapshotFor();
@@ -216,4 +216,54 @@ test('native pointer evidence records delivery without recording field contents'
   assert.equal(observed.lastPointer.y,75);
   assert.equal(observed.clicks.password,undefined,'Pointer delivery is not a confirmed click');
   assert.ok(!JSON.stringify(observed).includes('private input contents'));
+});
+
+const startupPaths=['/me','/my-like-ids','/watch-later','/follows','/history','/notification-settings','/custom-playlists'];
+test('cold startup requires completed real GETs, not an optimistic session or elapsed time',async()=>{
+  let releaseHistory;
+  const pending=new Promise(resolve=>{releaseHistory=resolve;});
+  const context=snapshotFor({returnContext:true,apiJsonImpl:path=>path==='/history'?pending:Promise.resolve({})});
+  context.state.user={id:'qa-account'};
+  const observe=()=>context.window.ISTAccountTest.snapshot().startup;
+  assert.equal(observe().ready,false);
+  await Promise.all(startupPaths.filter(path=>path!='/history').map(path=>context.apiJson(path)));
+  const history=context.apiJson('/history');
+  assert.equal(observe().ready,false);
+  assert.deepEqual(Array.from(observe().pendingPaths),['/history']);
+  releaseHistory({items:[]});await history;
+  assert.equal(observe().ready,true);
+  context.state.loading=true;
+  assert.equal(observe().ready,false,'Fresh account data cannot conceal unfinished app bootstrap');
+  context.state.loading=false;context.state.user=null;
+  assert.equal(observe().ready,false,'Completed reads cannot invent a restored session');
+});
+test('a successful write cannot substitute for a failed collection reload',async()=>{
+  const context=snapshotFor({returnContext:true,apiJsonImpl:async(path,options)=>{
+    if(path==='/watch-later' && !options?.method)throw Object.assign(new Error('private error payload'),{status:503});
+    return {};
+  }});
+  context.state.user={id:'qa-account'};
+  await Promise.all(startupPaths.map(path=>context.apiJson(path).catch(()=>{})));
+  await context.apiJson('/watch-later',{method:'POST',body:'private body'});
+  const observed=context.window.ISTAccountTest.snapshot();
+  assert.equal(observed.startup.ready,false);
+  assert.deepEqual(Array.from(observed.startup.missingReadPaths),['/watch-later']);
+  assert.equal(observed.requests.find(row=>row.path==='/watch-later' && row.method==='GET').status,503);
+  assert.ok(!JSON.stringify(observed).includes('private error payload'));
+  assert.ok(!JSON.stringify(observed).includes('private body'));
+});
+test('startup request observation preserves real results and excludes unapproved endpoints',async()=>{
+  const reply={loggedIn:true,user:{id:'private user'}};
+  const calls=[];
+  const context=snapshotFor({returnContext:true,apiJsonImpl:async(...args)=>{calls.push(args);return reply;}});
+  const options={headers:{Authorization:'private credential'},body:'private body'};
+  assert.equal(await context.apiJson('/me',options),reply);
+  assert.equal(calls[0][1],options);
+  await context.apiJson('/unapproved?private-query');
+  const requests=context.window.ISTAccountTest.snapshot().requests;
+  assert.equal(requests.length,1);
+  assert.equal(requests[0].path,'/me');
+  assert.equal(requests[0].ok,true);
+  assert.ok(requests[0].finishedAt>=requests[0].startedAt);
+  assert.ok(!JSON.stringify(requests).includes('private'));
 });

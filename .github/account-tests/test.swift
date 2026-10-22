@@ -18,6 +18,7 @@
         defer {
             report["finishedAt"] = timestamp()
             report["collectionRequests"] = (snapshot()["account"] as? [String: Any])?["requests"] ?? []
+            report["startup"] = (snapshot()["account"] as? [String:Any])?["startup"] ?? [String:Any]()
             if report["status"] as? String != "passed" { report["status"] = "failed" }
             // A native process restart clears typed form contents before evidence.
             app.terminate(); app.launch()
@@ -37,7 +38,8 @@
         }
         func successfulHistoryWrites(_ s: [String: Any]) -> Int {
             let requests = s["requests"] as? [[String: Any]] ?? []
-            return requests.filter { $0["path"] as? String == "/history" && $0["ok"] as? Bool == true }.count
+            return requests.filter { $0["path"] as? String == "/history" &&
+                $0["method"] as? String == "POST" && $0["ok"] as? Bool == true }.count
         }
         func awaitSuccessfulFollowRequest(after previous: Int) throws {
             try awaitAccount("Follow request returned successfully") { s in
@@ -48,8 +50,20 @@
                     followRequests.last?["ok"] as? Bool == true
             }
         }
-        func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { condition($0["account"] as? [String: Any] ?? [:]) }
+        func awaitAccount(_ message: String, timeout: TimeInterval = 60,
+                          _ condition: @escaping ([String: Any]) -> Bool) throws {
+            try waitFor(message, timeout: timeout) { condition($0["account"] as? [String: Any] ?? [:]) }
+        }
+        func awaitColdAccount(_ message: String, _ condition: @escaping ([String:Any]) -> Bool) throws {
+            // A process relaunch repeats the real cold catalog/session bootstrap.
+            // Match setUpWithError's bounded 180s startup allowance; 60s action
+            // waits remain unchanged. Require fresh successful account GETs as
+            // well as the original session/collection assertions, never a timer
+            // or cached logged-in flag alone.
+            try awaitAccount(message,timeout:180) { observed in
+                let startup=observed["startup"] as? [String:Any] ?? [:]
+                return startup["ready"] as? Bool == true && condition(observed)
+            }
         }
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
@@ -242,7 +256,7 @@
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
-        try awaitAccount("Signed-in library reloads after playback") {
+        try awaitColdAccount("Signed-in library reloads after playback") {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true
         }
         try touch("library")
@@ -259,7 +273,7 @@
         checked("QA playlist created")
         let changed=account()
         app.terminate(); app.launch()
-        try awaitAccount("Session and playlist survive process restart") { $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true && hasPlaylist($0) }
+        try awaitColdAccount("Session and playlist survive process restart") { $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true && hasPlaylist($0) }
         XCTAssertEqual(values(account(),"likes").contains(id),values(changed,"likes").contains(id))
         XCTAssertEqual(values(account(),"later").contains(id),values(changed,"later").contains(id))
         XCTAssertEqual(values(account(),"follows").sorted(),values(changed,"follows").sorted())
@@ -294,7 +308,7 @@
         // Relaunch rather than depending on the same top-edge close control,
         // then require the restored server state and session to load normally.
         app.terminate(); app.launch()
-        try awaitAccount("Restored account reloads before logout") {
+        try awaitColdAccount("Restored account reloads before logout") {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
             values($0,"later").contains(id) == values(before,"later").contains(id) &&
