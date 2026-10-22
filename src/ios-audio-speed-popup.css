@@ -1,13 +1,15 @@
-/* Speed setting occupies the original settings area; transport and artwork stay unchanged. */
-.player-sheet .ios-speed-setting { display:flex; align-items:center; justify-content:space-between; gap:12px; overflow:visible; }
-.player-sheet .ios-speed-setting .player-setting-title { margin:0; }
-.ios-speed-menu { position:relative; flex:0 0 auto; z-index:2; }
-.ios-speed-trigger { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:40px; min-width:72px; padding:7px 12px; border:1px solid #c6a05c; border-radius:999px; background:#fff9ed; color:#142e4c; font:inherit; font-size:14px; font-weight:800; font-variant-numeric:tabular-nums; cursor:pointer; touch-action:manipulation; }
-.ios-speed-chevron { font-size:12px; color:#9b773e; }
-.ios-speed-trigger:focus-visible,.ios-speed-option:focus-visible { outline:3px solid #cfae65; outline-offset:2px; }
-.ios-speed-popover { position:absolute; inset:auto 0 calc(100% + 9px) auto; width:158px; max-width:calc(100vw - 42px); padding:6px; border:1px solid #d2bb90; border-radius:15px; background:#fff; box-shadow:0 12px 30px #10243c36; display:grid; gap:2px; z-index:1000; }
-.ios-speed-popover[hidden] { display:none !important; }
-.ios-speed-option { display:flex; align-items:center; justify-content:center; min-height:42px; width:100%; padding:7px 12px; border:0; border-radius:10px; background:transparent; color:#183755; font:inherit; font-size:14px; font-weight:700; font-variant-numeric:tabular-nums; cursor:pointer; touch-action:manipulation; }
-.ios-speed-option:hover { background:#f3f5f9; }
-.ios-speed-option.selected { background:#173757; color:#f2d293; }
-.ios-speed-option.selected::before { content:'✓'; position:absolute; left:19px; color:#efce8d; font-weight:900; }
+/* Option 3: the original dark Watch audio design plus a small floating speed capsule.
+   Absolute position means the original artwork, seek bar, 15-second skips,
+   gold Play/Pause and elapsed/duration positions NEVER move. */
+.watch-audio-panel .watch-audio-controls { position: relative; }
+.watch-audio-controls .ios-speed-menu { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); z-index: 25; direction: ltr; }
+.watch-audio-controls .ios-speed-trigger { display: inline-flex; justify-content: center; align-items: center; gap: 4px; min-width: 47px; height: 34px; padding: 4px 7px; border: 1px solid #556579; border-radius: 11px; background: #203044; color: #f5f8fc; font: inherit; font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; box-shadow: 0 2px 6px #0003; cursor: pointer; touch-action: manipulation; }
+.watch-audio-controls .ios-speed-chevron { font-size: 9px; color: #acb7c7; }
+.watch-audio-controls .ios-speed-trigger:focus-visible,
+.watch-audio-controls .ios-speed-option:focus-visible { outline: 2px solid #e5ba6e; outline-offset: 2px; }
+.watch-audio-controls .ios-speed-popover { position: absolute; inset: calc(100% + 7px) 0 auto auto; width: 118px; max-width: calc(100vw - 24px); padding: 5px; border: 1px solid #5f7188; border-radius: 13px; background: #1c2d41; color: #f5f8fc; box-shadow: 0 10px 26px #0007; display: grid; gap: 2px; z-index: 100; }
+.watch-audio-controls .ios-speed-popover[hidden] { display: none !important; }
+.watch-audio-controls .ios-speed-option { position: relative; display: flex; width: 100%; align-items: center; justify-content: flex-start; min-height: 34px; padding: 6px 29px 6px 12px; border: 0; border-radius: 8px; background: transparent; color: #f6f7fb; font: inherit; font-size: 13px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; }
+.watch-audio-controls .ios-speed-option:hover { background: #34485e; }
+.watch-audio-controls .ios-speed-option.selected { background: #f0c779; color: #14283e; font-weight: 850; }
+.watch-audio-controls .ios-speed-option.selected::after { content: '✓'; position: absolute; right: 11px; color: #172b43; font-weight: 900; }

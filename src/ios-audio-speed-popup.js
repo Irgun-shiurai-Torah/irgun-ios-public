@@ -1,4 +1,4 @@
-// Accessible compact speed menu for the existing full audio player.
+// Option 3: compact Watch audio speed capsule, retaining original full-player speed chips.
 export const IOS_AUDIO_SPEEDS = Object.freeze([0.75, 1, 1.25, 1.5, 1.75, 2]);
 
 export function validIosAudioSpeed(value) {

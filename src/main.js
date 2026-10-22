@@ -392,6 +392,8 @@ function onIosUnifiedState(snapshot) {
     localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
     document.querySelectorAll('[data-audio-speed]').forEach(select => { select.value = String(state.playbackSpeed); });
     refreshIosAudioSpeedMenu(document, state.playbackSpeed);
+    document.querySelectorAll('[data-speed-choice]').forEach(button =>
+      button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
   }
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
@@ -6029,7 +6031,7 @@ function watchHtml() {
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage()==='he'?'וידאו':'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage()==='he'?'אודיו':'Audio'}</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${iosAudioUiDuration()}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
+          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${iosAudioUiDuration()}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button>${compactIosAudioSpeedHtml(state.playbackSpeed, currentLanguage())}</div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -6110,7 +6112,7 @@ function fullPlayerHtml() {
       ${c.offline ? `<div class="offline-player-badge">✓ ${currentLanguage()==='he'?'מתנגן מהקובץ השמור':'Playing offline copy'}</div>` : ''}
       ${state.playQueue.length>1?`<div class="queue-controls"><button data-queue-prev="1" ${state.playQueueIndex<=0?'disabled':''}>← ${currentLanguage()==='he'?'הקודם':'Previous'}</button><button data-queue-next="1" ${state.playQueueIndex>=state.playQueue.length-1?'disabled':''}>${currentLanguage()==='he'?'הבא':'Next'} →</button></div>`:''}
       <div class="player-setting-block"><span class="player-setting-title">${currentLanguage()==='he'?'דילוג קדימה/אחורה':'Skip buttons'}</span><div class="player-setting-chips">${[10,15,30].map(x=>`<button data-skip-choice="${x}" class="${state.skipSeconds===x?'active':''}">${x} sec</button>`).join('')}</div></div>
-      <div class="player-setting-block ios-speed-setting"><span class="player-setting-title">${currentLanguage()==='he'?'מהירות השמעה':'Playback speed'}</span>${compactIosAudioSpeedHtml(state.playbackSpeed, currentLanguage())}</div>
+      <div class="player-setting-block"><span class="player-setting-title">Playback speed</span><div class="player-setting-chips">${[0.75, 1, 1.25, 1.5, 1.75, 2].map(x => `<button data-speed-choice="${x}" class="${state.playbackSpeed === x ? 'active' : ''}">${x}×</button>`).join('')}</div></div>
       <div class="player-setting-block"><span class="player-setting-title">Sleep timer</span><div class="player-setting-chips">${[['off','Off'],['15','15 min'],['30','30 min'],['45','45 min'],['60','60 min'],['end','End']].map(([value,label]) => `<button data-sleep-choice="${value}" class="${state.sleepMode === value ? 'active' : ''}">${label}</button>`).join('')}</div></div>
       <button class="close-player" data-close-player="1">Close full player</button>
     </section>
@@ -6917,6 +6919,8 @@ async function setIosAudioPlaybackSpeed(rate) {
   localStorage.setItem(SPEED_KEY, String(value));
   document.querySelectorAll('[data-audio-speed]').forEach(select => { select.value = String(value); });
   refreshIosAudioSpeedMenu(document, value);
+  document.querySelectorAll('[data-speed-choice]').forEach(button =>
+    button.classList.toggle('active', Number(button.dataset.speedChoice) === value));
 }
 
 function bind() {
@@ -7388,6 +7392,14 @@ function bind() {
   });
   document.querySelectorAll('[data-audio-speed]').forEach(select => select.addEventListener('change', () => {
     void setIosAudioPlaybackSpeed(select.value).catch(error => console.warn('Native speed failed', error));
+  }));
+  // Preserve the original six full-player speed choices. They now share
+  // the same rate-only native operation as the compact Watch speed menu.
+  document.querySelectorAll('[data-speed-choice]').forEach(button => button.addEventListener('click', () => {
+    void setIosAudioPlaybackSpeed(button.dataset.speedChoice).catch(error => {
+      console.warn('Native full-player speed failed', error);
+      setToast('Could not change playback speed.');
+    });
   }));
   document.querySelectorAll('[data-ios-speed-trigger]').forEach(trigger => trigger.addEventListener('click', event => {
     event.stopPropagation();
