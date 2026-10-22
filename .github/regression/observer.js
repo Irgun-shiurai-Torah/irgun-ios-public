@@ -150,7 +150,7 @@
     const videoSpeed=document.getElementById('dmSpeed');
     const native=iosNativeActive() ? iosUnified.state : null;
     return JSON.stringify({...base,regression:{
-      controls:selectors,rects:hitRects,libraryTabsRect,watchFixture,
+      controls:selectors,rects:hitRects,libraryTabsRect,watchFixture,observedAt:Date.now(),
       // Actual WKWebView viewport: native gestures require CSS-pixel bounds.
       // Without these, tests mis-classify offscreen controls and always scroll up.
       width:innerWidth,height:innerHeight,

@@ -209,6 +209,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var overlayOccluded = false
     #if targetEnvironment(simulator)
     private var simulatorControlTaps: [String: Int] = [:]
+    private var simulatorPictureSwipes = 0
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
@@ -761,6 +762,24 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         #if targetEnvironment(simulator)
         data["observedAt"] = Date().timeIntervalSince1970 * 1000
         data["controlTaps"] = simulatorControlTaps
+        data["pictureSwipes"] = simulatorPictureSwipes
+        data["timeControlStatus"] = player.timeControlStatus.rawValue
+        data["waitingReason"] = player.reasonForWaitingToPlay?.rawValue ?? ""
+        data["actualRate"] = Double(player.rate)
+        data["bufferEmpty"] = player.currentItem?.isPlaybackBufferEmpty ?? false
+        data["likelyToKeepUp"] = player.currentItem?.isPlaybackLikelyToKeepUp ?? false
+        data["loadedRanges"] = player.currentItem?.loadedTimeRanges.map { value -> [String:Double] in
+            let range = value.timeRangeValue
+            return ["start": range.start.seconds.isFinite ? range.start.seconds : -1,
+                    "duration": range.duration.seconds.isFinite ? range.duration.seconds : -1]
+        } ?? []
+        data["recoveryAttempts"] = playbackRecoveryAttempts
+        data["recoveryScheduled"] = playbackRecoveryTask != nil
+        data["progressAge"] = Date().timeIntervalSince(lastPlaybackProgressAt)
+        data["nativeSeekPending"] = nativeSeekTarget != nil
+        data["errorEvents"] = player.currentItem?.errorLog()?.events.suffix(4).map { event -> [String:Any] in
+            ["domain": event.errorDomain, "code": event.errorStatusCode]
+        } ?? []
         data["controlsMenuOpen"] = controlsMenuOpen
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
@@ -1450,7 +1469,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             bottom.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor)
         ])
 
-        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(tapMini))
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(swipeVideoSurface(_:)))
         swipe.direction = .down
         swipe.delegate = self
         viewer.view.addGestureRecognizer(swipe)
@@ -1572,6 +1591,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         #endif
         revealNativeControls()
         publishState()
+    }
+
+    @objc private func swipeVideoSurface(_ recognizer: UISwipeGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        #if targetEnvironment(simulator)
+        simulatorPictureSwipes += 1
+        #endif
+        tapMini()
     }
 
     @objc private func tapMini() {

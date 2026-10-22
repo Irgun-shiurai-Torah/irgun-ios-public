@@ -5423,7 +5423,7 @@ function commentsHtml() {
     return `<article class="comment-card">
       <div class="comment-head"><strong>${esc(comment.author || 'Anonymous')}</strong><span>${esc(fmtDate(comment.created))}</span></div>
       ${editing
-        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
+        ? `<div class="comment-edit-box"><textarea id="editCommentText-${esc(comment.id)}">${esc(comment.text || '')}</textarea><div class="comment-actions"><button class="comment-save" aria-label="Save comment" data-save-comment="${esc(comment.id)}">Save</button><button data-cancel-comment="${esc(comment.id)}">Cancel</button></div></div>`
         : `<p>${esc(comment.text || '')}</p>${owner ? `<div class="comment-actions"><button data-edit-comment="${esc(comment.id)}">Edit</button><button data-delete-comment="${esc(comment.id)}">Delete</button></div>` : ''}`}
     </article>`;
   }).join('');

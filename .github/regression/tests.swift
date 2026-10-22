@@ -210,8 +210,10 @@
     }
 
     private func regressionEnter(_ key: String, _ text: String) throws {
-        try regressionTap(key)
-        let field=key=="loginPassword" ? app.webViews.secureTextFields.firstMatch : app.webViews.textFields.firstMatch
+        // Resolve the requested field semantically. A different visible field
+        // must never receive a profile or playlist mutation.
+        let labels = key == "profileName" ? ["Name"] : ["New playlist name","שם רשימה חדשה"]
+        let field = app.webViews.textFields.matching(NSPredicate(format:"label IN %@",labels)).firstMatch
         guard field.waitForExistence(timeout:8) else {
             XCTFail("Native keyboard field \(key) missing")
             throw Failure.timedOut(key)
@@ -219,12 +221,28 @@
         // Require focus on the exact DOM input before native typing. iPad can
         // retain keyboard focus without exposing an on-screen Keyboard element
         // (hardware/floating keyboard); visibility is not proof of input focus.
-        field.tap()
-        if regression()["focusedInputKey"] as? String != key {
-            field.coordinate(withNormalizedOffset:CGVector(dx:0.8,dy:0.5)).tap()
+        var focused = false
+        for _ in 0..<3 {
+            // A pending authenticated-profile render can replace the input
+            // after its click. Re-resolve the native query and require a new
+            // DOM observation; an older cached focus sample is insufficient.
+            let touchedAt = Date().timeIntervalSince1970 * 1000
+            field.tap()
+            let predicate = NSPredicate { _, _ in
+                let state = self.regression()
+                return self.number(state,"observedAt") > touchedAt &&
+                    state["focusedInputKey"] as? String == key
+            }
+            let delivered = XCTNSPredicateExpectation(predicate:predicate,object:NSObject())
+            if XCTWaiter.wait(for:[delivered],timeout:5) == .completed {
+                focused = true
+                break
+            }
         }
-        try regressionWait("Exact requested input has focus before native typing",timeout:15) {
-            $0["focusedInputKey"] as? String == key
+        guard focused else {
+            evidence("requested-input-focus-not-delivered")
+            XCTFail("Exact requested input has focus before native typing: " + key)
+            throw Failure.timedOut("native input focus " + key)
         }
         let old=(field.value as? String ?? "")
         if old != text {

@@ -78,7 +78,7 @@
             }
             if key == "commentPost" || key == "commentSave" {
                 let before = number(account(),"lastClickSequence")
-                try tapNativeFormButton([key == "commentPost" ? "Post Comment" : "Save"])
+                try tapNativeFormButton([key == "commentPost" ? "Post Comment" : "Save comment"])
                 try awaitAccount("Real comment form submit tap: " + key) {
                     self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
                 }

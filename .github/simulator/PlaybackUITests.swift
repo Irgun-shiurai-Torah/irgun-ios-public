@@ -870,14 +870,42 @@ final class PlaybackUITests: XCTestCase {
         try assertMovingVideo(); evidence("double-tap-seek")
     }
 
+    private func swipePictureDown() throws {
+        let hide = app.buttons["ist-simulator-hide-controls"]
+        if hide.exists && hide.isHittable { hide.tap() }
+        let initial = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+        let native = initial["active"] as? Bool == true
+        let before = number(initial,"pictureSwipes")
+        for _ in 0..<3 {
+            // Start below the toolbar; keep both ends on the same observed
+            // picture. A failed XCTest gesture may be redelivered only when
+            // UIKit has not recognized it. A delivered action gets no retry.
+            let s = snapshot()
+            let n = s["nativePlayer"] as? [String:Any] ?? [:]
+            let origin = app.coordinate(withNormalizedOffset:.zero)
+            let x = native ? number(n,"surfaceX") + number(n,"surfaceWidth") * 0.5
+                           : number(s,"videoX") + number(s,"videoWidth") * 0.5
+            let y = native ? number(n,"surfaceY") : number(s,"videoY")
+            let height = native ? number(n,"surfaceHeight") : number(s,"videoHeight")
+            origin.withOffset(CGVector(dx:x,dy:y+height*0.28)).press(
+                forDuration:0.05,thenDragTo:origin.withOffset(CGVector(dx:x,dy:y+height*0.90)),
+                                     withVelocity:.fast,thenHoldForDuration:0)
+            if !native { return }
+            let predicate = NSPredicate { _, _ in
+                let n = self.snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+                return self.number(n,"pictureSwipes") > before
+            }
+            let delivered = XCTNSPredicateExpectation(predicate:predicate,object:NSObject())
+            if XCTWaiter.wait(for:[delivered],timeout:4) == .completed { return }
+        }
+        evidence("picture-swipe-not-delivered")
+        XCTFail("UIKit must recognize the downward picture swipe")
+        throw Failure.timedOut("native picture swipe")
+    }
+
     func testSwipeDownMinimizesPlayingAndPausedVideo() throws {
         try openSample(); try assertMovingVideo()
-        // Start on the picture, below the 44pt toolbar. Toolbar buttons own
-        // their touches just as they do on Android.
-        // Use a defined swipe velocity: the default drag stretches the same
-        // gesture over a much longer distance on iPad than on iPhone.
-        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85),
-                                 withVelocity: .fast, thenHoldForDuration: 0)
+        try swipePictureDown()
         _ = try waitFor("Swipe must minimize playing video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
         let s=snapshot()
@@ -889,8 +917,7 @@ final class PlaybackUITests: XCTestCase {
         }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause before swipe") { $0["videoPlaying"] as? Bool == false }
-        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85),
-                                 withVelocity: .fast, thenHoldForDuration: 0)
+        try swipePictureDown()
         _ = try waitFor("Swipe must minimize paused video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
         Thread.sleep(forTimeInterval: 1)
         XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true); evidence("swipe-minimize")
