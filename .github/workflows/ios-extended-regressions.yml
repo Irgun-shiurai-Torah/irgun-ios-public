@@ -4,6 +4,10 @@ name: iOS Extended Regression Tests
 # Account and branch locks below preserve isolation across manual runs.
 on:
   workflow_dispatch:
+  # Temporary launch for the audio-speed branch; remove after the run starts.
+  push:
+    branches: [feature/audio-speed-controls-20261023]
+    paths: [.github/workflows/ios-extended-regressions.yml]
 
 permissions:
   actions: read
