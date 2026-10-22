@@ -38,14 +38,22 @@
         let width = number(reg,"width")
         let height = number(reg,"height")
         let native = state["nativePlayer"] as? [String:Any] ?? [:]
-        let surfaceBottom = number(native,"surfaceY") + number(native,"surfaceHeight")
+        // An inactive/audio player's retained UIView frame can still cover
+        // the entire screen. Only a visible video surface obstructs a swipe.
+        let videoSurface = native["active"] as? Bool == true &&
+            native["mode"] as? String == "video" && native["layerReady"] as? Bool == true
+        let surfaceBottom = videoSurface
+            ? number(native,"surfaceY") + number(native,"surfaceHeight") : 0
         // Scroll in the content area BELOW the native AVPlayer. A swipe from
         // the WebView center can land on the UIKit video overlay on iPad and
         // become a video tap instead of scrolling the page.
         let lower = min(max(80,height-100),max(height*0.68,surfaceBottom+80))
         let upper = max(surfaceBottom+30,min(lower-240,height*0.50))
         guard lower-upper >= 90 else {
-            app.webViews.firstMatch.swipeUp()
+            // Honor the target direction even when there is too little room
+            // below a native surface; an offscreen row above needs swipeDown.
+            if towardUp { app.webViews.firstMatch.swipeUp() }
+            else { app.webViews.firstMatch.swipeDown() }
             return
         }
         let x=max(20,min(width-20,width*0.5))
@@ -124,8 +132,11 @@
                     thenDragTo:web.withOffset(CGVector(dx:endX,dy:y)))
             } else {
                 let targetY=number(rects[key] ?? [:],"y")
-                let surfaceTop=number((fullState["nativePlayer"] as? [String:Any] ?? [:]),"surfaceY")
-                let surfaceBottom=surfaceTop+number((fullState["nativePlayer"] as? [String:Any] ?? [:]),"surfaceHeight")
+                let native = fullState["nativePlayer"] as? [String:Any] ?? [:]
+                let videoSurface = native["active"] as? Bool == true &&
+                    native["mode"] as? String == "video" && native["layerReady"] as? Bool == true
+                let surfaceTop = videoSurface ? number(native,"surfaceY") : 0
+                let surfaceBottom = videoSurface ? surfaceTop+number(native,"surfaceHeight") : 0
                 let directionUp: Bool
                 if targetY < 0 { directionUp=false }
                 else if targetY > number(snap,"height") { directionUp=true }

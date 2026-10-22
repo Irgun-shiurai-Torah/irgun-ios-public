@@ -72,42 +72,43 @@
 
     // Shared by comments, login, offline and cross-device regression tests.
     private func dismissNativeKeyboard() throws {
-        let keyboard = app.keyboards.firstMatch
-        guard keyboard.exists else { return }
-        // Prefer a real swipe-down first. Avoid a global Done-button query,
-        // which can race with the keyboard disappearing during accessibility polling.
-        if keyboard.isHittable { keyboard.swipeDown() }
-        var deadline = Date().addingTimeInterval(3)
-        while Date() < deadline && app.keyboards.firstMatch.exists {
-            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+        func keyboardClosed() -> Bool { !app.keyboards.firstMatch.exists }
+        func waitForClosure(_ seconds: TimeInterval) -> Bool {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if keyboardClosed() { return true }
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+            return keyboardClosed()
         }
-        if !app.keyboards.firstMatch.exists { return }
-        for label in ["Done","Return","Go","Log In"] {
-            let key = app.keyboards.buttons[label].firstMatch
-            if key.exists && key.isHittable {
-                key.tap()
-                deadline = Date().addingTimeInterval(3)
-                while Date() < deadline && app.keyboards.firstMatch.exists {
-                    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+        guard !keyboardClosed() else { return }
+        // WKWebView's Done accessory belongs to the app toolbar, not the
+        // keyboard subtree. This is the same native control exercised by
+        // the passing iPhone/iPad account suite. Return in a comment inserts
+        // a newline; Go can submit a form, so neither is a dismissal action.
+        for _ in 0..<2 {
+            let toolbarDone = app.toolbars.buttons["Done"].firstMatch
+            let appDone = app.buttons["Done"].firstMatch
+            if toolbarDone.exists && toolbarDone.isHittable {
+                toolbarDone.tap()
+                if waitForClosure(5) { return }
+            } else if appDone.exists && appDone.isHittable {
+                appDone.tap()
+                if waitForClosure(5) { return }
+            }
+            for label in ["Hide keyboard","Dismiss keyboard","Dismiss Keyboard"] {
+                let button = app.buttons[label].firstMatch
+                if button.exists && button.isHittable {
+                    button.tap()
+                    if waitForClosure(5) { return }
                 }
-                if !app.keyboards.firstMatch.exists { return }
-                break
+            }
+            let keyboard = app.keyboards.firstMatch
+            if keyboard.exists && keyboard.isHittable {
+                keyboard.swipeDown()
+                if waitForClosure(3) { return }
             }
         }
-        if app.keyboards.firstMatch.exists {
-            // Final outside tap in the app's top margin, not on the text field.
-            let frame = app.frame
-            if frame.width > 0 && frame.height > 40 {
-                app.coordinate(withNormalizedOffset:.zero).withOffset(
-                    CGVector(dx:frame.width*0.5,dy:24)).tap()
-            }
-        }
-        deadline = Date().addingTimeInterval(5)
-        while Date() < deadline && app.keyboards.firstMatch.exists {
-            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
-        }
-        guard !app.keyboards.firstMatch.exists else {
-            XCTFail("Native keyboard remained visible after dismissal attempts")
-            throw Failure.timedOut("keyboard dismissal")
-        }
+        XCTFail("Native keyboard remained visible after real accessory dismissal attempts")
+        throw Failure.timedOut("keyboard dismissal")
     }
