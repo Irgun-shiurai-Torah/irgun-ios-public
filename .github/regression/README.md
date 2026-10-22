@@ -38,8 +38,14 @@ This is an **additional** CI workflow. Do not mistake it for the original public
 
 ## Safety
 
-Use a verified non-admin **dedicated QA account**. All credentials are private Actions
-secrets. The UI test types through the native keyboard; no credentials are hardcoded.
+Use three verified non-admin **dedicated QA accounts**. All credentials are private
+Actions secrets. Keep the original `IRGUN_TEST_EMAIL` / `IRGUN_TEST_PASSWORD` for
+Login & Account Tests on both PRs. Extended iPhone uses `IRGUN_TEST_EMAIL_2` /
+`IRGUN_TEST_PASSWORD_2`; extended iPad uses the corresponding `_3` secrets. The
+cross-device writer and reader both use account 2 under one uninterrupted job lock.
+Preflight rejects missing credentials, duplicate account emails and a selected
+account that does not match its lock, without logging secret values.
+The UI test types through the native keyboard; no credentials are hardcoded.
 The cross-device test leaves Like, Follow and its run-unique QA playlist enabled on the
 QA account for inspection. Profile rename tests restore the original name on success.
 Do not run against an ordinary user's account.
@@ -59,8 +65,12 @@ The runner additionally restores the configuration in an `always()` job step.
 ## Running and interpreting
 
 The `iOS Extended Regression Tests` workflow has an iPhone and iPad device
-matrix (serialized because both use one QA account), then a separate cross-device
-iPhone writer / iPad reader job. All XCTest checks use
+matrix that can run in parallel on distinct accounts, then a separate cross-device
+iPhone writer / iPad reader job. Each account has a repository-wide concurrency
+lock with `queue: max` and `cancel-in-progress: false`; tests sharing an account
+remain serialized. The original-account workflows keep their existing shared lock,
+so already-running older tests can finish alongside the isolated-account suite.
+Runner availability still controls when queued jobs start. All XCTest checks use
 `-only-testing` without suppressing failures. A failing API response, lack of
 moving decoded frames, failed PiP when the simulator supports it, missing notification
 or absent simulator network capability **fails** its check. Unsupported simulator

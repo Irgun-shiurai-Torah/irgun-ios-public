@@ -11,11 +11,11 @@ permissions:
   actions: read
   contents: read
 
-# Every authenticated suite mutates the same dedicated QA account. Share
-# the account workflow's lock for the ENTIRE workflow, including both devices
-# and cross-device cleanup. A same-SHA wait cannot exclude a different PR.
+# Separate accounts let this suite run alongside Login & Account Tests, which
+# retains the original shared-account lock. Keep successive extended runs queued;
+# each job also takes its account's lock before any server mutations.
 concurrency:
-  group: ios-account-shared-test-account
+  group: ios-extended-regressions-${{ github.ref }}
   queue: max
   cancel-in-progress: false
 
@@ -24,21 +24,41 @@ jobs:
     name: Extended ${{ matrix.family }} tests
     runs-on: macos-26
     timeout-minutes: 105
+    concurrency:
+      group: ios-account-qa-${{ matrix.account }}
+      queue: max
+      cancel-in-progress: false
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
-        family: [iPhone, iPad]
+        include:
+          - family: iPhone
+            account: 2
+            email_secret: IRGUN_TEST_EMAIL_2
+            password_secret: IRGUN_TEST_PASSWORD_2
+          - family: iPad
+            account: 3
+            email_secret: IRGUN_TEST_EMAIL_3
+            password_secret: IRGUN_TEST_PASSWORD_3
     env:
       DEVICE_FAMILY: ${{ matrix.family }}
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: '1'
       SIMULATOR_VIDEO_ID: ''
-      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
-      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_TEST_EMAIL: ${{ secrets[matrix.email_secret] }}
+      IRGUN_TEST_PASSWORD: ${{ secrets[matrix.password_secret] }}
+      IRGUN_QA_SLOT: '${{ matrix.account }}'
       IRGUN_SYNC_MARKER: '${{ github.run_id }}${{ github.run_attempt }}'
     steps:
       - uses: actions/checkout@v7
+      - name: Require distinct dedicated QA accounts
+        id: qa-accounts
+        env:
+          IRGUN_QA_EMAIL_1: ${{ secrets.IRGUN_TEST_EMAIL }}
+          IRGUN_QA_EMAIL_2: ${{ secrets.IRGUN_TEST_EMAIL_2 }}
+          IRGUN_QA_EMAIL_3: ${{ secrets.IRGUN_TEST_EMAIL_3 }}
+        run: python3 .github/regression/validate_accounts.py
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '~26.6.0'
@@ -85,7 +105,7 @@ jobs:
           if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
           bash .github/regression/run_ui.sh core "$UDID"
       - name: Send simulator push through SpringBoard and require native tap
-        if: always()
+        if: ${{ always() && steps.qa-accounts.outcome == 'success' }}
         shell: bash
         run: |
           if [ "$DEVICE_FAMILY" = iPhone ]; then UDID="$IPHONE_UDID"; else UDID="$IPAD_UDID"; fi
@@ -130,15 +150,29 @@ jobs:
     needs: device
     runs-on: macos-26
     timeout-minutes: 90
+    # Hold slot 2 throughout writer, independent reader and cleanup. A future
+    # run cannot change this account between the two devices' observations.
+    concurrency:
+      group: ios-account-qa-2
+      queue: max
+      cancel-in-progress: false
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: '1'
       SIMULATOR_VIDEO_ID: ''
-      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL }}
-      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD }}
+      IRGUN_TEST_EMAIL: ${{ secrets.IRGUN_TEST_EMAIL_2 }}
+      IRGUN_TEST_PASSWORD: ${{ secrets.IRGUN_TEST_PASSWORD_2 }}
+      IRGUN_QA_SLOT: '2'
       IRGUN_SYNC_MARKER: '${{ github.run_id }}${{ github.run_attempt }}'
     steps:
       - uses: actions/checkout@v7
+      - name: Require distinct dedicated QA accounts
+        id: qa-accounts
+        env:
+          IRGUN_QA_EMAIL_1: ${{ secrets.IRGUN_TEST_EMAIL }}
+          IRGUN_QA_EMAIL_2: ${{ secrets.IRGUN_TEST_EMAIL_2 }}
+          IRGUN_QA_EMAIL_3: ${{ secrets.IRGUN_TEST_EMAIL_3 }}
+        run: python3 .github/regression/validate_accounts.py
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '~26.6.0'
