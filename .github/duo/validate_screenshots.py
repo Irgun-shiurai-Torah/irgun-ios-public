@@ -6,6 +6,7 @@ builds an XCTest window screenshot differs by a single pixel from the correspond
 screen framebuffer. A <=2px dimension correction is allowed; a screenshot of the
 wrong panel is never resized to pretend it came from the desired Duo display.
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -56,5 +57,14 @@ for file in files:
         "app_store_width": target_width,
         "app_store_height": target_height,
     })
+# The Oct 22 Duo run #7 produced 26 pixel-identical black PNGs from
+# XCUIScreen.main. Reject invalid repeated frames even when dimensions match.
+fingerprints = {hashlib.sha256(file.read_bytes()).hexdigest() for file in files}
+if len(fingerprints) < 8:
+    raise SystemExit(
+        f"Only {len(fingerprints)} distinct images among {len(files)} screenshots; "
+        "likely an inactive/black Duo display. Genuine page captures required."
+    )
+
 print(f"Validated {len(summary)} {pose} Duo screenshots")
 Path("duo-results/dimensions.json").write_text(json.dumps(summary, indent=2))

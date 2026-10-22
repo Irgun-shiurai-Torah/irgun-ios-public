@@ -96,6 +96,7 @@ jobs:
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
           ruby scripts/patch_xcode_project.rb
           python3 .github/simulator/prepare.py native
+          python3 .github/duo/patch_capture.py
           python3 .github/duo/migrate_scene.py
           ruby .github/simulator/configure.rb
           ruby .github/duo/add_scene.rb
