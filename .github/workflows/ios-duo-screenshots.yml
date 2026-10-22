@@ -1,0 +1,158 @@
+name: iPhone Duo Screenshots
+
+on:
+  workflow_dispatch:
+    inputs:
+      pose:
+        description: Which iPhone Duo display to capture?
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - folded
+          - unfolded
+
+permissions:
+  contents: read
+
+jobs:
+  screenshot:
+    name: Duo ${{ matrix.pose }} screenshots
+    runs-on: macos-26
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        pose: [folded, unfolded]
+    if: ${{ inputs.pose == 'both' || inputs.pose == matrix.pose }}
+    env:
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      BUILD_NUMBER: "1"
+      SIMULATOR_VIDEO_ID: ""
+      DUO_POSE: ${{ matrix.pose }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select Xcode 27.1 (required for iPhone Duo)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "~27.1.0"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Identify Xcode and iPhone Duo simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p duo-results
+          xcodebuild -version | tee duo-results/xcode-version.txt
+          xcrun simctl list devices available --json > duo-results/devices.json
+          xcrun simctl list runtimes > duo-results/runtimes.txt
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          devices=json.loads(Path('duo-results/devices.json').read_text())['devices']
+          matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('isAvailable') and 'iPhone Duo' in d['name']]
+          if not matches:
+              raise SystemExit('iPhone Duo simulator is not installed on this runner. Install an Xcode 27.1 image with Duo runtime.')
+          runtime,d=matches[0]
+          print('Selected', d['name'], runtime, d['udid'])
+          Path('duo-results/selected-device.json').write_text(json.dumps({'runtime':runtime,**d},indent=2))
+          with open(os.environ['GITHUB_ENV'],'a') as out:out.write('SIMULATOR_UDID='+d['udid']+'\n')
+          PY
+      - name: Prepare existing native app and screenshot test
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "IOS_MARKETING_VERSION=$(node -p "require('./package.json').version.replace(/-ios$/, '')")" >> "$GITHUB_ENV"
+          npm install --no-audit --no-fund
+          python3 .github/simulator/prepare.py web
+          npm run build
+          npx cap add ios
+          npx cap sync ios
+          npx @capacitor/assets generate --ios
+          python3 scripts/prepare_ios_cloud.py
+          ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
+          ruby scripts/patch_xcode_project.rb
+          python3 .github/simulator/prepare.py native
+          ruby .github/simulator/configure.rb
+          bash scripts/assert_no_direct_swiftuicore.sh
+          if [ -f ios/App/Podfile ]; then (cd ios/App && pod install --repo-update); fi
+      - name: Boot and set Duo fold position
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "$SIMULATOR_UDID"
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
+            -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
+          codesign -f -s - "$RUNNER_TEMP/duo_fold"
+          xcrun simctl install "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" 2>/dev/null || true
+          xcrun simctl spawn "$SIMULATOR_UDID" mkdir -p /tmp/irgun-duo
+          # Copy helper to simulator via app container where simctl spawn can execute it.
+          xcrun simctl spawn "$SIMULATOR_UDID" /bin/sh -c 'true'
+          xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
+      - name: Run original App Store screenshot XCTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER=(-project ios/App/App.xcodeproj)
+          if [ -d ios/App/App.xcworkspace ]; then CONTAINER=(-workspace ios/App/App.xcworkspace); fi
+          xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/DuoDerivedData" \
+            -resultBundlePath duo-results/DuoScreenshots.xcresult \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
+            -only-testing:SimulatorUITests/PlaybackUITests/testZZAppStoreScreenshotsOfAllPublicPages \
+            test 2>&1 | tee duo-results/xcodebuild.log
+      - name: Export captured screenshots
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p duo-results/attachments
+          if [ -d duo-results/DuoScreenshots.xcresult ]; then
+            xcrun xcresulttool export attachments --path duo-results/DuoScreenshots.xcresult --output-path duo-results/attachments || true
+            xcrun xcresulttool get test-results summary --path duo-results/DuoScreenshots.xcresult > duo-results/test-summary.json || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl io "$SIMULATOR_UDID" screenshot duo-results/final-screen.png || true
+            xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          fi
+      - name: Package App Store PNGs with dimension validation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f duo-results/attachments/manifest.json ]; then
+            echo "::error::No screenshot attachment manifest; check Xcode test logs"
+            exit 1
+          fi
+          mkdir -p simulator-results
+          cp -R duo-results/attachments simulator-results/
+          python3 .github/simulator/package_screenshots.py
+          mkdir -p duo-results/downloads
+          python3 - <<'PY'
+          from pathlib import Path
+          import os,subprocess
+          files=sorted(Path('simulator-results/app-store').glob('*.png'))
+          if len(files)!=26:
+              raise SystemExit('Expected 26 screenshots, found '+str(len(files)))
+          expected={'folded':(1398,2034),'unfolded':(2007,2853)}
+          expected_pixels=set(expected[os.environ['DUO_POSE']])
+          for file in files:
+              text=subprocess.check_output(['sips','-g','pixelWidth','-g','pixelHeight',str(file)],text=True)
+              vals=[int(x.split(': ')[1]) for x in text.splitlines() if 'pixelWidth:' in x or 'pixelHeight:' in x]
+              if len(vals)!=2 or set(vals)!=expected_pixels:
+                  raise SystemExit(f'{file}: {vals}; expected {expected[os.environ["DUO_POSE"]]} for {os.environ["DUO_POSE"]} panel')
+          PY
+          cp simulator-results/screenshot-downloads/*.zip duo-results/downloads/
+      - name: Upload PNGs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: irgun-iphone-duo-${{ matrix.pose }}-${{ github.run_number }}
+          path: |
+            duo-results/
+            simulator-results/app-store/
+          if-no-files-found: warn
+          retention-days: 14
