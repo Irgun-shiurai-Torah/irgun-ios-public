@@ -87,10 +87,11 @@ jobs:
           xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
             -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
           codesign -f -s - "$RUNNER_TEMP/duo_fold"
-          xcrun simctl install "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" 2>/dev/null || true
-          xcrun simctl spawn "$SIMULATOR_UDID" mkdir -p /tmp/irgun-duo
-          # Copy helper to simulator via app container where simctl spawn can execute it.
-          xcrun simctl spawn "$SIMULATOR_UDID" /bin/sh -c 'true'
+          # simctl spawn accepts an absolute host path to a simulator-architecture binary.
+          # 0 degrees uses the cover screen; 180 degrees uses the unfolded inner screen.
+          if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
+          xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
+          sleep 5
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
       - name: Run original App Store screenshot XCTest
         shell: bash
