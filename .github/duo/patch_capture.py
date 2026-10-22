@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Duo screenshots are captured from XCUIScreen.screens, never inactive XCUIScreen.main.
 """Use the active iPhone Duo display for *real* XCTest screenshots.
 
 XCUIScreen.main is always the cover display. On an unfolded Duo that screen
