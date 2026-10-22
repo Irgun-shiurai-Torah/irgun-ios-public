@@ -59,13 +59,14 @@
                 let rects = $0["controlRects"] as? [String: [String: Any]] ?? [:]
                 return rects[key] != nil
             }
-            for _ in 0..<7 {
+            for _ in 0..<24 {
                 let s=account(), controls=s["controls"] as? [String: [String: Any]] ?? [:]
                 report["collectionRequests"] = s["requests"] ?? []
                 report["lastScreen"] = s["screen"] as? String ?? ""
                 report["lastControlKeys"] = controls.keys.sorted()
                 report["keyboardVisible"] = app.keyboards.firstMatch.exists
                 report["authBusy"] = s["authBusy"] as? Bool ?? false
+                report["lastTargetRect"] = (s["controlRects"] as? [String:[String:Any]])?[key] ?? [String:Any]()
                 persistReport()
                 if let point=controls[key] {
                     let beforeClick = number(s,"lastClickSequence")
@@ -98,9 +99,23 @@
                     let endX=number(rect,"x")>right ? left:right
                     origin.withOffset(CGVector(dx:startX,dy:y)).press(forDuration:0.05,
                         thenDragTo:origin.withOffset(CGVector(dx:endX,dy:y)))
-                } else if let rect = rects[key], number(rect,"y") < 0 {
-                    app.webViews.firstMatch.swipeDown()
-                } else { app.webViews.firstMatch.swipeUp() }
+                } else {
+                    // Full-screen flicks overshot the fixed lecture on iPhone
+                    // and alternated above/below it until the attempt limit.
+                    // Move a bounded distance, hold to stop inertia, then read
+                    // the real target rectangle again before deciding direction.
+                    let height=number(s,"height"), width=number(s,"width")
+                    let targetY=rects[key].map { number($0,"y") }
+                    let towardUp=targetY.map { $0 >= height*0.35 } ?? true
+                    let distance=min(260,max(100,abs((targetY ?? height)-height*0.5)))
+                    let startY=towardUp ? height*0.78 : height*0.32
+                    let endY=max(100,min(height-100,startY+(towardUp ? -distance:distance)))
+                    let origin=app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                    origin.withOffset(CGVector(dx:width*0.5,dy:startY)).press(
+                        forDuration:0.1,
+                        thenDragTo:origin.withOffset(CGVector(dx:width*0.5,dy:endY)),
+                        withVelocity:.slow,thenHoldForDuration:0.2)
+                }
             }
             XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
         }

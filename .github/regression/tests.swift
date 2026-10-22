@@ -150,7 +150,7 @@
         let finalNative = finalState["nativePlayer"] as? [String:Any] ?? [:]
         // Log only navigation/click geometry, never form values or credentials.
         // The full XCTest attachments are not present in the compact CI logs.
-        let diagnostics: [String:Any] = [
+        let navigationEvidence: [String:Any] = [
             "screen": finalRegression["screen"] ?? "",
             "renderedScreen": finalState["renderedScreen"] ?? "",
             "lastClickKey": finalRegression["lastClickKey"] ?? "",
@@ -166,7 +166,7 @@
             "nativeSurfaceY": number(finalNative,"surfaceY"),
             "nativeSurfaceHeight": number(finalNative,"surfaceHeight")
         ]
-        XCTFail("Real DOM click did not register or native control was unavailable: \(key). Navigation evidence: \(diagnostics)")
+        XCTFail("Real DOM click did not register or native control was unavailable: \(key). Navigation evidence: \(navigationEvidence)")
         throw Failure.timedOut(key)
     }
 
@@ -1010,8 +1010,21 @@
             }
         }
         try regressionTap("closeWatch")
+        _ = try waitFor("Writer finishes closing Watch before opening Library",timeout:60) { state in
+            let reg=state["regression"] as? [String:Any] ?? [:]
+            let native=state["nativePlayer"] as? [String:Any] ?? [:]
+            return (reg["currentId"] as? String ?? "").isEmpty &&
+                native["active"] as? Bool != true
+        }
         try regressionTap("library")
+        try regressionWait("Writer Library tabs are rendered before selecting Playlists") {
+            $0["screen"] as? String == "library" &&
+                ($0["rects"] as? [String:Any])?["playlists"] != nil
+        }
         try regressionTap("playlists")
+        try regressionWait("Writer Playlists form is rendered before typing") {
+            ($0["rects"] as? [String:Any])?["playlistName"] != nil
+        }
         if !(regression()["syncPlaylistNames"] as? [String] ?? []).contains(name) {
             try regressionEnter("playlistName",name)
         }

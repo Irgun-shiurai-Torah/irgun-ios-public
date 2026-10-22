@@ -844,7 +844,10 @@ final class PlaybackUITests: XCTestCase {
         try openSample(); try assertMovingVideo()
         // Start on the picture, below the 44pt toolbar. Toolbar buttons own
         // their touches just as they do on Android.
-        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        // Use a defined swipe velocity: the default drag stretches the same
+        // gesture over a much longer distance on iPad than on iPhone.
+        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85),
+                                 withVelocity: .fast, thenHoldForDuration: 0)
         _ = try waitFor("Swipe must minimize playing video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == true }
         try assertMovingVideo()
         let s=snapshot()
@@ -856,7 +859,8 @@ final class PlaybackUITests: XCTestCase {
         }
         try tapWebButton("Pause video")
         _ = try waitFor("Pause before swipe") { $0["videoPlaying"] as? Bool == false }
-        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85))
+        videoPoint(0.5,0.28).press(forDuration: 0.05, thenDragTo: videoPoint(0.5,0.85),
+                                 withVelocity: .fast, thenHoldForDuration: 0)
         _ = try waitFor("Swipe must minimize paused video") { $0["minimized"] as? Bool == true && $0["videoPlaying"] as? Bool == false }
         Thread.sleep(forTimeInterval: 1)
         XCTAssertFalse(snapshot()["videoPlaying"] as? Bool ?? true); evidence("swipe-minimize")
