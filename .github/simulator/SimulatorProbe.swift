@@ -14,6 +14,13 @@ final class SimulatorProbe {
     private var timer: Timer?
     private var polling = false
     private var nativePushAuthorized = false
+    private var notificationObservers = [NSObjectProtocol]()
+    private var nativeBackgroundCount = 0
+    private var nativeLifecycleObservedAt = 0.0
+    private var nativeKeyboardObserved = false
+    private var nativeKeyboardVisible = false
+    private var nativeKeyboardObservedAt = 0.0
+    private var latestState = [String:Any]()
     private var listener: NWListener?
     private let observationQueue = DispatchQueue(label: "org.irgun.simulator.observations")
     private let observationLock = NSLock()
@@ -81,6 +88,7 @@ final class SimulatorProbe {
         ])
         self.panel = panel
         self.status = label
+        observeNativeState()
         startObservations()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.poll() }
         poll()
@@ -109,6 +117,60 @@ final class SimulatorProbe {
             connection.start(queue: self?.observationQueue ?? .global())
         }
         listener.start(queue: observationQueue)
+    }
+
+    // UIKit notifications are independent of WebKit's JS timer and XCTest's
+    // cached accessibility tree. Publish them immediately, including while the
+    // app's real audio background mode keeps the observation listener alive.
+    private func observeNativeState() {
+        let center = NotificationCenter.default
+        for name in [UIApplication.didEnterBackgroundNotification,
+                     UIApplication.willEnterForegroundNotification,
+                     UIApplication.didBecomeActiveNotification,
+                     UIApplication.willResignActiveNotification] {
+            notificationObservers.append(center.addObserver(forName:name,object:nil,queue:.main) { [weak self] event in
+                guard let self = self else { return }
+                if event.name == UIApplication.didEnterBackgroundNotification { self.nativeBackgroundCount += 1 }
+                self.nativeLifecycleObservedAt = Date().timeIntervalSince1970 * 1000
+                self.publishObservation()
+            })
+        }
+        for name in [UIResponder.keyboardDidShowNotification,
+                     UIResponder.keyboardDidChangeFrameNotification,
+                     UIResponder.keyboardDidHideNotification] {
+            notificationObservers.append(center.addObserver(forName:name,object:nil,queue:.main) { [weak self] event in
+                guard let self = self else { return }
+                self.nativeKeyboardObserved = true
+                self.nativeKeyboardObservedAt = Date().timeIntervalSince1970 * 1000
+                if event.name == UIResponder.keyboardDidHideNotification {
+                    self.nativeKeyboardVisible = false
+                } else if let frame = event.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+                          let window = self.window {
+                    let local = window.convert(frame,from:nil)
+                    let intersection = window.bounds.intersection(local)
+                    self.nativeKeyboardVisible = !intersection.isNull && intersection.height > 1 && intersection.width > 1
+                }
+                self.publishObservation()
+            })
+        }
+    }
+
+    private func publishObservation() {
+        var state = latestState
+        state["nativeApplicationState"] = UIApplication.shared.applicationState.rawValue
+        state["nativeBackgroundCount"] = nativeBackgroundCount
+        state["nativeLifecycleObservedAt"] = nativeLifecycleObservedAt
+        state["nativeKeyboardObserved"] = nativeKeyboardObserved
+        state["nativeKeyboardVisible"] = nativeKeyboardVisible
+        state["nativeKeyboardObservedAt"] = nativeKeyboardObservedAt
+        state["nativeObservationPublishedAt"] = Date().timeIntervalSince1970 * 1000
+        if let merged = try? JSONSerialization.data(withJSONObject: state),
+           let value = String(data:merged,encoding:.utf8) {
+            status?.accessibilityValue = value
+            observationLock.lock()
+            observation = merged + Data([10])
+            observationLock.unlock()
+        }
     }
 
     @objc private func enablePushPermission() {
@@ -156,12 +218,8 @@ final class SimulatorProbe {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
                 state["nativePlayer"] = IrgunUnifiedPlayerPlugin.current?.simulatorSnapshot() ?? [:]
                 state["nativePushAuthorized"] = self.nativePushAuthorized
-                if let merged = try? JSONSerialization.data(withJSONObject: state), let value = String(data: merged, encoding: .utf8) {
-                    self.status?.accessibilityValue = value
-                    self.observationLock.lock()
-                    self.observation = merged + Data([10])
-                    self.observationLock.unlock()
-                }
+                self.latestState = state
+                self.publishObservation()
             }
         }
     }

@@ -76,21 +76,27 @@
             let fullState=snapshot()
             let snap=fullState["regression"] as? [String:Any] ?? [:]
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
-            if let point=controls[key] {
-                let previousClick=number(snap,"lastClickSequence")
-                let previousAccountClick=number(snap,"accountClickSequence")
-                app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-                    .withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+            let previousClick=number(snap,"lastClickSequence")
+            let previousAccountClick=number(snap,"accountClickSequence")
+            let fixtureTapped = key == "open" && tapWatchFixture(snap)
+            if fixtureTapped || (key != "open" && controls[key] != nil) {
+                let point = controls[key] ?? [:]
+                if !fixtureTapped {
+                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        .withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                }
                 // Require a real captured DOM click on the requested control.
                 let deadline=Date().addingTimeInterval(3)
                 while Date() < deadline {
                     let observed=regression()
                     let genericClick =
                         number(observed,"lastClickSequence") > previousClick &&
-                        observed["lastClickKey"] as? String == key
+                        observed["lastClickKey"] as? String == key &&
+                        (key != "open" || watchFixtureClickMatches(observed,requested:snap))
                     let accountClick =
                         number(observed,"accountClickSequence") > previousAccountClick &&
-                        observed["accountClickKey"] as? String == key
+                        observed["accountClickKey"] as? String == key &&
+                        (key != "open" || watchFixtureClickMatches(observed,requested:snap,clickIdKey:"accountClickTargetId"))
                     if genericClick || accountClick { return }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
@@ -773,10 +779,33 @@
             XCTFail("Native simulator lock API unavailable; real lock test cannot run")
             throw Failure.timedOut("Simulator lock button")
         }
-        XCUIDevice.shared.perform(lockSelector)
+        let beforeLock = snapshot()
+        let backgroundCount = number(beforeLock,"nativeBackgroundCount")
+        let lockStartedAt = Date().timeIntervalSince1970 * 1000
         let springboard = XCUIApplication(bundleIdentifier:"com.apple.springboard")
-        _ = try waitFor("The device must leave the app after genuine screen lock", timeout: 15) { _ in
-            self.app.state != .runningForeground
+        for attempt in 0..<2 {
+            XCUIDevice.shared.perform(lockSelector)
+            let deadline = Date().addingTimeInterval(12)
+            var observed = snapshot()
+            while Date() < deadline && number(observed,"nativeBackgroundCount") <= backgroundCount {
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                observed = snapshot()
+            }
+            // Retry only a demonstrably undelivered lock. Never toggle again
+            // when UIKit became inactive/background or the observation stalled.
+            guard attempt == 0,
+                  observed["nativeApplicationState"] as? Int == 0,
+                  number(observed,"nativeObservationPublishedAt") > lockStartedAt,
+                  number(observed,"nativeBackgroundCount") == backgroundCount,
+                  springboard.state != .runningForeground else { break }
+            print("UITEST: lock did not reach UIKit; retrying the real lock button once")
+        }
+        // app.state can be cached by XCTest. Require a real UIKit background
+        // transition after THIS lock action, independently of video/JS clocks.
+        _ = try waitFor("The device must leave the app after genuine screen lock", timeout: 20) {
+            self.number($0,"nativeBackgroundCount") > backgroundCount &&
+                self.number($0,"nativeLifecycleObservedAt") >= lockStartedAt &&
+                self.number($0,"nativeApplicationState") == 2
         }
         Thread.sleep(forTimeInterval:12)
         XCUIDevice.shared.perform(lockSelector)

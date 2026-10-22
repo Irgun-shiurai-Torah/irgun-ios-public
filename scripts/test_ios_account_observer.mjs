@@ -6,24 +6,29 @@ import { selectIosAccountFixture } from '../.github/simulator/sample-selection.j
 
 // Execute the unmodified account observer in a read-only fake DOM. The test
 // checks real selection semantics without touching login data or network APIs.
-function snapshotFor({speakerAssigned=true}={}) {
-  const make = (id, y) => ({
+function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests'}={}) {
+  class Element {}
+  const listeners = new Map();
+  const make = (id, y, title=false) => Object.assign(new Element(),{
     dataset:{watch:id},
     disabled:false,
-    innerText:`Watch ${id}`,
-    classList:{contains:()=>false},
+    innerText:title ? `Test lecture ${id}` : `Watch ${id}`,
+    textContent:title ? `Test lecture ${id}` : `Watch ${id}`,
+    classList:{contains:name=>title && name==='media-title'},
     getBoundingClientRect:()=>({left:10,top:y,width:100,height:36}),
-    closest:()=>null,
+    closest(selector){return selector==='[data-watch]' ? this : null;},
     contains(other){return this===other;}
   });
   const first=make('new-unattributed',20);
   const second=make('1235946832',90);
   const account=make('account',155);
-  const elements=[first,second,account];
+  const title=make('1235946832',220,true);
+  const elements=[first,second,account,...(titleButton?[title]:[])];
   const document={
-    addEventListener(){},
+    addEventListener(name,callback){listeners.set(name,callback);},
+    getElementById:()=>null,
     querySelectorAll(query){
-      if(query==='[data-watch]')return [first,second];
+      if(query==='[data-watch]')return [first,second,...(titleButton?[title]:[])];
       if(query==='.bottom-nav [data-nav="account"]')return [account];
       return [];
     },
@@ -40,14 +45,15 @@ function snapshotFor({speakerAssigned=true}={}) {
     ]),
     videos:[],libraryReady:true,loading:false,screen:'shiurim',
     myLikes:new Set(),watchLater:new Set(),follows:new Map(),history:[],playlists:[],
-    user:null,isAdmin:false,watchVideo:null,watchVimeo:null,authBusy:false
+    user:null,isAdmin:false,watchVideo:null,watchVimeo:null,authBusy:false,watchComments:[]
   };
-  const context={window:{},document,state,apiJson:async()=>({}),
-    innerWidth:390,innerHeight:844,iosNativeActive:()=>false,
+  const context={window:{},document,state,Element,apiJson:async()=>({}),apiFetch:async()=>({}),
+    innerWidth:390,innerHeight:844,iosNativeActive:()=>false,audio:{currentTime:0,paused:true,ended:false},
     speakerLabel:id=>id==='rav-tested'?'Rav Tested':'',
     videoId:item=>String(item?.id||'')};
   context.window.__ISTQAChooseWatchButton = elements => selectIosAccountFixture(elements,state.videoById);
-  vm.runInNewContext(readFileSync(new URL('../.github/account-tests/observer.js',import.meta.url),'utf8'),context);
+  vm.runInNewContext(readFileSync(new URL(`../.github/${observer}/${observer==='regression'?'account-observer':'observer'}.js`,import.meta.url),'utf8'),context);
+  if(clickId) listeners.get('click')({target:make(clickId,320)});
   return context.window.ISTAccountTest.snapshot();
 }
 test('account UI test selects a real speaker Follow lecture, not newest unattributed video',()=>{
@@ -79,3 +85,24 @@ test('account fixture prioritizes a saved verified backup and rejects unusable s
   videos.set('1235946832',{hasAudio:true,_speakerIds:[]});
   assert.equal(selectIosAccountFixture(items,videos),null);
 });
+
+for (const observer of ['account-tests','regression']) {
+  test(`${observer} chooses the lecture title rather than the generic Watch cover`,()=> {
+    const snapshot=snapshotFor({titleButton:true,observer});
+    assert.equal(snapshot.controls.open.label,'Test lecture 1235946832');
+    assert.equal(snapshot.watchFixture.id,'1235946832');
+    assert.equal(snapshot.watchFixture.title,'Test lecture 1235946832');
+    assert.equal(snapshot.controlRects.open.y,238);
+  });
+  test(`${observer} reports the actual clicked lecture ID, including a wrong neighbour`,()=> {
+    const correct=snapshotFor({titleButton:true,clickId:'1235946832',observer});
+    assert.equal(correct.lastClickSequence,1);
+    assert.equal(correct.lastClickKey,'open');
+    assert.equal(correct.lastClickTargetId,correct.watchFixture.id);
+    const wrong=snapshotFor({titleButton:true,clickId:'1235142515',observer});
+    assert.equal(wrong.lastClickKey,'open');
+    assert.equal(wrong.lastClickTargetId,'1235142515');
+    assert.notEqual(wrong.lastClickTargetId,wrong.watchFixture.id,
+      'A generic open click must not prove that the saved fixture was reopened');
+  });
+}

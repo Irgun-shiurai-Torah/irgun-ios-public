@@ -37,7 +37,12 @@ export function selectIosAccountFixture(elements, videosById, savedId = '') {
   for (const id of [savedId, ...IOS_ACCOUNT_SAMPLE_IDS]) {
     if (!IOS_ACCOUNT_SAMPLE_IDS.includes(String(id))) continue;
     const found = eligible.find(element => String(element.dataset.watch || '') === id);
-    if (found) return found;
+    if (found) {
+      // Native XCTest can identify the existing title button by its real label.
+      // Cover buttons all share 'Watch' and stale coordinates can hit a neighbour.
+      return eligible.find(element => String(element.dataset.watch || '') === id &&
+        element.classList?.contains('media-title')) || found;
+    }
   }
   return null;
 }

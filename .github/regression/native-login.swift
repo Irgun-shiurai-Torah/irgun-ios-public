@@ -72,7 +72,15 @@
 
     // Shared by comments, login, offline and cross-device regression tests.
     private func dismissNativeKeyboard() throws {
-        func keyboardClosed() -> Bool { !app.keyboards.firstMatch.exists }
+        func keyboardClosed() -> Bool {
+            let native = snapshot()
+            if native["nativeKeyboardObserved"] as? Bool == true {
+                // An offscreen Keyboard AX node can survive its real hide event.
+                // A show event still requires genuine native dismissal.
+                return native["nativeKeyboardVisible"] as? Bool == false
+            }
+            return !app.keyboards.firstMatch.exists
+        }
         func waitForClosure(_ seconds: TimeInterval) -> Bool {
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
@@ -109,6 +117,8 @@
                 if waitForClosure(3) { return }
             }
         }
+        let native = snapshot()
+        print("UITEST keyboard: observed=\(native["nativeKeyboardObserved"] ?? false) visible=\(native["nativeKeyboardVisible"] ?? false) eventAt=\(number(native,"nativeKeyboardObservedAt"))")
         XCTFail("Native keyboard remained visible after real accessory dismissal attempts")
         throw Failure.timedOut("keyboard dismissal")
     }

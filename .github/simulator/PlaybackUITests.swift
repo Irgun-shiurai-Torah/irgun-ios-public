@@ -66,6 +66,25 @@ final class PlaybackUITests: XCTestCase {
         (state[key] as? NSNumber)?.doubleValue ?? 0
     }
 
+    // Tap the existing catalogue title through native accessibility, then let
+    // the caller require a captured click on the exact server-backed fixture ID.
+    private func tapWatchFixture(_ state: [String:Any]) -> Bool {
+        guard let fixture = state["watchFixture"] as? [String:Any],
+              let id = fixture["id"] as? String, !id.isEmpty,
+              let title = fixture["title"] as? String, !title.isEmpty else { return false }
+        let button = app.webViews.buttons.matching(NSPredicate(format:"label == %@",title)).firstMatch
+        guard button.exists && button.isHittable else { return false }
+        button.tap()
+        return true
+    }
+
+    private func watchFixtureClickMatches(_ observed: [String:Any], requested: [String:Any],
+                                          clickIdKey: String = "lastClickTargetId") -> Bool {
+        guard let fixture = requested["watchFixture"] as? [String:Any],
+              let id = fixture["id"] as? String, !id.isEmpty else { return false }
+        return observed[clickIdKey] as? String == id
+    }
+
     @discardableResult
     private func waitFor(_ message: String, timeout: TimeInterval = 40,
                          condition: @escaping ([String: Any]) -> Bool) throws -> [String: Any] {

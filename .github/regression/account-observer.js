@@ -29,6 +29,7 @@ if (!window.__ISTAccountClickObserverInstalled) {
     window.__ISTAccountLastClick = {
       sequence:Number(window.__ISTAccountLastClick?.sequence || 0) + 1,
       key:match[0],
+      targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '') : '',
       at:Date.now()
     };
   }, true);
@@ -134,6 +135,7 @@ window.ISTAccountTest = { snapshot() {
     saved: '[data-library-section="later"]', following: '[data-library-section="following"]'
   };
   const controls = {}, controlRects = {}, controlScrollers = {};
+  let watchFixture = null;
   let qaMarker = window.__ISTAccountQaCommentMarker;
   if (!qaMarker) {
     try { qaMarker = JSON.parse(localStorage.getItem('istIOSQACommentMarker') || 'null'); } catch (_) {}
@@ -179,6 +181,9 @@ window.ISTAccountTest = { snapshot() {
       }
     }
     const element = candidates[0];
+    if (key === 'open' && element) {
+      watchFixture = {id:String(element.dataset.watch || ''), title:String(element.textContent || '').trim()};
+    }
     if (element) {
       const r=element.getBoundingClientRect();
       controlRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,width:r.width,height:r.height};
@@ -201,8 +206,9 @@ window.ISTAccountTest = { snapshot() {
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
   const native = iosNativeActive() ? iosUnified.state : null;
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,watchFixture,
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
+    lastClickTargetId:String(window.__ISTAccountLastClick?.targetId||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
     name:state.user?.name||'',accountEmail:state.user?.email||'',screen:state.screen,likes:[...state.myLikes],later:[...state.watchLater],
     follows:[...state.follows.keys()],history:state.history.map(x=>String(x.rawAudioId||x.videoId||x.id||x.vimeoId||'').replace(/^audio:/,'')),

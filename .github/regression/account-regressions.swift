@@ -94,12 +94,16 @@
                 report["keyboardVisible"] = app.keyboards.firstMatch.exists
                 report["authBusy"] = s["authBusy"] as? Bool ?? false
                 persistReport()
-                if let point=controls[key] {
-                    let beforeClick = number(s,"lastClickSequence")
+                let beforeClick = number(s,"lastClickSequence")
+                let fixtureTapped = key == "open" && tapWatchFixture(s)
+                if fixtureTapped || (key != "open" && controls[key] != nil) {
+                    let point = controls[key] ?? [:]
                     let web=app.webViews.firstMatch, box=web.frame
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
-                    web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    if !fixtureTapped {
+                        web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
+                    }
                     // JavaScript confirm blocks the observer's snapshot until
                     // XCTest responds. Do not retry the destructive tap while
                     // its real confirmation is waiting on screen.
@@ -110,7 +114,8 @@
                     while Date() < clickDeadline {
                         let observed = account()
                         if number(observed,"lastClickSequence") > beforeClick,
-                           observed["lastClickKey"] as? String == key { return }
+                           observed["lastClickKey"] as? String == key,
+                           key != "open" || watchFixtureClickMatches(observed,requested:s) { return }
                         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                     }
                     continue

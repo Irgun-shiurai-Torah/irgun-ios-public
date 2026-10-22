@@ -50,6 +50,7 @@
       window.__ISTRegressionLastClick = {
         sequence:Number(window.__ISTRegressionLastClick?.sequence || 0) + 1,
         key:match[0],
+        targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '') : '',
         at:Date.now()
       };
     }, true);
@@ -109,6 +110,7 @@
   window.ISTSimulator.snapshot = () => {
     const base = JSON.parse(previous());
     const selectors = {}, hitRects = {};
+    let watchFixture = null;
     for (const [key,selector] of Object.entries(keys)) {
       const elements = [...document.querySelectorAll(selector)];
       let matches = elements;
@@ -125,6 +127,7 @@
       });
       const target=el||matches[0];
       if (!target) continue;
+      if (key === 'open') watchFixture = {id:String(target.dataset.watch || ''), title:String(target.textContent || '').trim()};
       const r=target.getBoundingClientRect();
       hitRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};
       if (el) selectors[key]={x:r.left+r.width/2,y:r.top+r.height/2};
@@ -146,15 +149,17 @@
     const videoSpeed=document.getElementById('dmSpeed');
     const native=iosNativeActive() ? iosUnified.state : null;
     return JSON.stringify({...base,regression:{
-      controls:selectors,rects:hitRects,libraryTabsRect,
+      controls:selectors,rects:hitRects,libraryTabsRect,watchFixture,
       // Actual WKWebView viewport: native gestures require CSS-pixel bounds.
       // Without these, tests mis-classify offscreen controls and always scroll up.
       width:innerWidth,height:innerHeight,
       screen:state.screen,
       lastClickSequence:Number(window.__ISTRegressionLastClick?.sequence||0),
       lastClickKey:String(window.__ISTRegressionLastClick?.key||''),
+      lastClickTargetId:String(window.__ISTRegressionLastClick?.targetId||''),
       accountClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),
       accountClickKey:String(window.__ISTAccountLastClick?.key||''),
+      accountClickTargetId:String(window.__ISTAccountLastClick?.targetId||''),
       libraryTabsScrollLeft:Number(tabs?.scrollLeft)||0,
       language:currentLanguage(),documentDir:document.documentElement.dir,
       documentLang:document.documentElement.lang||'',
