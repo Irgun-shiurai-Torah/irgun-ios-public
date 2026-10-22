@@ -208,6 +208,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     private var pipPausedByUser = false
     private var overlayOccluded = false
     #if targetEnvironment(simulator)
+    private var simulatorControlTaps: [String: Int] = [:]
     private var simulatorFrameOutput: AVPlayerItemVideoOutput?
     private var simulatorFrameCount: Int = 0
     private var simulatorFrameTime: Double = 0
@@ -633,6 +634,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "error": player.currentItem?.error?.localizedDescription ?? ""
         ]
         #if targetEnvironment(simulator)
+        data["observedAt"] = Date().timeIntervalSince1970 * 1000
+        data["controlTaps"] = simulatorControlTaps
+        data["controlsMenuOpen"] = controlsMenuOpen
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
         data["controlsHideRemaining"] = max(0, controlsHideDeadline - ProcessInfo.processInfo.systemUptime)
@@ -1110,6 +1114,15 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         return image
     }
 
+    #if targetEnvironment(simulator)
+    // Observations of actual UIKit delivery only; never activate a control or
+    // extend its eight-second timeout on behalf of XCTest.
+    @objc private func observeSimulatorControlTap(_ sender: UIButton) {
+        guard let identifier = sender.accessibilityIdentifier else { return }
+        simulatorControlTaps[identifier, default: 0] += 1
+    }
+    #endif
+
     private func button(_ text: String, width: CGFloat, height: CGFloat = 44, selector: Selector) -> UIButton {
         let result = UIButton(type: .system)
         result.translatesAutoresizingMaskIntoConstraints = false
@@ -1118,6 +1131,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         result.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
         result.backgroundColor = .clear
         result.addTarget(self, action: selector, for: .touchUpInside)
+        #if targetEnvironment(simulator)
+        result.addTarget(self, action: #selector(observeSimulatorControlTap(_:)), for: .touchUpInside)
+        #endif
         result.addTarget(self, action: #selector(beginControlsTouch), for: .touchDown)
         result.addTarget(self, action: #selector(endControlsTouch), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         result.widthAnchor.constraint(equalToConstant: width).isActive = true
