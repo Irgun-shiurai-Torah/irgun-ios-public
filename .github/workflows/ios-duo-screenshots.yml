@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pose: [folded, unfolded]
+        pose: ${{ fromJSON(inputs.pose == 'folded' && '["folded"]' || inputs.pose == 'unfolded' && '["unfolded"]' || '["folded","unfolded"]') }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
