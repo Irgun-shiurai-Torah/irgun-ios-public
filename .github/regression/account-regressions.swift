@@ -76,9 +76,9 @@
                 try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
                 return
             }
-            if key == "commentPost" || key == "commentSave" {
+            if key == "commentPost" {
                 let before = number(account(),"lastClickSequence")
-                try tapNativeFormButton([key == "commentPost" ? "Post Comment" : "Save comment"])
+                try tapNativeFormButton(["Post Comment"])
                 try awaitAccount("Real comment form submit tap: " + key) {
                     self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
                 }
@@ -106,6 +106,19 @@
                 let fixtureTapped = key == "open" && tapWatchFixture(s)
                 if fixtureTapped || (key != "open" && controls[key] != nil) {
                     let point = controls[key] ?? [:]
+                    let x = number(point,"x"), y = number(point,"y")
+                    let coveredByVideo = native["active"] as? Bool == true &&
+                        native["mode"] as? String == "video" && native["surfaceInteractive"] as? Bool == true &&
+                        x >= number(native,"surfaceX") && x <= number(native,"surfaceX") + number(native,"surfaceWidth") &&
+                        y >= number(native,"surfaceY") && y <= number(native,"surfaceY") + number(native,"surfaceHeight")
+                    if coveredByVideo {
+                        // WebKit's DOM hit test cannot see the UIKit video
+                        // above it. Native .tap() auto-scroll can put Save
+                        // underneath that surface. Move the scoped web control
+                        // below the player through a real content swipe first.
+                        regressionScroll(fullState,towardUp:false)
+                        continue
+                    }
                     let web=app.webViews.firstMatch, box=web.frame
                     XCTAssertTrue(box.width>0 && box.height>0)
                     // Use the same CSS-point mapping as the native playback suite.
@@ -121,9 +134,12 @@
                     let clickDeadline = Date().addingTimeInterval(3)
                     while Date() < clickDeadline {
                         let observed = account()
+                        let correctComment = key != "commentSave" && key != "commentEdit" ||
+                            (!(s["qaCommentId"] as? String ?? "").isEmpty &&
+                             observed["lastClickTargetId"] as? String == s["qaCommentId"] as? String)
                         if number(observed,"lastClickSequence") > beforeClick,
                            observed["lastClickKey"] as? String == key,
-                           key != "open" || watchFixtureClickMatches(observed,requested:s) { return }
+                           (key != "open" || watchFixtureClickMatches(observed,requested:s)), correctComment { return }
                         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                     }
                     continue

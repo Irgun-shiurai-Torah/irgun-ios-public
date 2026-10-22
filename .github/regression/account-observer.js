@@ -26,10 +26,12 @@ if (!window.__ISTAccountClickObserverInstalled) {
     const target = event.target instanceof Element ? event.target : null;
     const match = Object.entries(window.__ISTAccountControlQueries).find(([, query]) => target?.closest?.(query));
     if (!match) return;
+    const commentAttribute = {commentEdit:'editComment',commentSave:'saveComment',commentDelete:'deleteComment'}[match[0]];
     window.__ISTAccountLastClick = {
       sequence:Number(window.__ISTAccountLastClick?.sequence || 0) + 1,
       key:match[0],
-      targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '') : '',
+      targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '')
+        : commentAttribute ? String(target?.closest?.(match[1])?.dataset[commentAttribute] || '') : '',
       at:Date.now()
     };
   }, true);
@@ -216,6 +218,7 @@ window.ISTAccountTest = { snapshot() {
     playlists:state.playlists.map(x=>({id:x.id,name:x.name,items:x.items.length})),
     watchId:state.watchVideo?String(videoId(state.watchVideo)):'',
     watchHasAudio:Boolean(state.watchVideo?.hasAudio),
+    qaCommentId:qaComment ? String(qaComment.id) : '',
     qaCommentPhase,qaCommentVisible:Boolean(qaComment),qaDraftValid,
     qaDraftMarker:qaDraftMatch?.[1] || '',
     commentComposerFocused:document.activeElement?.id === 'commentText',

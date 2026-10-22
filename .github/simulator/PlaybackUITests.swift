@@ -547,15 +547,29 @@ final class PlaybackUITests: XCTestCase {
                        "Do not construct a second HTML media player")
         try assertMovingVideo()
         evidence("reported-shiur-moving")
-        try tapWebButton("Pause video")
-        _ = try waitFor("Reported shiur native Pause") { $0["videoPlaying"] as? Bool == false }
-        let paused = number(snapshot(), "videoTime")
-        Thread.sleep(forTimeInterval: 2)
-        XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
-        try tapWebButton("Play video")
-        try assertMovingVideo()
-        XCTAssertFalse(snapshot()["fallbackBanner"] as? Bool ?? true)
-        evidence("reported-shiur-resumed")
+        // One successful rerun does not explain an intermittent Resume stall.
+        // Exercise repeated real transport actions on the same source/item,
+        // retaining paused-clock and decoded-frame proof on every cycle.
+        let owner = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+        for cycle in 1...3 {
+            try tapWebButton("Pause video")
+            _ = try waitFor("Reported shiur native Pause cycle \(cycle)") { $0["videoPlaying"] as? Bool == false }
+            let paused = number(snapshot(), "videoTime")
+            Thread.sleep(forTimeInterval: 2)
+            XCTAssertEqual(number(snapshot(), "videoTime"), paused, accuracy: 0.3)
+            evidence("reported-shiur-paused-\(cycle)")
+            try tapWebButton("Play video")
+            try assertMovingVideo()
+            let resumed = snapshot()
+            let current = resumed["nativePlayer"] as? [String:Any] ?? [:]
+            if owner["active"] as? Bool == true {
+                XCTAssertEqual(current["id"] as? String,owner["id"] as? String)
+                XCTAssertEqual(number(current,"itemEpoch"),number(owner,"itemEpoch"))
+            }
+            XCTAssertEqual(resumed["videoSource"] as? String,playingSource)
+            XCTAssertFalse(resumed["fallbackBanner"] as? Bool ?? true)
+            evidence("reported-shiur-resumed-\(cycle)")
+        }
     }
 
     func testReopeningSameShiurKeepsPlayerAndClock() throws {

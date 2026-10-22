@@ -6,7 +6,7 @@ import { selectIosAccountFixture } from '../.github/simulator/sample-selection.j
 
 // Execute the unmodified account observer in a read-only fake DOM. The test
 // checks real selection semantics without touching login data or network APIs.
-function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId=''}={}) {
+function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer='account-tests',commentDraft='',focusedId='',commentClick=null}={}) {
   class Element {}
   const listeners = new Map();
   const make = (id, y, title=false) => Object.assign(new Element(),{
@@ -55,6 +55,15 @@ function snapshotFor({speakerAssigned=true,titleButton=false,clickId='',observer
   context.window.__ISTQAChooseWatchButton = elements => selectIosAccountFixture(elements,state.videoById);
   vm.runInNewContext(readFileSync(new URL(`../.github/${observer}/${observer==='regression'?'account-observer':'observer'}.js`,import.meta.url),'utf8'),context);
   if(clickId) listeners.get('click')({target:make(clickId,320)});
+  if(commentClick) {
+    const attribute={commentSave:'saveComment',commentEdit:'editComment',commentDelete:'deleteComment'}[commentClick.kind];
+    const selector={commentSave:'[data-save-comment]',commentEdit:'[data-edit-comment]',commentDelete:'[data-delete-comment]'}[commentClick.kind];
+    const button=Object.assign(new Element(),{dataset:{[attribute]:commentClick.id},
+      closest:query=>query===selector?button:null});
+    // Real click listeners also receive clicks on a child inside the button.
+    const child=Object.assign(new Element(),{closest:query=>button.closest(query)});
+    listeners.get('click')({target:child});
+  }
   return context.window.ISTAccountTest.snapshot();
 }
 test('account UI test selects a real speaker Follow lecture, not newest unattributed video',()=>{
@@ -133,3 +142,14 @@ test('comment observer exposes no arbitrary draft text or marker for an unrelate
   assert.equal(observed.qaDraftMarker,'');
   assert.ok(!JSON.stringify(observed).includes(draft));
 });
+
+for (const kind of ['commentSave','commentEdit','commentDelete']) {
+  test(`comment observer captures the actual ${kind} target ID, including a wrong comment`,()=>{
+    const observed=snapshotFor({observer:'regression',commentClick:{kind,id:'owned-qa-comment'}});
+    assert.equal(observed.lastClickKey,kind);
+    assert.equal(observed.lastClickTargetId,'owned-qa-comment');
+    const wrong=snapshotFor({observer:'regression',commentClick:{kind,id:'another-comment'}});
+    assert.equal(wrong.lastClickKey,kind);
+    assert.notEqual(wrong.lastClickTargetId,observed.lastClickTargetId);
+  });
+}
