@@ -1,0 +1,176 @@
+name: iPhone Duo Screenshots
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ios-duo-screenshots.yml
+      - .github/duo/**
+  workflow_dispatch:
+    inputs:
+      pose:
+        description: Which iPhone Duo display to capture?
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - folded
+          - unfolded
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iphone-duo-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshot:
+    name: Duo ${{ matrix.pose }} screenshots
+    runs-on: xcode-27
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        pose: [folded, unfolded]
+    env:
+      BUNDLE_ID: org.irgunshiuraitorah.app
+      BUILD_NUMBER: "1"
+      SIMULATOR_VIDEO_ID: ""
+      DUO_POSE: ${{ matrix.pose }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Select Xcode 27.1 (required for iPhone Duo)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "~27.1.0"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Identify Xcode and iPhone Duo simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p duo-results
+          xcodebuild -version | tee duo-results/xcode-version.txt
+          # The hosted Xcode 27 runner ships iOS 27.0; iPhone Duo only runs on iOS 27.1.
+          if ! xcrun simctl list runtimes | grep -q 'iOS 27.1 ('; then
+            xcodebuild -downloadPlatform iOS
+          fi
+          xcrun simctl list devices available --json > duo-results/devices.json
+          xcrun simctl list runtimes > duo-results/runtimes.txt
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          devices=json.loads(Path('duo-results/devices.json').read_text())['devices']
+          matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('isAvailable') and 'iPhone Duo' in d['name']]
+          if not matches:
+              import subprocess
+              types=json.loads(subprocess.check_output(['xcrun','simctl','list','devicetypes','--json'],text=True))['devicetypes']
+              duo=next((t for t in types if 'iPhone Duo' in t['name']),None)
+              if not duo:raise SystemExit('Selected Xcode has no iPhone Duo simulator device type.')
+              runtimes=json.loads(subprocess.check_output(['xcrun','simctl','list','runtimes','--json'],text=True))['runtimes']
+              ios=[t for t in runtimes if t.get('isAvailable') and 'iOS' in t['name']]
+              if not ios:raise SystemExit('No installed iOS runtime is available.')
+              latest=next((t for t in ios if t.get('version','').startswith('27.1')),None)
+              if latest is None:raise SystemExit('iOS 27.1 simulator runtime required for iPhone Duo.')
+              identifier=subprocess.check_output(['xcrun','simctl','create','Irgun iPhone Duo',duo['identifier'],latest['identifier']],text=True).strip()
+              devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json'],text=True))['devices']
+              matches=[(runtime,d) for runtime,group in devices.items() for d in group if d.get('udid')==identifier]
+              if not matches:raise SystemExit('Could not create iPhone Duo simulator.')
+          runtime,d=matches[0]
+          print('Selected', d['name'], runtime, d['udid'])
+          Path('duo-results/selected-device.json').write_text(json.dumps({'runtime':runtime,**d},indent=2))
+          with open(os.environ['GITHUB_ENV'],'a') as out:out.write('SIMULATOR_UDID='+d['udid']+'\n')
+          PY
+      - name: Prepare existing native app and screenshot test
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "IOS_MARKETING_VERSION=$(node -p "require('./package.json').version.replace(/-ios$/, '')")" >> "$GITHUB_ENV"
+          npm install --no-audit --no-fund
+          # Only this throwaway simulator checkout uses Capacitor 8.5 UIScene support.
+          npm install --no-save --no-package-lock --no-audit --no-fund @capacitor/core@8.5.3 @capacitor/ios@8.5.3 @capacitor/cli@8.5.3
+          python3 .github/simulator/prepare.py web
+          npm run build
+          npx cap add ios
+          npx cap sync ios
+          npx @capacitor/assets generate --ios
+          python3 scripts/prepare_ios_cloud.py
+          ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
+          ruby scripts/patch_xcode_project.rb
+          python3 .github/simulator/prepare.py native
+          python3 .github/duo/patch_capture.py
+          python3 .github/duo/migrate_scene.py
+          ruby .github/simulator/configure.rb
+          ruby .github/duo/add_scene.rb
+          bash scripts/assert_no_direct_swiftuicore.sh
+          if [ -f ios/App/Podfile ]; then (cd ios/App && pod install --repo-update); fi
+      - name: Boot and set Duo fold position
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "$SIMULATOR_UDID"
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
+            -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
+          codesign -f -s - "$RUNNER_TEMP/duo_fold"
+          # simctl spawn accepts an absolute host path to a simulator-architecture binary.
+          # 0 degrees uses the cover screen; 180 degrees uses the unfolded inner screen.
+          if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
+          xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
+          sleep 5
+          xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
+      - name: Run original App Store screenshot XCTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER=(-project ios/App/App.xcodeproj)
+          if [ -d ios/App/App.xcworkspace ]; then CONTAINER=(-workspace ios/App/App.xcworkspace); fi
+          xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -destination-timeout 120 \
+            -derivedDataPath "$RUNNER_TEMP/DuoDerivedData" \
+            -resultBundlePath duo-results/DuoScreenshots.xcresult \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
+            -only-testing:SimulatorUITests/PlaybackUITests/testZZAppStoreScreenshotsOfAllPublicPages \
+            test 2>&1 | tee duo-results/xcodebuild.log
+      - name: Export captured screenshots
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p duo-results/attachments
+          if [ -d duo-results/DuoScreenshots.xcresult ]; then
+            xcrun xcresulttool export attachments --path duo-results/DuoScreenshots.xcresult --output-path duo-results/attachments || true
+            xcrun xcresulttool get test-results summary --path duo-results/DuoScreenshots.xcresult > duo-results/test-summary.json || true
+          fi
+          if [ -n "${SIMULATOR_UDID:-}" ]; then
+            xcrun simctl io "$SIMULATOR_UDID" screenshot duo-results/final-screen.png || true
+            xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          fi
+      - name: Package App Store PNGs with dimension validation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f duo-results/attachments/manifest.json ]; then
+            echo "::error::No screenshot attachment manifest; check Xcode test logs"
+            exit 1
+          fi
+          mkdir -p simulator-results
+          cp -R duo-results/attachments simulator-results/
+          python3 .github/simulator/package_screenshots.py
+          python3 .github/duo/validate_screenshots.py
+          # Rebuild the archives if the simulator had a <=2px capture boundary offset.
+          python3 .github/duo/package_validated_screenshots.py
+          mkdir -p duo-results/downloads
+          cp simulator-results/screenshot-downloads/*.zip duo-results/downloads/
+      - name: Upload PNGs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: irgun-iphone-duo-${{ matrix.pose }}-${{ github.run_number }}
+          path: |
+            duo-results/
+            simulator-results/app-store/
+          if-no-files-found: warn
+          retention-days: 14
