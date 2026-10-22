@@ -161,7 +161,7 @@ jobs:
           python3 .github/simulator/package_screenshots.py
           python3 .github/duo/validate_screenshots.py
           # Rebuild the archives if the simulator had a <=2px capture boundary offset.
-          python3 .github/simulator/package_screenshots.py
+          python3 .github/duo/package_validated_screenshots.py
           mkdir -p duo-results/downloads
           cp simulator-results/screenshot-downloads/*.zip duo-results/downloads/
       - name: Upload PNGs and diagnostics
