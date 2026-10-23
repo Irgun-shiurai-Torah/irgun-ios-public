@@ -27,6 +27,8 @@
     watchFromAudio: '[data-player-watch]',
     playFull: '[data-open-player]',
     closeFull: '[data-close-player]',
+    fullWatch: '.player-sheet [data-player-watch]',
+    fullSkipForward: '.player-sheet .big-controls button.skip-control:last-child',
     fullSpeed15: '.player-sheet [data-speed-choice="1.5"]',
     fullSpeed10: '.player-sheet [data-speed-choice="1"]',
     watchArtwork: '.watch-audio-panel .audio-cover.large',
@@ -189,6 +191,7 @@
       watchSeekPresent:Boolean(watchAudioPanel?.querySelector('#watchAudioSeek')),
       watchTimePresent:Boolean(watchAudioPanel?.querySelector('#watchAudioTime')),
       watchCapsuleOverlapsSkip:Boolean(speedTriggerBox && skipBox && speedTriggerBox.left < skipBox.right-1),
+      fullSkipSeconds:Number(state.skipSeconds)||15,
       fullSpeedChoiceCount:fullPlayer?.querySelectorAll('[data-speed-choice]').length||0,
       fullSpeedPopupCount:fullPlayer?.querySelectorAll('[data-ios-speed-trigger]').length||0,
       // Actual WKWebView viewport: native gestures require CSS-pixel bounds.

@@ -487,7 +487,41 @@
         try regressionWait("Closing only the full sheet keeps native audio playing",timeout:25) {
             $0["modalPlayer"] as? Bool == false && $0["playingAudio"] as? Bool == true
         }
-        evidence("pr53-cold-direct-listen-original-full-player")
+
+        // Re-enter the original full sheet and exercise the actual Watch button.
+        // The broken implementation read the unused HTML audio clock (always
+        // 0:00 on iOS), so force a non-zero native position and REQUIRE that
+        // the new video AVPlayerItem starts at that position.
+        try regressionTap("playFull")
+        try regressionWait("Full audio Watch action and forward skip must be available",timeout:25) { r in
+            let controls=r["controls"] as? [String:[String:Any]] ?? [:]
+            return r["modalPlayer"] as? Bool == true &&
+                controls["fullWatch"] != nil && controls["fullSkipForward"] != nil
+        }
+        let beforeSkip=number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"position")
+        let expectedJump=max(10,number(regression(),"fullSkipSeconds"))
+        try regressionTap("fullSkipForward")
+        let positioned=try waitFor("Real native audio skip must move beyond the start before Watch",timeout:40) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
+                self.number(n,"position") >= beforeSkip + expectedJump - 3
+        }
+        let audioClock=number(positioned["nativePlayer"] as? [String:Any] ?? [:],"position")
+        XCTAssertGreaterThan(audioClock,7,"Reproduction must use non-zero native audio position")
+        try regressionTap("fullWatch")
+        let watched=try waitFor("Full Audio -> Video must preserve the native audio timestamp",timeout:120) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true &&
+                n["id"] as? String == "video:" + fixture &&
+                n["mode"] as? String == "video" &&
+                n["playing"] as? Bool == true &&
+                s["videoPlaying"] as? Bool == true &&
+                self.number(n,"position") >= audioClock - 3 &&
+                s["audioPlaying"] as? Bool == false
+        }
+        XCTAssertGreaterThan(number(watched["nativePlayer"] as? [String:Any] ?? [:],"position"),7)
+        try regressionVideoMoving()
+        evidence("pr53-full-audio-to-video-position-preserved")
     }
 
     // The dark Watch Audio player, NOT the full-player sheet, owns Option 3.

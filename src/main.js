@@ -1,6 +1,7 @@
 import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
 import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
 import './ios-audio-speed-popup.css';
+import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
 import './ios-android-visual-parity.css';
 import { createWebsiteAdminParity } from './admin-website-parity.js';
@@ -7365,23 +7366,50 @@ function bind() {
   });
   document.querySelectorAll('[data-player-watch]').forEach(el => el.addEventListener('click', async () => {
     const id = String(el.dataset.playerWatch || '');
-    const time = audio.currentTime || 0;
-    const wasPlaying = !audio.paused;
 
     // Keep the already-working Watch Audio Player path completely separate.
+    // That view changes the mode of one existing AVPlayerItem.
     if (state.watchVideo && videoId(state.watchVideo) === id && state.watchMode === 'audio') {
       state.playerOpen = false;
       await switchWatchMode('video');
       return;
     }
 
-    // Main Audio Player -> Video: transfer ownership synchronously on the tap,
-    // before render/navigation/fetch so iOS cannot revive Main Audio in the gap.
+    const audioOwner = state.current;
+    if (!audioOwner || audioOwner.kind !== 'video-audio' || String(audioOwner.id) !== id) return;
+    const nativeAudio = iosAudioUiActive();
+
+    // The iOS full player does NOT play through the hidden HTML audio element.
+    // Capture a fresh AVPlayer position and Play/Pause state while Audio still
+    // owns playback, BEFORE the ownership fence and new video item are created.
+    let nativeSnapshot = null;
+    if (nativeAudio) {
+      nativeSnapshot = await iosUnified.snapshot().catch(error => {
+        console.warn('Could not refresh native Audio -> Video clock', error);
+        return iosUnified.state;
+      });
+      // A second tap, queue advance, or navigation may have changed the item.
+      if (state.current !== audioOwner || !state.playerOpen || !iosAudioUiActive()) return;
+    }
+    let handoff;
+    try {
+      handoff = fullAudioToVideoHandoff({
+        videoId:id, useNative:nativeAudio, nativeState:nativeSnapshot,
+        htmlPosition:audio.currentTime, htmlPaused:audio.paused,
+        pendingHtmlSeek:state.pendingAudioSeek?.id === id ? state.pendingAudioSeek.target : null
+      });
+    } catch (error) {
+      console.warn('Audio -> Video handoff stopped to avoid restarting at 0:00', error);
+      setToast(currentLanguage()==='he'?'לא ניתן לשמור על מיקום השמע כרגע.':'Could not read the audio position. Please try again.');
+      return;
+    }
     saveCurrentAudioHistory(true, false).catch(() => {});
     state.videoOwnsPlayback = true;
     hardStopHtmlAudioForVideo();
     state.playerOpen = false;
-    await openWatch(id, time, { fromAudio:true, wasPlaying });
+    await openWatch(id, handoff.position, {
+      fromAudio:true, wasPlaying:handoff.wasPlaying
+    });
   }));
 
   const seek = document.getElementById('fullSeek');
@@ -8505,7 +8533,8 @@ async function openWatch(id, requestedTime = null, options = {}) {
   // Put the watch overlay in its permanent host before Vimeo starts. Full and
   // mini layouts resize this exact iframe instead of rebuilding/reloading it.
   hostCurrentWatchOverlay('full');
-  initWatchVimeo(true, fromAudio);
+  // A paused full-audio lecture must remain paused at its exact timestamp.
+  initWatchVimeo(!fromAudio || fromAudioWasPlaying, fromAudio);
   loadComments();
   if (shouldLoadResume && state.watchResumeSeconds <= 0 && state.user) {
     // Rare fallback for an account whose history was not present in the initial
