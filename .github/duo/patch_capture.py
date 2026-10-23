@@ -12,7 +12,7 @@ from pathlib import Path
 pose = os.environ.get("DUO_POSE")
 if pose not in ("folded", "unfolded"):
     raise SystemExit(f"Unknown DUO_POSE: {pose!r}")
-w, h = {"folded": (1398, 2034), "unfolded": (2007, 2853)}[pose]
+w, h = {"folded": (1398, 2034), "unfolded": (2853, 2007)}[pose]
 source_file = Path("ios/App/SimulatorUITests/PlaybackUITests.swift")
 source = source_file.read_text()
 target = "    func testZZAppStoreScreenshotsOfAllPublicPages() throws {"
@@ -38,7 +38,8 @@ helper = r"""
         // Never use XCUIScreen.main for unfolded screenshots: it selects the
         // physical cover panel, which is black when the hinge is fully open.
         // Ask XCTest for its available screen surfaces and select by raw
-        // native PNG pixels, not by screen order or device orientation.
+        // native PNG pixels. Require landscape pixels for the unfolded pose;
+        // portrait screenshots are rejected instead of rotated after capture.
         for screen in XCUIScreen.screens {
             let capture = screen.screenshot()
             let bytes = [UInt8](capture.pngRepresentation.prefix(24))
@@ -50,11 +51,9 @@ helper = r"""
             let width = bigEndian32(bytes, 16)
             let height = bigEndian32(bytes, 20)
             inspected.append("\(width)x\(height)")
-            let upright = abs(width - expectedWidth) <= 2 &&
+            let matches = abs(width - expectedWidth) <= 2 &&
                           abs(height - expectedHeight) <= 2
-            let rotated = abs(width - expectedHeight) <= 2 &&
-                          abs(height - expectedWidth) <= 2
-            if upright || rotated {
+            if matches {
                 print("DUO_CAPTURE: using native \(width)x\(height) pixels")
                 return capture
             }

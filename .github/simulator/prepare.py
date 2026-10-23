@@ -15,8 +15,24 @@ def web():
     text = source.read_text()
     if 'window.ISTSimulator =' in text:
         raise SystemExit('Simulator bridge already injected; use a fresh checkout')
-    bridge = (HERE / 'bridge.js').read_text().replace(
-        '__SIMULATOR_VIDEO_ID__', json.dumps(os.environ.get('SIMULATOR_VIDEO_ID', '')))
+    language = os.environ.get('SIMULATOR_LANGUAGE', 'en').strip().lower()
+    if language not in {'en', 'he'}:
+        raise SystemExit('SIMULATOR_LANGUAGE must be en or he')
+    bridge_source = (HERE / 'bridge.js').read_text()
+    if bridge_source.count('__SIMULATOR_VIDEO_ID__') != 1:
+        raise SystemExit('Expected exactly one simulator video ID placeholder')
+    if bridge_source.count('__SIMULATOR_LANGUAGE__') != 1:
+        raise SystemExit('Expected exactly one simulator language placeholder')
+    if bridge_source.count('__SIMULATOR_DUO_POSE__') != 1:
+        raise SystemExit('Expected exactly one Duo pose placeholder')
+    pose = os.environ.get('DUO_POSE', '').strip().lower()
+    if pose not in {'', 'folded', 'unfolded'}:
+        raise SystemExit('DUO_POSE must be empty, folded, or unfolded')
+    bridge = bridge_source.replace(
+        '__SIMULATOR_VIDEO_ID__', json.dumps(os.environ.get('SIMULATOR_VIDEO_ID', ''))
+    ).replace('__SIMULATOR_LANGUAGE__', json.dumps(language)).replace(
+        '__SIMULATOR_DUO_POSE__', json.dumps(pose)
+    )
     source.write_text(text + '\n' + bridge)
 
 

@@ -1066,6 +1066,19 @@ final class PlaybackUITests: XCTestCase {
             app.buttons["ist-simulator-next-page"].tap()
             let state = try waitFor("Screenshot page must load", timeout: 150) { !($0["storeError"] as? String ?? "").isEmpty || ($0["storeReady"] as? Bool == true && ($0["storePage"] as? String ?? "") != previous) }
             XCTAssertEqual(state["storeError"] as? String ?? "", "")
+            let expectedLanguage = state["screenshotLanguage"] as? String ?? ""
+            XCTAssertTrue(["en", "he"].contains(expectedLanguage), "Screenshot language must be explicitly configured")
+            XCTAssertEqual(state["language"] as? String ?? "", expectedLanguage, "App language does not match requested screenshot language")
+            XCTAssertEqual(state["documentLang"] as? String ?? "", expectedLanguage, "HTML language attribute does not match screenshot language")
+            XCTAssertEqual(state["documentDir"] as? String ?? "", expectedLanguage == "he" ? "rtl" : "ltr", "Document direction does not match screenshot language")
+            let pose = state["screenshotDuoPose"] as? String ?? ""
+            let viewportWidth = number(state, "viewportWidth")
+            let viewportHeight = number(state, "viewportHeight")
+            if pose == "unfolded" {
+                XCTAssertGreaterThan(viewportWidth, viewportHeight, "Unfolded Duo app UI must be genuinely landscape before capture")
+            } else if pose == "folded" {
+                XCTAssertGreaterThan(viewportHeight, viewportWidth, "Folded Duo app UI must remain portrait before capture")
+            }
             let name=state["storePage"] as? String ?? "unknown"
             app.buttons["ist-simulator-clean-capture"].tap()
             Thread.sleep(forTimeInterval: 0.7)

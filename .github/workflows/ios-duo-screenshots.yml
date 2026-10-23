@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/ios-duo-screenshots.yml
       - .github/duo/**
+      - .github/simulator/**
+      - public/i18n.js
+      - src/**
   workflow_dispatch:
     inputs:
       pose:
@@ -16,6 +19,15 @@ on:
           - both
           - folded
           - unfolded
+      language:
+        description: App language for screenshots
+        required: true
+        type: choice
+        default: he
+        options:
+          - he
+          - en
+          - both
 
 permissions:
   contents: read
@@ -26,18 +38,20 @@ concurrency:
 
 jobs:
   screenshot:
-    name: Duo ${{ matrix.pose }} screenshots
+    name: Duo ${{ matrix.pose }} (${{ matrix.language }}) screenshots
     runs-on: xcode-27
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        pose: [folded, unfolded]
+        pose: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.pose == 'folded' && '["folded"]' || github.event_name == 'workflow_dispatch' && inputs.pose == 'unfolded' && '["unfolded"]' || '["folded","unfolded"]') }}
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["he"]' || inputs.language == 'en' && '["en"]' || inputs.language == 'he' && '["he"]' || inputs.language == 'both' && '["en","he"]' || '["he"]') }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
       DUO_POSE: ${{ matrix.pose }}
+      SIMULATOR_LANGUAGE: ${{ matrix.language }}
     steps:
       - uses: actions/checkout@v7
       - name: Select Xcode 27.1 (required for iPhone Duo)
@@ -115,10 +129,18 @@ jobs:
           xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
             -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
           codesign -f -s - "$RUNNER_TEMP/duo_fold"
-          # simctl spawn accepts an absolute host path to a simulator-architecture binary.
-          # 0 degrees uses the cover screen; 180 degrees uses the unfolded inner screen.
-          if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
+          # Set both the hinge posture and Device Hub orientation. The inner display
+          # must render the app in landscape; rotating a portrait PNG afterwards
+          # would leave every UI control and label sideways in App Store screenshots.
+          if [ "$DUO_POSE" = "folded" ]; then
+            ANGLE=0
+            ORIENTATION=portrait
+          else
+            ANGLE=180
+            ORIENTATION=landscape-left
+          fi
           xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
+          xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient "$ORIENTATION"
           sleep 5
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
       - name: Run original App Store screenshot XCTest
@@ -168,7 +190,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: irgun-iphone-duo-${{ matrix.pose }}-${{ github.run_number }}
+          name: irgun-iphone-duo-${{ matrix.pose }}-${{ matrix.language }}-${{ github.run_number }}
           path: |
             duo-results/
             simulator-results/app-store/
