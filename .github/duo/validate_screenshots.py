@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 pose = os.environ["DUO_POSE"]
-expected = {"folded": (1398, 2034), "unfolded": (2007, 2853)}[pose]
+expected = {"folded": (1398, 2034), "unfolded": (2853, 2007)}[pose]
 directory = Path("simulator-results/app-store")
 files = sorted(directory.glob("*.png"))
 if len(files) != 26:
@@ -33,13 +33,11 @@ for file in files:
     expected_width, expected_height = expected
     if abs(width - expected_width) <= 2 and abs(height - expected_height) <= 2:
         target_width, target_height = expected_width, expected_height
-    elif abs(width - expected_height) <= 2 and abs(height - expected_width) <= 2:
-        target_width, target_height = expected_height, expected_width
     else:
         raise SystemExit(
-            f"{file.name}: {width}x{height} is not a {pose} Duo screenshot. "
-            f"Expected {expected_width}x{expected_height} or rotated. "
-            "Wrong-screen captures are deliberately rejected."
+            f"{file.name}: {width}x{height} is not an upright {pose} Duo screenshot. "
+            f"Expected {expected_width}x{expected_height}. "
+            "Wrong-screen or wrong-orientation captures are deliberately rejected."
         )
 
     if (width, height) != (target_width, target_height):
@@ -71,39 +69,6 @@ for file in files:
                 f"Normalization failed for {file.name}: {actual_size}, "
                 f"expected {[target_width, target_height]}"
             )
-    # The Duo's inner display is sideways in its native open pose (hinge vertical).
-    # Its XCTest PNG bytes therefore contain an upright app rotated 90 degrees.
-    # Rotate those genuine framebuffer pixels clockwise once to deliver
-    # an upright *landscape* App Store image (2853x2007), with no cropping,
-    # synthetic artwork, device frame, or alteration to the app itself.
-    if pose == "unfolded":
-        rotated = file.with_name(file.stem + ".rotated.png")
-        result = subprocess.run(
-            ["sips", "-r", "90", "--out", str(rotated), str(file)],
-            capture_output=True, text=True,
-        )
-        if result.returncode or not rotated.exists():
-            raise SystemExit(
-                f"Could not correct unfolded display orientation for {file.name}: "
-                + result.stderr
-            )
-        rotated.replace(file)
-        target_width, target_height = target_height, target_width
-        rotated_report = subprocess.check_output(
-            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(file)],
-            text=True,
-        )
-        rotated_dimensions = [
-            int(line.split(":", 1)[1].strip())
-            for line in rotated_report.splitlines()
-            if "pixelWidth:" in line or "pixelHeight:" in line
-        ]
-        if rotated_dimensions != [target_width, target_height]:
-            raise SystemExit(
-                f"Unfolded rotation dimensions wrong for {file.name}: "
-                f"{rotated_dimensions}, expected {[target_width, target_height]}"
-            )
-
     summary.append({
         "file": file.name,
         "captured_width": width,
