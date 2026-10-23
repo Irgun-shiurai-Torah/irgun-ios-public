@@ -193,7 +193,8 @@ final class SimulatorProbe {
     }
 
     @objc private func openSample() {
-        let action = ProcessInfo.processInfo.arguments.contains("--irgun-reported-mp4") ? "openReportedShiur" : "openSample"
+        let action = ProcessInfo.processInfo.arguments.contains("--irgun-direct-audio") ? "openDirectAudioSample" :
+            (ProcessInfo.processInfo.arguments.contains("--irgun-reported-mp4") ? "openReportedShiur" : "openSample")
         webView?.evaluateJavaScript("window.ISTSimulator?.\(action)()", completionHandler: nil)
     }
 

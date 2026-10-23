@@ -1,3 +1,7 @@
+import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
+import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
+import './ios-audio-speed-popup.css';
+import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
 import './ios-android-visual-parity.css';
 import { createWebsiteAdminParity } from './admin-website-parity.js';
@@ -388,6 +392,9 @@ function onIosUnifiedState(snapshot) {
     state.playbackSpeed = Number(snapshot.rate);
     localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
     document.querySelectorAll('[data-audio-speed]').forEach(select => { select.value = String(state.playbackSpeed); });
+    refreshIosAudioSpeedMenu(document, state.playbackSpeed);
+    document.querySelectorAll('[data-speed-choice]').forEach(button =>
+      button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
   }
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
@@ -1645,11 +1652,11 @@ function bindShiurimResultEvents(root) {
   }));
   root.querySelectorAll('[data-listen-video]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
-    playVideoAudio(el.dataset.listenVideo);
+    playVideoAudio(el.dataset.listenVideo).catch(error => console.warn('Direct audio tap failed',error));
   }));
   root.querySelectorAll('[data-listen-audio]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
-    playLibraryAudio(el.dataset.listenAudio);
+    playLibraryAudio(el.dataset.listenAudio).catch(error => console.warn('Direct audio tap failed',error));
   }));
   root.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
     event.stopPropagation();
@@ -6025,7 +6032,7 @@ function watchHtml() {
         <div class="media-switch"><button data-watch-mode="video" class="${state.watchMode === 'video' ? 'active' : ''}">${currentLanguage()==='he'?'וידאו':'Video'}</button>${v.hasAudio ? `<button data-watch-mode="audio" class="${state.watchMode === 'audio' ? 'active' : ''}">${currentLanguage()==='he'?'אודיו':'Audio'}</button>` : ''}</div>
         ${state.watchMode === 'video'
           ? `<div id="watchVideoStage" class="watch-video-stage"><iframe id="watchVimeoFrame" class="watch-frame" data-start-seconds="${Math.max(0, Number(state.watchResumeSeconds) || 0)}" data-vimeo-src="${v.sourceType === 'drive-library' ? '' : watchVimeoEmbedSrc(v, state.watchResumeSeconds)}" src="about:blank" loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>`
-          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${iosAudioUiDuration()}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button></div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
+          : `<div class="watch-audio-panel">${logoArtworkHtml('large')}<input id="watchAudioSeek" class="seek" type="range" min="0" max="${iosAudioUiDuration()}" value="${iosAudioUiPosition()}" step="1"><div class="watch-audio-controls"><button class="skip-control" data-skip="-15">${svgIcon('back15')}</button><button class="watch-audio-play" data-play-toggle="1">${iosAudioUiPaused() ? svgIcon('play') + ' Play' : '<span class="pause-mark">II</span> Pause'}</button><button class="skip-control" data-skip="15">${svgIcon('forward15')}</button>${compactIosAudioSpeedHtml(state.playbackSpeed, currentLanguage())}</div><div id="watchAudioTime" class="watch-audio-time">${fmtTime(iosAudioUiPosition())} / ${fmtDurationOrUnknown(iosAudioUiDuration())}</div></div>`}
       </div>
       <section class="watch-details">
         <h1>${esc(displayShiurTitle(v.title, ''))}</h1>
@@ -6892,6 +6899,31 @@ async function navigateIosBottomTab(button) {
   window.scrollTo({ top:0, behavior:'smooth' });
 }
 
+async function setIosAudioPlaybackSpeed(rate) {
+  const value = validIosAudioSpeed(rate);
+  if (value === null) throw new Error('Invalid audio playback speed');
+  const current = state.current;
+  if (!current) return;
+  if (iosNativeActive()) {
+    if (!iosAudioUiActive()) return;
+    // Only the existing native AVPlayer may change speed. Never load,
+    // re-open or replace its item to update a setting.
+    await iosUnified.speed(value);
+    if (state.current !== current) return;
+    if (Math.abs((Number(iosUnified.state.rate) || 1) - value) > 0.01)
+      throw new Error('Native audio playback speed was not applied');
+  } else {
+    audio.playbackRate = value;
+  }
+  if (state.current !== current) return;
+  state.playbackSpeed = value;
+  localStorage.setItem(SPEED_KEY, String(value));
+  document.querySelectorAll('[data-audio-speed]').forEach(select => { select.value = String(value); });
+  refreshIosAudioSpeedMenu(document, value);
+  document.querySelectorAll('[data-speed-choice]').forEach(button =>
+    button.classList.toggle('active', Number(button.dataset.speedChoice) === value));
+}
+
 function bind() {
   document.querySelectorAll('.watch-overlay').forEach(bindIosWatchDetailsSwipeToMini);
   if (IS_IOS) paidQuestionIndex.bind(document);
@@ -7263,11 +7295,11 @@ function bind() {
   }));
   document.querySelectorAll('[data-listen-video]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
-    playVideoAudio(el.dataset.listenVideo);
+    playVideoAudio(el.dataset.listenVideo).catch(error => console.warn('Direct audio tap failed',error));
   }));
   document.querySelectorAll('[data-listen-audio]').forEach(el => el.addEventListener('click', event => {
     event.stopPropagation();
-    playLibraryAudio(el.dataset.listenAudio);
+    playLibraryAudio(el.dataset.listenAudio).catch(error => console.warn('Direct audio tap failed',error));
   }));
 
   document.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
@@ -7334,23 +7366,50 @@ function bind() {
   });
   document.querySelectorAll('[data-player-watch]').forEach(el => el.addEventListener('click', async () => {
     const id = String(el.dataset.playerWatch || '');
-    const time = audio.currentTime || 0;
-    const wasPlaying = !audio.paused;
 
     // Keep the already-working Watch Audio Player path completely separate.
+    // That view changes the mode of one existing AVPlayerItem.
     if (state.watchVideo && videoId(state.watchVideo) === id && state.watchMode === 'audio') {
       state.playerOpen = false;
       await switchWatchMode('video');
       return;
     }
 
-    // Main Audio Player -> Video: transfer ownership synchronously on the tap,
-    // before render/navigation/fetch so iOS cannot revive Main Audio in the gap.
+    const audioOwner = state.current;
+    if (!audioOwner || audioOwner.kind !== 'video-audio' || String(audioOwner.id) !== id) return;
+    const nativeAudio = iosAudioUiActive();
+
+    // The iOS full player does NOT play through the hidden HTML audio element.
+    // Capture a fresh AVPlayer position and Play/Pause state while Audio still
+    // owns playback, BEFORE the ownership fence and new video item are created.
+    let nativeSnapshot = null;
+    if (nativeAudio) {
+      nativeSnapshot = await iosUnified.snapshot().catch(error => {
+        console.warn('Could not refresh native Audio -> Video clock', error);
+        return iosUnified.state;
+      });
+      // A second tap, queue advance, or navigation may have changed the item.
+      if (state.current !== audioOwner || !state.playerOpen || !iosAudioUiActive()) return;
+    }
+    let handoff;
+    try {
+      handoff = fullAudioToVideoHandoff({
+        videoId:id, useNative:nativeAudio, nativeState:nativeSnapshot,
+        htmlPosition:audio.currentTime, htmlPaused:audio.paused,
+        pendingHtmlSeek:state.pendingAudioSeek?.id === id ? state.pendingAudioSeek.target : null
+      });
+    } catch (error) {
+      console.warn('Audio -> Video handoff stopped to avoid restarting at 0:00', error);
+      setToast(currentLanguage()==='he'?'לא ניתן לשמור על מיקום השמע כרגע.':'Could not read the audio position. Please try again.');
+      return;
+    }
     saveCurrentAudioHistory(true, false).catch(() => {});
     state.videoOwnsPlayback = true;
     hardStopHtmlAudioForVideo();
     state.playerOpen = false;
-    await openWatch(id, time, { fromAudio:true, wasPlaying });
+    await openWatch(id, handoff.position, {
+      fromAudio:true, wasPlaying:handoff.wasPlaying
+    });
   }));
 
   const seek = document.getElementById('fullSeek');
@@ -7360,22 +7419,54 @@ function bind() {
     updatePlayerUi();
   });
   document.querySelectorAll('[data-audio-speed]').forEach(select => select.addEventListener('change', () => {
-    state.playbackSpeed = Number(select.value) || 1;
-    audio.playbackRate = state.playbackSpeed;
-    if (iosNativeActive()) void iosUnified.speed(state.playbackSpeed).catch(error => console.warn('Native speed failed', error));
-    localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
-    document.querySelectorAll('[data-speed-choice]').forEach(button => button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
+    void setIosAudioPlaybackSpeed(select.value).catch(error => console.warn('Native speed failed', error));
   }));
-  document.querySelectorAll('[data-speed-choice]').forEach(el => el.addEventListener('click', () => {
-    state.playbackSpeed = Number(el.dataset.speedChoice) || 1;
-    audio.playbackRate = state.playbackSpeed;
-    if(iosNativeActive())void iosUnified.speed(state.playbackSpeed).catch(error=>console.warn('Native speed failed',error));
-    localStorage.setItem(SPEED_KEY, String(state.playbackSpeed));
-    document.querySelectorAll('[data-audio-speed]').forEach(select => { select.value = String(state.playbackSpeed); });
-    // Updating one setting should not rebuild or scroll the playing sheet.
-    document.querySelectorAll('[data-speed-choice]').forEach(button =>
-      button.classList.toggle('active', Number(button.dataset.speedChoice) === state.playbackSpeed));
+  // Preserve the original six full-player speed choices. They now share
+  // the same rate-only native operation as the compact Watch speed menu.
+  document.querySelectorAll('[data-speed-choice]').forEach(button => button.addEventListener('click', () => {
+    void setIosAudioPlaybackSpeed(button.dataset.speedChoice).catch(error => {
+      console.warn('Native full-player speed failed', error);
+      setToast('Could not change playback speed.');
+    });
   }));
+  document.querySelectorAll('[data-ios-speed-trigger]').forEach(trigger => trigger.addEventListener('click', event => {
+    event.stopPropagation();
+    const menu = trigger.closest('[data-ios-speed-menu]');
+    document.querySelectorAll('[data-ios-speed-menu]').forEach(other => {
+      if (other !== menu) closeIosAudioSpeedMenu(other);
+    });
+    const opening = toggleIosAudioSpeedMenu(menu);
+    if (opening) menu.querySelector('[data-ios-speed-choice].selected')?.focus({preventScroll:true});
+  }));
+  document.querySelectorAll('[data-ios-speed-choice]').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    const menu = button.closest('[data-ios-speed-menu]');
+    closeIosAudioSpeedMenu(menu);
+    menu?.querySelector('[data-ios-speed-trigger]')?.focus({preventScroll:true});
+    void setIosAudioPlaybackSpeed(button.dataset.iosSpeedChoice).catch(error => {
+      console.warn('Native audio speed failed', error);
+      setToast(currentLanguage()==='he'?'לא ניתן לשנות מהירות כרגע.':'Could not change playback speed.');
+      refreshIosAudioSpeedMenu(document, state.playbackSpeed);
+    });
+  }));
+  if (!document.__iosAudioSpeedMenuOutsideInstalled) {
+    document.__iosAudioSpeedMenuOutsideInstalled = true;
+    // Capture phase still sees outside taps despite player-sheet stopPropagation.
+    document.addEventListener('pointerdown', event => {
+      document.querySelectorAll('[data-ios-speed-menu]').forEach(menu => {
+        if (!menu.contains(event.target)) closeIosAudioSpeedMenu(menu);
+      });
+    }, true);
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      document.querySelectorAll('[data-ios-speed-menu]').forEach(menu => {
+        const expanded = menu.querySelector('[data-ios-speed-trigger]')?.getAttribute('aria-expanded') === 'true';
+        if (!expanded) return;
+        closeIosAudioSpeedMenu(menu);
+        menu.querySelector('[data-ios-speed-trigger]')?.focus({preventScroll:true});
+      });
+    });
+  }
   document.querySelectorAll('[data-sleep-choice]').forEach(el => el.addEventListener('click', () => setSleepTimer(el.dataset.sleepChoice)));
   const watchAudioSeek = document.getElementById('watchAudioSeek');
   if (watchAudioSeek) watchAudioSeek.addEventListener('input', () => {
@@ -7932,8 +8023,10 @@ function prepareIosAudioPlaybackSurface(item) {
   state.watchVideo = null;
 }
 
+let iosDirectAudioStartSequence = 0;
 async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
   state.paidPlaybackGeneration++;
+  const directAudioSequence = ++iosDirectAudioStartSequence;
   if (iosUnified) {
     // All standalone audio—including saved lectures and existing purchases—
     // goes into the SAME AVPlayer instance used by HLS video. The HTML audio
@@ -7963,20 +8056,33 @@ async function startAudio(item, resumeAt = 0, backgroundHandoff = false) {
     state.current=effective;
     if (!state.queueStarting) {state.playQueue=[];state.playQueueIndex=-1;}
     iosNativeLastHistoryAt=0;
+    const ownsRequest = () => state.current === effective && directAudioSequence === iosDirectAudioStartSequence;
     try {
-      await iosUnified.open({
-        id:`audio:${effective.kind}:${effective.id}`,url:String(url),mode:'audio',
+      // Direct Listen must not depend only on the MP3 Worker route: the
+      // Video -> Audio switch works because its already-loaded HLS/MP4 item
+      // never hits that endpoint. Reuse the same owned media sources first.
+      const backedVideo = effective.kind === 'video-audio' && !effective.offline
+        ? state.videoById.get(String(effective.id)) : null;
+      const videoSources = backedVideo ? await loadIosDirectVideoSources(backedVideo) : null;
+      if (!ownsRequest()) return;
+      const candidates = iosDirectAudioCandidates(effective, videoSources, audioUrl);
+      const opened = await openFirstPlayableIosAudio(candidates, candidate => iosUnified.open({
+        id:`audio:${effective.kind}:${effective.id}`,url:candidate,mode:'audio',
         title:effective.title,artist:effective.subtitle||'Irgun Shiurai Torah',
         position:Math.max(0,Number(resumeAt)||0),rate:state.playbackSpeed,autoplay:true
-      });
+      }), ownsRequest, (error,failedUrl) => console.warn('Direct audio source unavailable; trying alternate owned stream',failedUrl,error));
+      if (!ownsRequest()) return;
+      effective.url = opened.url;
       usageAnalytics.event('shiur_opened',{shiurId:String(item.id),mediaType:'audio',
         dedupeKey:`shiur-open:${item.id}`,cooldownMs:60000});
       usageAnalytics.setMedia({isPlaying:iosNativePlaying(),mediaType:'audio',
         playerState:iosNativePlaying()?'playing':'paused',shiurId:String(item.id)});
     } catch (error) {
+      if (!ownsRequest()) return;
       state.current=previous;
       console.error('Unified AVPlayer could not open audio',error);
-      setToast('This audio could not open in the native player.');
+      setToast(currentLanguage()==='he'?'לא ניתן לפתוח את השמע.':'This audio could not open in the native player.');
+      render();
       throw error;
     }
     render();
@@ -8427,7 +8533,8 @@ async function openWatch(id, requestedTime = null, options = {}) {
   // Put the watch overlay in its permanent host before Vimeo starts. Full and
   // mini layouts resize this exact iframe instead of rebuilding/reloading it.
   hostCurrentWatchOverlay('full');
-  initWatchVimeo(true, fromAudio);
+  // A paused full-audio lecture must remain paused at its exact timestamp.
+  initWatchVimeo(!fromAudio || fromAudioWasPlaying, fromAudio);
   loadComments();
   if (shouldLoadResume && state.watchResumeSeconds <= 0 && state.user) {
     // Rare fallback for an account whose history was not present in the initial

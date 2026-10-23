@@ -237,6 +237,32 @@ window.ISTSimulator = {
       simulatorOpening = false;
     }
   },
+  async openDirectAudioSample() {
+    if (simulatorOpening) return;
+    simulatorOpening = true;
+    simulatorError = '';
+    this.selectedSampleId = '';
+    try {
+      const preferred = state.videoById.get('1235946832');
+      const candidates = [preferred,
+        ...state.videos.filter(video => video.hasAudio && !isIosVimeoOnlyLecture(video)).slice(0,20)
+      ].filter((video,index,list) => video && video.hasAudio &&
+        list.findIndex(other => videoId(other) === videoId(video)) === index);
+      for (const video of candidates) {
+        const sources = await loadIosDirectVideoSources(video);
+        if (!sources?.hls || !await simulatorHlsSourceReady(sources.hls)) continue;
+        const id = String(videoId(video));
+        this.selectedSampleId = id;
+        // A direct Listen tap opens a new audio item, unlike the video-to-audio switch.
+        await playVideoAudio(id, 0);
+        if (!state.current || state.current.kind !== 'video-audio')
+          throw new Error('Direct Listen failed to take audio ownership');
+        return;
+      }
+      throw new Error('No real healthy backed-up audio lecture available to test');
+    } catch (error) { simulatorError = String(error.message || error); }
+    finally { simulatorOpening = false; }
+  },
   snapshot() {
     const video = state.watchVimeo?.video;
     // Production's single AVPlayer has no DOM video. Expose live bridge state

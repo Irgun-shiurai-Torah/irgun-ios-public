@@ -22,10 +22,12 @@ elif sys.argv[1]=='native':
     assert at>=0 and 'class PlaybackUITests' in s, 'Unexpected XCTest class layout'
     assert 'func testRegression' not in s, 'Regression methods already injected'
     count=methods.count('func testRegression')
-    assert count==12, f'Expected 12 real regression methods, got {count}'
+    assert count==14, f'Expected 14 real regression methods including PR53 direct Listen + Watch capsule, got {count}'
     p.write_text(s[:at]+'\n'+methods+s[at:])
     compiled=p.read_text()
     for method in ('testRegressionBackgroundAudioAndReopenControls',
+                   'testRegressionDirectListenAndOriginalFullPlayer',
+                   'testRegressionWatchOptionThreePopupAndNativeSpeed',
                    'testRegressionNotificationTapRestoresInlinePlayer',
                    'testRegressionCrossDeviceWriterOnIPhone',
                    'testRegressionCrossDeviceReaderOnIPad',

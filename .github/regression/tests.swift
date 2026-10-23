@@ -425,6 +425,177 @@
         }
     }
 
+    // Regression for PR #53: a direct Listen tap must work BEFORE any video is
+    // playing. Video -> Audio alone did not catch the real-world failure.
+    func testRegressionDirectListenAndOriginalFullPlayer() throws {
+        let initial = snapshot()
+        let initialNative = initial["nativePlayer"] as? [String:Any] ?? [:]
+        XCTAssertFalse(initialNative["active"] as? Bool ?? false,
+                       "Direct Listen must be tested before any native playback")
+        try regressionTap("shiurim")
+        try regressionWait("A real verified backed-up shiur has a direct Listen button",timeout:80) { reg in
+            let fixture = reg["listenFixture"] as? [String:Any] ?? [:]
+            let rects = reg["rects"] as? [String:[String:Any]] ?? [:]
+            return !String(fixture["id"] as? String ?? "").isEmpty && rects["listenVideo"] != nil
+        }
+        let fixture=(regression()["listenFixture"] as? [String:Any])?["id"] as? String ?? ""
+        XCTAssertFalse(fixture.isEmpty,"Do not accept an arbitrary audio fixture")
+        try regressionTap("listenVideo")
+        let playing=try waitFor("Direct Listen must open one real native audio item without visiting Watch",timeout:120) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            let reg=s["regression"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
+                n["playing"] as? Bool == true &&
+                String(n["id"] as? String ?? "").hasSuffix(":" + fixture) &&
+                reg["currentAudioKind"] as? String == "video-audio" &&
+                reg["currentAudioId"] as? String == fixture &&
+                s["nativeAudioPlaying"] as? Bool == true &&
+                s["audioPlaying"] as? Bool == false &&
+                self.number(s,"playerCount") <= 1
+        }
+        let epoch=number(playing["nativePlayer"] as? [String:Any] ?? [:],"itemEpoch")
+        let first=regressionAudioPosition(playing)
+        _ = try waitFor("Direct Listen must advance the actual AVPlayer audio clock",timeout:35) {
+            let n=$0["nativePlayer"] as? [String:Any] ?? [:]
+            return n["mode"] as? String == "audio" && n["playing"] as? Bool == true &&
+                self.regressionAudioPosition($0) > first+2
+        }
+        try regressionTap("playFull")
+        try regressionWait("Original full player must show exactly six speed buttons and no capsule",timeout:25) {
+            $0["modalPlayer"] as? Bool == true &&
+            self.number($0,"fullSpeedChoiceCount") == 6 &&
+            self.number($0,"fullSpeedPopupCount") == 0 &&
+            self.number($0,"watchSpeedCapsules") == 0
+        }
+        try regressionTap("fullSpeed15")
+        _ = try waitFor("Original full-player 1.5x button changes the actual rate, never reopens audio",timeout:30) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true && n["playing"] as? Bool == true &&
+                n["mode"] as? String == "audio" &&
+                abs(self.number(n,"rate")-1.5)<0.03 &&
+                abs(self.number(n,"actualRate")-1.5)<0.03 &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        try regressionTap("fullSpeed10")
+        _ = try waitFor("Full-player speed reset preserves the same native lecture",timeout:25) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["mode"] as? String == "audio" && n["playing"] as? Bool == true &&
+                abs(self.number(n,"rate")-1)<0.03 &&
+                self.number(n,"itemEpoch") == epoch
+        }
+        try regressionTap("closeFull")
+        try regressionWait("Closing only the full sheet keeps native audio playing",timeout:25) {
+            $0["modalPlayer"] as? Bool == false && $0["playingAudio"] as? Bool == true
+        }
+
+        // Re-enter the original full sheet and exercise the actual Watch button.
+        // The broken implementation read the unused HTML audio clock (always
+        // 0:00 on iOS), so force a non-zero native position and REQUIRE that
+        // the new video AVPlayerItem starts at that position.
+        try regressionTap("playFull")
+        try regressionWait("Full audio Watch action and forward skip must be available",timeout:25) { r in
+            let controls=r["controls"] as? [String:[String:Any]] ?? [:]
+            return r["modalPlayer"] as? Bool == true &&
+                controls["fullWatch"] != nil && controls["fullSkipForward"] != nil
+        }
+        let beforeSkip=number(snapshot()["nativePlayer"] as? [String:Any] ?? [:],"position")
+        let expectedJump=max(10,number(regression(),"fullSkipSeconds"))
+        try regressionTap("fullSkipForward")
+        let positioned=try waitFor("Real native audio skip must move beyond the start before Watch",timeout:40) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
+                self.number(n,"position") >= beforeSkip + expectedJump - 3
+        }
+        let audioClock=number(positioned["nativePlayer"] as? [String:Any] ?? [:],"position")
+        XCTAssertGreaterThan(audioClock,7,"Reproduction must use non-zero native audio position")
+        // The visible full-player Watch button is also recorded by the older
+        // watchFromAudio selector, which is listed first by the click observer.
+        // Use that verified click key; fullWatch remains the layout/visibility check.
+        try regressionTap("watchFromAudio")
+        let watched=try waitFor("Full Audio -> Video must preserve the native audio timestamp",timeout:120) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["active"] as? Bool == true &&
+                n["id"] as? String == "video:" + fixture &&
+                n["mode"] as? String == "video" &&
+                n["playing"] as? Bool == true &&
+                s["videoPlaying"] as? Bool == true &&
+                self.number(n,"position") >= audioClock - 3 &&
+                s["audioPlaying"] as? Bool == false
+        }
+        XCTAssertGreaterThan(number(watched["nativePlayer"] as? [String:Any] ?? [:],"position"),7)
+        try regressionVideoMoving()
+        evidence("pr53-full-audio-to-video-position-preserved")
+    }
+
+    // The dark Watch Audio player, NOT the full-player sheet, owns Option 3.
+    // Press actual WKWebView buttons and verify native speed & original layout.
+    func testRegressionWatchOptionThreePopupAndNativeSpeed() throws {
+        try regressionActivateSample()
+        try regressionTap("watchAudio")
+        let audio=try waitFor("Watch Audio must play through the single real native AVPlayer",timeout:75) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["mode"] as? String == "audio" &&
+                n["active"] as? Bool == true && n["mode"] as? String == "audio" &&
+                n["playing"] as? Bool == true && s["nativeAudioPlaying"] as? Bool == true &&
+                s["audioPlaying"] as? Bool == false
+        }
+        let epoch=number(audio["nativePlayer"] as? [String:Any] ?? [:],"itemEpoch")
+        try regressionWait("Original dark Watch transport and the separate tiny capsule must be present",timeout:25) {
+            self.number($0,"watchTransportCount") == 3 &&
+            $0["watchArtworkPresent"] as? Bool == true &&
+            $0["watchSeekPresent"] as? Bool == true &&
+            $0["watchTimePresent"] as? Bool == true &&
+            self.number($0,"watchSpeedCapsules") == 1 &&
+            self.number($0,"watchSpeedChoiceCount") == 6 &&
+            self.number($0,"fullSpeedChoiceCount") == 0 &&
+            $0["watchCapsuleOverlapsSkip"] as? Bool == false
+        }
+        try regressionTap("audioSpeedOpen")
+        try regressionWait("Option 3 Watch speed popup must open with six native-tappable options",timeout:20) {
+            $0["watchSpeedPopupOpen"] as? Bool == true &&
+            self.number($0,"watchSpeedChoiceCount") == 6
+        }
+        try regressionTap("audioSpeed15")
+        _ = try waitFor("Watch capsule applies 1.5x to the same playing AVPlayerItem",timeout:30) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            let r=s["regression"] as? [String:Any] ?? [:]
+            return n["mode"] as? String == "audio" && n["playing"] as? Bool == true &&
+                abs(self.number(n,"rate")-1.5)<0.03 &&
+                abs(self.number(n,"actualRate")-1.5)<0.03 &&
+                self.number(n,"itemEpoch") == epoch &&
+                r["watchSpeedPopupOpen"] as? Bool == false &&
+                self.number(r,"watchSpeedSelected") == 1.5 &&
+                r["watchSpeedCurrent"] as? String == "1.5×"
+        }
+        try regressionTap("audioSpeedOpen")
+        try regressionWait("Reopening the Watch popup exposes its selected rate") {
+            $0["watchSpeedPopupOpen"] as? Bool == true &&
+            self.number($0,"watchSpeedSelected") == 1.5
+        }
+        try regressionTap("watchArtwork")
+        try regressionWait("Tapping outside the popup closes it without pausing audio",timeout:20) {
+            $0["watchSpeedPopupOpen"] as? Bool == false &&
+            $0["playingAudio"] as? Bool == true
+        }
+        try regressionTap("audioSpeedOpen")
+        try regressionTap("audioSpeed10")
+        _ = try waitFor("Watch speed resets to 1x without losing the audio item",timeout:30) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            let r=s["regression"] as? [String:Any] ?? [:]
+            return n["mode"] as? String == "audio" && n["playing"] as? Bool == true &&
+                abs(self.number(n,"rate")-1)<0.03 &&
+                self.number(n,"itemEpoch") == epoch &&
+                r["watchSpeedPopupOpen"] as? Bool == false
+        }
+        try regressionTap("watchVideo")
+        _ = try waitFor("Video still resumes after using the Watch speed popup",timeout:90) {
+            $0["mode"] as? String == "video" && $0["videoPlaying"] as? Bool == true &&
+            $0["audioPlaying"] as? Bool == false
+        }
+        try regressionVideoMoving()
+        evidence("pr53-watch-audio-option3-native-speed")
+    }
+
     func testRegressionBackgroundAudioAndReopenControls() throws {
         try regressionActivateSample()
         let initial = snapshot()

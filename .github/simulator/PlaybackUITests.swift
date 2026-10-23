@@ -12,6 +12,9 @@ final class PlaybackUITests: XCTestCase {
         if name.contains("testReportedShiurDirectPlaybackAndUnlistedEmbed") {
             app.launchArguments.append("--irgun-reported-mp4")
         }
+        if name.contains("testDirectListenFromColdLaunchUsesNativeAudio") {
+            app.launchArguments.append("--irgun-direct-audio")
+        }
         app.launch()
         // A cold CI iPhone simulator can take longer than 90 seconds to
         // finish its initial WebKit + live API bootstrap. The catalog can be
@@ -333,6 +336,36 @@ final class PlaybackUITests: XCTestCase {
                 self.number(n,"itemEpoch") == epoch
         }
         evidence("native-mini-one-player")
+    }
+
+    // Video -> Audio tests do NOT cover opening a new AVPlayerItem from cold start.
+    func testDirectListenFromColdLaunchUsesNativeAudio() throws {
+        let button = app.buttons["ist-simulator-open"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15), "Native launch control missing")
+        let before=snapshot()
+        XCTAssertFalse((before["nativePlayer"] as? [String:Any])?["active"] as? Bool ?? false,
+                       "Direct Listen must begin with a cold player")
+        button.tap()
+        let opened=try waitFor("Direct audio from the live catalogue must start natively",timeout:110) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return s["opening"] as? Bool == false &&
+                (s["sampleId"] as? String ?? "") != "" &&
+                (s["error"] as? String ?? "") == "" &&
+                n["active"] as? Bool == true &&
+                n["mode"] as? String == "audio" &&
+                s["nativeAudioPlaying"] as? Bool == true &&
+                self.number(n,"itemEpoch") >= 1
+        }
+        let native=opened["nativePlayer"] as? [String:Any] ?? [:]
+        let first=number(native,"position")
+        _ = try waitFor("Direct audio clock must advance",timeout:45) { s in
+            let n=s["nativePlayer"] as? [String:Any] ?? [:]
+            return n["mode"] as? String == "audio" && n["playing"] as? Bool == true &&
+                self.number(n,"position") > first + 2
+        }
+        XCTAssertFalse(snapshot()["audioPlaying"] as? Bool ?? true,
+                       "Direct Listen must not start a parallel HTML audio player")
+        evidence("direct-audio-native-from-cold")
     }
 
     func testAppleSignInButtonIsVisible() throws {

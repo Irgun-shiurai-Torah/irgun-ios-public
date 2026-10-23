@@ -14,6 +14,8 @@ case "$group" in
       testRegressionMiniFullscreenPiPCycle
       testRegressionNetworkLossAndRecovery
       testRegressionSpeedDefaultAndOnePointFiveAfterReopen
+      testRegressionDirectListenAndOriginalFullPlayer
+      testRegressionWatchOptionThreePopupAndNativeSpeed
       testRegressionOfflineDownloadPlaysWithoutNetworkAndSyncsHistory
       testRegressionHebrewRtlAndVisibleControls
       testRegressionLongPlaybackLockAndModeChanges
