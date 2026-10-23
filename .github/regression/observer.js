@@ -8,6 +8,8 @@
     shiurim: '.bottom-nav [data-nav="shiurim"]',
     library: '.bottom-nav [data-nav="library"]',
     open: '[data-watch]',
+    // The real library Listen button, not an already-playing video handoff.
+    listenVideo: '#shiurimResults [data-listen-video]',
     loginEmail: '#authEmail', loginPassword: '#authPassword',
     commentText: '#commentText',
     loginSubmit: '#authForm button[type="submit"]',
@@ -24,8 +26,13 @@
     closeWatch: '[data-close-watch]',
     watchFromAudio: '[data-player-watch]',
     playFull: '[data-open-player]',
-    audioSpeedOpen: '[data-ios-speed-trigger]',
-    audioSpeed15: '[data-ios-speed-choice="1.5"]',
+    closeFull: '[data-close-player]',
+    fullSpeed15: '.player-sheet [data-speed-choice="1.5"]',
+    fullSpeed10: '.player-sheet [data-speed-choice="1"]',
+    watchArtwork: '.watch-audio-panel .audio-cover.large',
+    audioSpeedOpen: '.watch-audio-panel [data-ios-speed-trigger]',
+    audioSpeed15: '.watch-audio-panel [data-ios-speed-choice="1.5"]',
+    audioSpeed10: '.watch-audio-panel [data-ios-speed-choice="1"]',
     videoSpeed: '#dmSpeed',
     videoSpeedToggle: '#dmSpeedToggle',
     videoSpeed15: '#dmSpeedMenu [data-dm-rate="1.5"]',
@@ -52,7 +59,8 @@
       window.__ISTRegressionLastClick = {
         sequence:Number(window.__ISTRegressionLastClick?.sequence || 0) + 1,
         key:match[0],
-        targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '') : '',
+        targetId:match[0] === 'open' ? String(target?.closest?.('[data-watch]')?.dataset.watch || '')
+          : match[0] === 'listenVideo' ? String(target?.closest?.('[data-listen-video]')?.dataset.listenVideo || '') : '',
         at:Date.now()
       };
     }, true);
@@ -113,12 +121,21 @@
     const base = JSON.parse(previous());
     const selectors = {}, hitRects = {};
     let watchFixture = null;
+    let listenFixture = null;
     for (const [key,selector] of Object.entries(keys)) {
       const elements = [...document.querySelectorAll(selector)];
       let matches = elements;
-      if (key === 'open' && state.screen === 'shiurim') {
-        const selected = window.__ISTQAChooseWatchButton?.(elements);
-        matches = selected ? [selected] : [];
+      if ((key === 'open' || key === 'listenVideo') && state.screen === 'shiurim') {
+        // Both Watch and Listen must target the SAME eligible real lecture.
+        // This prevents a moving catalogue order from making a different
+        // video/audio source pass by coincidence.
+        const watchButtons = key === 'open'
+          ? elements : [...document.querySelectorAll('#shiurimResults [data-watch]')];
+        const selected = window.__ISTQAChooseWatchButton?.(watchButtons);
+        const targetId = String(selected?.dataset.watch || '');
+        matches = key === 'open'
+          ? (selected ? [selected] : [])
+          : elements.filter(element => String(element.dataset.listenVideo || '') === targetId);
       }
       const el = matches.find(e=>{
         const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
@@ -130,6 +147,7 @@
       const target=el||matches[0];
       if (!target) continue;
       if (key === 'open') watchFixture = {id:String(target.dataset.watch || ''), title:String(target.textContent || '').trim()};
+      if (key === 'listenVideo') listenFixture = {id:String(target.dataset.listenVideo || ''), title:String(target.textContent || '').trim()};
       const r=target.getBoundingClientRect();
       hitRects[key]={x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};
       if (el) selectors[key]={x:r.left+r.width/2,y:r.top+r.height/2};
@@ -150,8 +168,29 @@
     const libraryTabsRect=bounds?{x:bounds.left,y:bounds.top,w:bounds.width,h:bounds.height}:null;
     const videoSpeed=document.getElementById('dmSpeed');
     const native=iosNativeActive() ? iosUnified.state : null;
+    const watchAudioPanel=document.querySelector('.watch-audio-panel');
+    const watchSpeedTrigger=watchAudioPanel?.querySelector('[data-ios-speed-trigger]');
+    const watchSpeedPopup=watchAudioPanel?.querySelector('[data-ios-speed-options]');
+    const watchTransport=[...(watchAudioPanel?.querySelectorAll('.watch-audio-controls > button') || [])];
+    const watchRightSkip=watchTransport.find(button => Number(button.dataset.skip) === 15);
+    const fullPlayer=document.querySelector('.player-sheet');
+    const speedTriggerBox=watchSpeedTrigger?.getBoundingClientRect();
+    const skipBox=watchRightSkip?.getBoundingClientRect();
     return JSON.stringify({...base,regression:{
-      controls:selectors,rects:hitRects,libraryTabsRect,watchFixture,observedAt:Date.now(),
+      controls:selectors,rects:hitRects,libraryTabsRect,watchFixture,listenFixture,observedAt:Date.now(),
+      currentAudioId:String(state.current?.id||''),currentAudioKind:String(state.current?.kind||''),
+      watchSpeedCapsules:watchAudioPanel?.querySelectorAll('[data-ios-speed-trigger]').length||0,
+      watchSpeedChoiceCount:watchAudioPanel?.querySelectorAll('[data-ios-speed-choice]').length||0,
+      watchSpeedPopupOpen:Boolean(watchSpeedPopup && !watchSpeedPopup.hidden),
+      watchSpeedSelected:Number(watchAudioPanel?.querySelector('[data-ios-speed-choice].selected')?.dataset.iosSpeedChoice)||0,
+      watchSpeedCurrent:watchSpeedTrigger?.querySelector('[data-ios-speed-current]')?.textContent?.trim()||'',
+      watchTransportCount:watchTransport.length,
+      watchArtworkPresent:Boolean(watchAudioPanel?.querySelector('.audio-cover.large')),
+      watchSeekPresent:Boolean(watchAudioPanel?.querySelector('#watchAudioSeek')),
+      watchTimePresent:Boolean(watchAudioPanel?.querySelector('#watchAudioTime')),
+      watchCapsuleOverlapsSkip:Boolean(speedTriggerBox && skipBox && speedTriggerBox.left < skipBox.right-1),
+      fullSpeedChoiceCount:fullPlayer?.querySelectorAll('[data-speed-choice]').length||0,
+      fullSpeedPopupCount:fullPlayer?.querySelectorAll('[data-ios-speed-trigger]').length||0,
       // Actual WKWebView viewport: native gestures require CSS-pixel bounds.
       // Without these, tests mis-classify offscreen controls and always scroll up.
       width:innerWidth,height:innerHeight,
