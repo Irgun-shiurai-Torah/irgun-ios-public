@@ -1,6 +1,7 @@
 // Appended to main.js ONLY in the unsigned simulator workflow.
 // This exposes observations, not replacement playback behavior.
 import {simulatorHlsSourceReady, selectIosAccountFixture} from '../.github/simulator/sample-selection.js';
+window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ = __SIMULATOR_LANGUAGE__;
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
 let simulatorError = '';
 let simulatorOpening = false;
@@ -85,6 +86,15 @@ window.ISTSimulator = {
     const reuseMedia = mediaPage(page) && mediaPage(this.storePage) && Boolean(state.watchVideo);
     this.storePage = page;
     try {
+      const captureLanguage = window.__IST_SIMULATOR_CAPTURE_LANGUAGE__;
+      if (!['en', 'he'].includes(captureLanguage)) {
+        throw new Error(`Unsupported screenshot language: ${captureLanguage}`);
+      }
+      const i18n = window.IST_I18N;
+      if (!i18n || typeof i18n.getLanguage !== 'function' || typeof i18n.setLanguage !== 'function') {
+        throw new Error('IST_I18N language controls are unavailable for screenshot capture');
+      }
+      if (i18n.getLanguage() !== captureLanguage) i18n.setLanguage(captureLanguage);
       if (state.watchVideo && !reuseMedia) await closeWatch(false);
       if (!reuseMedia) { audio.pause(); state.current = null; }
       state.playerOpen = false; state.filterDialog = ''; state.authMode = 'login';
@@ -337,6 +347,10 @@ window.ISTSimulator = {
       initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),
       opening: simulatorOpening, error: simulatorError,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
+      screenshotLanguage: window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ || '',
+      language: window.IST_I18N?.getLanguage?.() || document.documentElement.lang || 'en',
+      documentLang: document.documentElement.lang || '',
+      documentDir: document.documentElement.dir || '',
       id: state.watchVideo ? String(videoId(state.watchVideo)) : '',
       mode: state.watchMode, ready: Boolean(state.watchVimeoReady),
       backend: native ? (String(native.sourceUrl||'').includes('.m3u8')?'hls-native':'mp4') : (state.watchVimeo?.player?.backend || ''),
