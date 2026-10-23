@@ -129,10 +129,18 @@ jobs:
           xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
             -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
           codesign -f -s - "$RUNNER_TEMP/duo_fold"
-          # simctl spawn accepts an absolute host path to a simulator-architecture binary.
-          # 0 degrees uses the cover screen; 180 degrees uses the unfolded inner screen.
-          if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
+          # Set both the hinge posture and Device Hub orientation. The inner display
+          # must render the app in landscape; rotating a portrait PNG afterwards
+          # would leave every UI control and label sideways in App Store screenshots.
+          if [ "$DUO_POSE" = "folded" ]; then
+            ANGLE=0
+            ORIENTATION=portrait
+          else
+            ANGLE=180
+            ORIENTATION=landscape-left
+          fi
           xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
+          xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient "$ORIENTATION"
           sleep 5
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
       - name: Run original App Store screenshot XCTest
