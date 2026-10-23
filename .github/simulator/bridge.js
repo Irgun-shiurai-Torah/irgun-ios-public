@@ -2,6 +2,7 @@
 // This exposes observations, not replacement playback behavior.
 import {simulatorHlsSourceReady, selectIosAccountFixture} from '../.github/simulator/sample-selection.js';
 window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ = __SIMULATOR_LANGUAGE__;
+window.__IST_SIMULATOR_DUO_POSE__ = __SIMULATOR_DUO_POSE__;
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
 let simulatorError = '';
 let simulatorOpening = false;
@@ -141,6 +142,27 @@ window.ISTSimulator = {
         Promise.allSettled([...document.images].filter(simulatorVisible).map(image=>image.decode?.())),
         new Promise(resolve=>setTimeout(resolve,8000))
       ]);
+      // The Duo inner panel is landscape when unfolded. Request a real native
+      // scene rotation before capturing; never rotate portrait UI pixels after
+      // the fact, which makes every label and control sideways.
+      if (window.__IST_SIMULATOR_DUO_POSE__ === 'unfolded') {
+        if (!IS_IOS || !Capacitor.isNativePlatform()) {
+          throw new Error('Unfolded Duo screenshots require the native iOS display plugin');
+        }
+        await IrgunVideoDisplay.setFullscreen({enabled:true,direction:'landscapeLeft'});
+        const orientationDeadline = Date.now() + 12000;
+        while (Date.now() < orientationDeadline &&
+               !(window.innerWidth > window.innerHeight &&
+                 document.documentElement.clientWidth > document.documentElement.clientHeight)) {
+          await new Promise(resolve=>setTimeout(resolve,200));
+        }
+        if (!(window.innerWidth > window.innerHeight &&
+              document.documentElement.clientWidth > document.documentElement.clientHeight)) {
+          throw new Error('Native iOS scene did not rotate to landscape for the unfolded Duo (' +
+            window.innerWidth + 'x' + window.innerHeight + ')');
+        }
+        await new Promise(resolve=>setTimeout(resolve,500));
+      }
       if (['watch-video','fullscreen'].includes(page)) {
         await new Promise((resolve,reject)=>{
           const start=Date.now(),check=()=>{
@@ -348,6 +370,9 @@ window.ISTSimulator = {
       opening: simulatorOpening, error: simulatorError,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       screenshotLanguage: window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ || '',
+      screenshotDuoPose: window.__IST_SIMULATOR_DUO_POSE__ || '',
+      viewportWidth: window.innerWidth || 0,
+      viewportHeight: window.innerHeight || 0,
       language: window.IST_I18N?.getLanguage?.() || document.documentElement.lang || 'en',
       documentLang: document.documentElement.lang || '',
       documentDir: document.documentElement.dir || '',
