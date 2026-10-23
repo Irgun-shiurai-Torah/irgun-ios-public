@@ -51,3 +51,15 @@ test('Watch UI QA verifies actual capsule and original transport on a real nativ
   for(const action of ['audioSpeedOpen','audioSpeed15','watchArtwork','audioSpeed10','watchVideo']) assert.ok(swift.includes('regressionTap("'+action+'")'),action);
   assert.match(swift,/itemEpoch"\) == epoch/);
 });
+
+test('full-player Watch tap uses existing DOM recorder name rather than duplicate selector', () => {
+  const directTest = swift.slice(
+    swift.indexOf('func testRegressionDirectListenAndOriginalFullPlayer'),
+    swift.indexOf('func testRegressionWatchOptionThreePopupAndNativeSpeed')
+  );
+  assert.ok(directTest.includes('controls["fullWatch"] != nil'));
+  assert.ok(directTest.includes('try regressionTap("watchFromAudio")'));
+  assert.ok(!directTest.includes('try regressionTap("fullWatch")'));
+  assert.ok(observer.includes("watchFromAudio: '[data-player-watch]'"));
+  assert.ok(observer.includes("fullWatch: '.player-sheet [data-player-watch]'"));
+});

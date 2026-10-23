@@ -508,7 +508,10 @@
         }
         let audioClock=number(positioned["nativePlayer"] as? [String:Any] ?? [:],"position")
         XCTAssertGreaterThan(audioClock,7,"Reproduction must use non-zero native audio position")
-        try regressionTap("fullWatch")
+        // The visible full-player Watch button is also recorded by the older
+        // watchFromAudio selector, which is listed first by the click observer.
+        // Use that verified click key; fullWatch remains the layout/visibility check.
+        try regressionTap("watchFromAudio")
         let watched=try waitFor("Full Audio -> Video must preserve the native audio timestamp",timeout:120) { s in
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return n["active"] as? Bool == true &&
