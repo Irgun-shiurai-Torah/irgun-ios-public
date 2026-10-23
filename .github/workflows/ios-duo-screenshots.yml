@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/ios-duo-screenshots.yml
       - .github/duo/**
+      - .github/simulator/**
+      - public/i18n.js
+      - src/**
   workflow_dispatch:
     inputs:
       pose:
@@ -16,6 +19,15 @@ on:
           - both
           - folded
           - unfolded
+      language:
+        description: App language for screenshots
+        required: true
+        type: choice
+        default: he
+        options:
+          - he
+          - en
+          - both
 
 permissions:
   contents: read
@@ -26,18 +38,20 @@ concurrency:
 
 jobs:
   screenshot:
-    name: Duo ${{ matrix.pose }} screenshots
+    name: Duo ${{ matrix.pose }} (${{ matrix.language }}) screenshots
     runs-on: xcode-27
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        pose: [folded, unfolded]
+        pose: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.pose == 'folded' && '["folded"]' || github.event_name == 'workflow_dispatch' && inputs.pose == 'unfolded' && '["unfolded"]' || '["folded","unfolded"]') }}
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["he"]' || inputs.language == 'en' && '["en"]' || inputs.language == 'he' && '["he"]' || inputs.language == 'both' && '["en","he"]' || '["he"]') }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
       DUO_POSE: ${{ matrix.pose }}
+      SIMULATOR_LANGUAGE: ${{ matrix.language }}
     steps:
       - uses: actions/checkout@v7
       - name: Select Xcode 27.1 (required for iPhone Duo)
@@ -168,7 +182,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: irgun-iphone-duo-${{ matrix.pose }}-${{ github.run_number }}
+          name: irgun-iphone-duo-${{ matrix.pose }}-${{ matrix.language }}-${{ github.run_number }}
           path: |
             duo-results/
             simulator-results/app-store/
