@@ -8,6 +8,15 @@ on:
         type: string
         required: false
         default: ""
+      language:
+        description: Language for App Store screenshot captures
+        required: true
+        type: choice
+        default: he
+        options:
+          - he
+          - en
+          - both
   push:
     branches: [main]
     paths:
@@ -40,18 +49,20 @@ concurrency:
 
 jobs:
   playback:
-    name: Playback on ${{ matrix.family }}
+    name: Playback on ${{ matrix.family }} (${{ matrix.language }})
     runs-on: macos-26
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         family: [iPhone, iPad]
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["he"]' || inputs.language == 'en' && '["en"]' || inputs.language == 'he' && '["he"]' || inputs.language == 'both' && '["en","he"]' || '["en"]') }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ${{ inputs.video_id || '' }}
       DEVICE_FAMILY: ${{ matrix.family }}
+      SIMULATOR_LANGUAGE: ${{ matrix.language }}
 
     steps:
       - uses: actions/checkout@v7
@@ -178,7 +189,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ios-simulator-${{ matrix.family }}-${{ github.run_number }}
+          name: ios-simulator-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}
           # Keep complete XCTest logs/summaries and exported still evidence.
           # The duplicate xcresult bundle and screen recordings can exceed 4 GB.
           path: |
@@ -212,35 +223,35 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: app-store-${{ matrix.family }}-${{ github.run_number }}-1
+          name: app-store-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}-1
           path: simulator-results/screenshot-downloads/App-Store-Screenshots-1.zip
           if-no-files-found: warn
       - name: Upload clean screenshots (part 2)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: app-store-${{ matrix.family }}-${{ github.run_number }}-2
+          name: app-store-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}-2
           path: simulator-results/screenshot-downloads/App-Store-Screenshots-2.zip
           if-no-files-found: warn
       - name: Upload clean screenshots (part 3)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: app-store-${{ matrix.family }}-${{ github.run_number }}-3
+          name: app-store-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}-3
           path: simulator-results/screenshot-downloads/App-Store-Screenshots-3.zip
           if-no-files-found: warn
       - name: Upload clean screenshots (part 4)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: app-store-${{ matrix.family }}-${{ github.run_number }}-4
+          name: app-store-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}-4
           path: simulator-results/screenshot-downloads/App-Store-Screenshots-4.zip
           if-no-files-found: warn
       - name: Upload clean screenshots (part 5)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: app-store-${{ matrix.family }}-${{ github.run_number }}-5
+          name: app-store-${{ matrix.family }}-${{ matrix.language }}-${{ github.run_number }}-5
           path: simulator-results/screenshot-downloads/App-Store-Screenshots-5.zip
           if-no-files-found: warn
 
