@@ -31,13 +31,45 @@ for file in files:
 
     width, height = parts
     expected_width, expected_height = expected
+
+    if pose == "unfolded" and (
+        abs(width - expected_height) <= 2 and
+        abs(height - expected_width) <= 2
+    ):
+        # The Duo inner panel's native open pose is sideways. XCTest returns
+        # real app framebuffer pixels in panel-native portrait dimensions even
+        # though the scene and WebView have been verified in landscape. Rotate
+        # those genuine pixels clockwise once; never rotate a portrait-layout
+        # app capture because the XCTest bridge separately asserts viewport
+        # width > height before any page screenshot is taken.
+        rotated = file.with_name(file.stem + ".rotated.png")
+        result = subprocess.run(
+            ["sips", "-r", "90", "--out", str(rotated), str(file)],
+            capture_output=True, text=True,
+        )
+        if result.returncode or not rotated.exists():
+            raise SystemExit(
+                f"Could not orient unfolded Duo framebuffer {file.name}: "
+                + result.stderr
+            )
+        rotated.replace(file)
+        report = subprocess.check_output(
+            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(file)],
+            text=True,
+        )
+        parts = [int(line.split(":", 1)[1].strip()) for line in report.splitlines()
+                 if "pixelWidth:" in line or "pixelHeight:" in line]
+        if len(parts) != 2:
+            raise SystemExit(f"Cannot identify rotated screenshot dimensions: {file}")
+        width, height = parts
+
     if abs(width - expected_width) <= 2 and abs(height - expected_height) <= 2:
         target_width, target_height = expected_width, expected_height
     else:
         raise SystemExit(
-            f"{file.name}: {width}x{height} is not an upright {pose} Duo screenshot. "
-            f"Expected {expected_width}x{expected_height}. "
-            "Wrong-screen or wrong-orientation captures are deliberately rejected."
+            f"{file.name}: {width}x{height} is not a valid upright {pose} Duo screenshot. "
+            f"Expected {expected_width}x{expected_height} (or the native inner-panel "
+            "raster for unfolded captures). Wrong-screen captures are deliberately rejected."
         )
 
     if (width, height) != (target_width, target_height):
