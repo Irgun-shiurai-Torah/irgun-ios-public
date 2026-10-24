@@ -49,8 +49,11 @@ helper = r"""
         // Never use XCUIScreen.main for unfolded screenshots: it selects the
         // physical cover panel, which is black when the hinge is fully open.
         // Ask XCTest for its available screen surfaces and select by raw
-        // native PNG pixels. Require landscape pixels for the unfolded pose;
-        // portrait screenshots are rejected instead of rotated after capture.
+        // native PNG pixels. The unfolded Duo's inner panel is physically
+        // sideways in its native open pose: XCTest can return its genuine
+        // framebuffer as 2006x2852 even when UIKit reports a landscape viewport.
+        // Accept that swapped raster only for unfolded captures; the packaging
+        // validator rotates it 90 degrees and verifies final landscape pixels.
         for screen in XCUIScreen.screens {
             let capture = screen.screenshot()
             let bytes = [UInt8](capture.pngRepresentation.prefix(24))
@@ -62,10 +65,13 @@ helper = r"""
             let width = bigEndian32(bytes, 16)
             let height = bigEndian32(bytes, 20)
             inspected.append("\(width)x\(height)")
-            let matches = abs(width - expectedWidth) <= 2 &&
+            let upright = abs(width - expectedWidth) <= 2 &&
                           abs(height - expectedHeight) <= 2
-            if matches {
-                print("DUO_CAPTURE: using native \(width)x\(height) pixels")
+            let innerPanelNative = expectedWidth > expectedHeight &&
+                          abs(width - expectedHeight) <= 2 &&
+                          abs(height - expectedWidth) <= 2
+            if upright || innerPanelNative {
+                print("DUO_CAPTURE: using \(innerPanelNative ? "native inner-panel raster requiring 90-degree orientation correction" : "upright") \(width)x\(height) pixels")
                 return capture
             }
         }
