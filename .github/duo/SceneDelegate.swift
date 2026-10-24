@@ -46,17 +46,23 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             bridgeController.supportedOrientations = isUnfoldedDuoCapture
                 ? [UIInterfaceOrientation.landscapeLeft.rawValue, UIInterfaceOrientation.landscapeRight.rawValue]
                 : [UIInterfaceOrientation.portrait.rawValue]
-            bridgeController.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
         appDelegate.irgunSetVideoOrientationMask(targetMask)
-        if let activeScene = scene as? UIWindowScene {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                activeScene.requestGeometryUpdate(
-                    .iOS(interfaceOrientations: targetMask)
-                ) { error in
-                    NSLog("IST Duo screenshot orientation request failed: \\(error)")
+        if #available(iOS 16.0, *) {
+            window?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if let activeScene = scene as? UIWindowScene {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    activeScene.requestGeometryUpdate(
+                        .iOS(interfaceOrientations: targetMask)
+                    ) { error in
+                        NSLog("IST Duo screenshot orientation request failed: \\(error)")
+                    }
                 }
             }
+        } else {
+            // Keep the simulator-only helper compatible with the app's iOS 15
+            // deployment target. iOS 16+ uses explicit scene geometry above.
+            UIViewController.attemptRotationToDeviceOrientation()
         }
     }
 
