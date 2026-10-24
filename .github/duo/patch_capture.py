@@ -15,6 +15,17 @@ if pose not in ("folded", "unfolded"):
 w, h = {"folded": (1398, 2034), "unfolded": (2853, 2007)}[pose]
 source_file = Path("ios/App/SimulatorUITests/PlaybackUITests.swift")
 source = source_file.read_text()
+# The scene delegate uses this launch argument to permit/request the inner
+# display's actual landscape geometry only for the unfolded screenshot job.
+launch_marker = '        app.launchArguments = ["--irgun-simulator-tests"]\n'
+if source.count(launch_marker) != 1:
+    raise SystemExit("Could not find exactly one simulator test launch argument")
+if pose == "unfolded":
+    source = source.replace(
+        launch_marker,
+        launch_marker + '        app.launchArguments.append("--irgun-duo-unfolded")\n',
+        1,
+    )
 target = "    func testZZAppStoreScreenshotsOfAllPublicPages() throws {"
 if source.count(target) != 1:
     raise SystemExit("Could not find exactly one App Store screenshot test")
