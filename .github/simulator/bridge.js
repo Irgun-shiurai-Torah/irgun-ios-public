@@ -142,27 +142,9 @@ window.ISTSimulator = {
         Promise.allSettled([...document.images].filter(simulatorVisible).map(image=>image.decode?.())),
         new Promise(resolve=>setTimeout(resolve,8000))
       ]);
-      // The Duo inner panel is landscape when unfolded. Request a real native
-      // scene rotation before capturing; never rotate portrait UI pixels after
-      // the fact, which makes every label and control sideways.
-      if (window.__IST_SIMULATOR_DUO_POSE__ === 'unfolded') {
-        if (!IS_IOS || !Capacitor.isNativePlatform()) {
-          throw new Error('Unfolded Duo screenshots require the native iOS display plugin');
-        }
-        await IrgunVideoDisplay.setFullscreen({enabled:true,direction:'landscapeLeft'});
-        const orientationDeadline = Date.now() + 12000;
-        while (Date.now() < orientationDeadline &&
-               !(window.innerWidth > window.innerHeight &&
-                 document.documentElement.clientWidth > document.documentElement.clientHeight)) {
-          await new Promise(resolve=>setTimeout(resolve,200));
-        }
-        if (!(window.innerWidth > window.innerHeight &&
-              document.documentElement.clientWidth > document.documentElement.clientHeight)) {
-          throw new Error('Native iOS scene did not rotate to landscape for the unfolded Duo (' +
-            window.innerWidth + 'x' + window.innerHeight + ')');
-        }
-        await new Promise(resolve=>setTimeout(resolve,500));
-      }
+      // Preserve the real unfolded Duo panel geometry. XCTest records its native
+      // portrait-ordered pixels; the screenshot validator corrects that
+      // framebuffer orientation without forcing a second UI rotation.
       if (['watch-video','fullscreen'].includes(page)) {
         await new Promise((resolve,reject)=>{
           const start=Date.now(),check=()=>{
