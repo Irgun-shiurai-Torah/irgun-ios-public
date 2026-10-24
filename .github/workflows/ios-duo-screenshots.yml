@@ -111,6 +111,32 @@ jobs:
           npx cap sync ios
           npx @capacitor/assets generate --ios
           python3 scripts/prepare_ios_cloud.py
+          # Make the simulator app's supported orientation match the Duo pose
+          # before the native target is built/launched. Runtime rotation alone
+          # was being reset to portrait by the simulator during XCTest launch.
+          python3 - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+          info = Path("ios/App/App/Info.plist")
+          with info.open("rb") as stream:
+              data = plistlib.load(stream)
+          pose = os.environ.get("DUO_POSE", "")
+          if pose == "unfolded":
+              orientations = [
+                  "UIInterfaceOrientationLandscapeLeft",
+                  "UIInterfaceOrientationLandscapeRight",
+              ]
+          elif pose == "folded":
+              orientations = ["UIInterfaceOrientationPortrait"]
+          else:
+              raise SystemExit(f"Unknown Duo pose: {pose!r}")
+          data["UISupportedInterfaceOrientations"] = orientations
+          data["UISupportedInterfaceOrientations~ipad"] = orientations
+          with info.open("wb") as stream:
+              plistlib.dump(data, stream, sort_keys=False)
+          print(f"Configured {pose} Duo screenshot orientations: {orientations}")
+          PY
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
           ruby scripts/patch_xcode_project.rb
           python3 .github/simulator/prepare.py native
