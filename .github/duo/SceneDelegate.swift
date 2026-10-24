@@ -11,7 +11,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard session.role == .windowApplication,
               let windowScene = scene as? UIWindowScene else { return }
         let appWindow = UIWindow(windowScene: windowScene)
-        appWindow.rootViewController = CAPBridgeViewController()
+        let bridgeController = CAPBridgeViewController()
+        let isUnfoldedDuoCapture = ProcessInfo.processInfo.arguments.contains("--irgun-duo-unfolded")
+        bridgeController.supportedOrientations = isUnfoldedDuoCapture
+            ? [UIInterfaceOrientation.landscapeLeft.rawValue, UIInterfaceOrientation.landscapeRight.rawValue]
+            : [UIInterfaceOrientation.portrait.rawValue]
+        appWindow.rootViewController = bridgeController
         window = appWindow
         (UIApplication.shared.delegate as? AppDelegate)?.window = appWindow
         appWindow.makeKeyAndVisible()
@@ -29,6 +34,30 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #if targetEnvironment(simulator)
         SimulatorProbe.shared.install(in: window)
         #endif
+
+        // The Duo simulator can reset to portrait when XCTest launches the app,
+        // even if the Device Hub orientation was set before launch. Set the
+        // Capacitor root controller's supported orientations first (in
+        // willConnectTo), then request the matching live scene geometry here.
+        // This file is injected only into the disposable Duo screenshot build.
+        let isUnfoldedDuoCapture = ProcessInfo.processInfo.arguments.contains("--irgun-duo-unfolded")
+        let targetMask: UIInterfaceOrientationMask = isUnfoldedDuoCapture ? .landscape : .portrait
+        if let bridgeController = window?.rootViewController as? CAPBridgeViewController {
+            bridgeController.supportedOrientations = isUnfoldedDuoCapture
+                ? [UIInterfaceOrientation.landscapeLeft.rawValue, UIInterfaceOrientation.landscapeRight.rawValue]
+                : [UIInterfaceOrientation.portrait.rawValue]
+            bridgeController.setNeedsUpdateOfSupportedInterfaceOrientations()
+        }
+        appDelegate.irgunSetVideoOrientationMask(targetMask)
+        if let activeScene = scene as? UIWindowScene {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                activeScene.requestGeometryUpdate(
+                    .iOS(interfaceOrientations: targetMask)
+                ) { error in
+                    NSLog("IST Duo screenshot orientation request failed: \\(error)")
+                }
+            }
+        }
     }
 
     func sceneWillResignActive(_ scene: UIScene) {
