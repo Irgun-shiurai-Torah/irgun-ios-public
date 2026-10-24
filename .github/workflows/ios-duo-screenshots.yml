@@ -175,6 +175,39 @@ jobs:
           set -euo pipefail
           CONTAINER=(-project ios/App/App.xcodeproj)
           if [ -d ios/App/App.xcworkspace ]; then CONTAINER=(-workspace ios/App/App.xcworkspace); fi
+
+          # XCTest's launch sequence resets the Duo orientation to portrait after
+          # the pre-launch Device Hub event. Once the app process is actually
+          # running, post the same orientation-picker event again from the host
+          # simulator helper. This avoids relying only on a UIKit request that
+          # the Duo simulator was overriding during app launch.
+          ORIENTATION_WATCH_PID=""
+          cleanup_orientation_watch() {
+            if [ -n "${ORIENTATION_WATCH_PID:-}" ]; then
+              kill "$ORIENTATION_WATCH_PID" 2>/dev/null || true
+              wait "$ORIENTATION_WATCH_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_orientation_watch EXIT
+          if [ "$DUO_POSE" = "unfolded" ]; then
+            (
+              for attempt in $(seq 1 180); do
+                if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list 2>/dev/null | grep -q 'org.irgunshiuraitorah.app'; then
+                  echo "Duo orientation watcher: app process detected; applying landscape-left"
+                  sleep 1
+                  xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient landscape-left
+                  sleep 2
+                  xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient landscape-left
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "::error::Duo orientation watcher could not detect the app process"
+              exit 1
+            ) > duo-results/orientation-watch.log 2>&1 &
+            ORIENTATION_WATCH_PID=$!
+          fi
+
           xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -destination-timeout 120 \
             -derivedDataPath "$RUNNER_TEMP/DuoDerivedData" \
