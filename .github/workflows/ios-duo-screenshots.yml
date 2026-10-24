@@ -111,32 +111,10 @@ jobs:
           npx cap sync ios
           npx @capacitor/assets generate --ios
           python3 scripts/prepare_ios_cloud.py
-          # Make the simulator app's supported orientation match the Duo pose
-          # before the native target is built/launched. Runtime rotation alone
-          # was being reset to portrait by the simulator during XCTest launch.
-          python3 - <<'PY'
-          import os
-          import plistlib
-          from pathlib import Path
-          info = Path("ios/App/App/Info.plist")
-          with info.open("rb") as stream:
-              data = plistlib.load(stream)
-          pose = os.environ.get("DUO_POSE", "")
-          if pose == "unfolded":
-              orientations = [
-                  "UIInterfaceOrientationLandscapeLeft",
-                  "UIInterfaceOrientationLandscapeRight",
-              ]
-          elif pose == "folded":
-              orientations = ["UIInterfaceOrientationPortrait"]
-          else:
-              raise SystemExit(f"Unknown Duo pose: {pose!r}")
-          data["UISupportedInterfaceOrientations"] = orientations
-          data["UISupportedInterfaceOrientations~ipad"] = orientations
-          with info.open("wb") as stream:
-              plistlib.dump(data, stream, sort_keys=False)
-          print(f"Configured {pose} Duo screenshot orientations: {orientations}")
-          PY
+          # Keep the real iOS 27 Duo simulator's native supported orientations.
+          # Its open inner panel is reported in panel-native portrait pixels;
+          # capture that real framebuffer and rotate only those pixels during
+          # validation. Forcing landscape in Info.plist destabilized XCTest.
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
           ruby scripts/patch_xcode_project.rb
           python3 .github/simulator/prepare.py native
@@ -155,18 +133,12 @@ jobs:
           xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
             -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
           codesign -f -s - "$RUNNER_TEMP/duo_fold"
-          # Set both the hinge posture and Device Hub orientation. The inner display
-          # must render the app in landscape; rotating a portrait PNG afterwards
-          # would leave every UI control and label sideways in App Store screenshots.
-          if [ "$DUO_POSE" = "folded" ]; then
-            ANGLE=0
-            ORIENTATION=portrait
-          else
-            ANGLE=180
-            ORIENTATION=landscape-left
-          fi
+          # The Duo open panel is physically turned relative to its screenshot
+          # pixel grid. Let iOS select the live app/window orientation, as in the
+          # successful original capture run; do not inject Device Hub rotation
+          # events that race with XCTest launching the application.
+          if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
           xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
-          xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient "$ORIENTATION"
           sleep 5
           xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --batteryState charged --batteryLevel 100
       - name: Run original App Store screenshot XCTest
@@ -176,38 +148,9 @@ jobs:
           CONTAINER=(-project ios/App/App.xcodeproj)
           if [ -d ios/App/App.xcworkspace ]; then CONTAINER=(-workspace ios/App/App.xcworkspace); fi
 
-          # XCTest's launch sequence resets the Duo orientation to portrait after
-          # the pre-launch Device Hub event. Once the app process is actually
-          # running, post the same orientation-picker event again from the host
-          # simulator helper. This avoids relying only on a UIKit request that
-          # the Duo simulator was overriding during app launch.
-          ORIENTATION_WATCH_PID=""
-          cleanup_orientation_watch() {
-            if [ -n "${ORIENTATION_WATCH_PID:-}" ]; then
-              kill "$ORIENTATION_WATCH_PID" 2>/dev/null || true
-              wait "$ORIENTATION_WATCH_PID" 2>/dev/null || true
-            fi
-          }
-          trap cleanup_orientation_watch EXIT
-          if [ "$DUO_POSE" = "unfolded" ]; then
-            (
-              for attempt in $(seq 1 180); do
-                if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list 2>/dev/null | grep -q 'org.irgunshiuraitorah.app'; then
-                  echo "Duo orientation watcher: app process detected; applying landscape-left"
-                  sleep 1
-                  xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient landscape-left
-                  sleep 2
-                  xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" orient landscape-left
-                  exit 0
-                fi
-                sleep 2
-              done
-              echo "::error::Duo orientation watcher could not detect the app process"
-              exit 1
-            ) > duo-results/orientation-watch.log 2>&1 &
-            ORIENTATION_WATCH_PID=$!
-          fi
-
+          # XCTest launches the real app after native build. No concurrent
+          # orientation watcher: it previously raced with app activation and
+          # intermittently left the viewport stuck in portrait.
           xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -destination-timeout 120 \
             -derivedDataPath "$RUNNER_TEMP/DuoDerivedData" \
