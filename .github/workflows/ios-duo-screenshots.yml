@@ -5,6 +5,9 @@ on:
     paths:
       - .github/workflows/ios-duo-screenshots.yml
       - .github/duo/**
+      - .github/simulator/**
+      - public/i18n.js
+      - src/**
   workflow_dispatch:
     inputs:
       pose:
@@ -16,6 +19,15 @@ on:
           - both
           - folded
           - unfolded
+      language:
+        description: App language for screenshots
+        required: true
+        type: choice
+        default: he
+        options:
+          - he
+          - en
+          - both
 
 permissions:
   contents: read
@@ -26,18 +38,20 @@ concurrency:
 
 jobs:
   screenshot:
-    name: Duo ${{ matrix.pose }} screenshots
+    name: Duo ${{ matrix.pose }} (${{ matrix.language }}) screenshots
     runs-on: xcode-27
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        pose: [folded, unfolded]
+        pose: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.pose == 'folded' && '["folded"]' || github.event_name == 'workflow_dispatch' && inputs.pose == 'unfolded' && '["unfolded"]' || '["folded","unfolded"]') }}
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["he"]' || inputs.language == 'en' && '["en"]' || inputs.language == 'he' && '["he"]' || inputs.language == 'both' && '["en","he"]' || '["he"]') }}
     env:
       BUNDLE_ID: org.irgunshiuraitorah.app
       BUILD_NUMBER: "1"
       SIMULATOR_VIDEO_ID: ""
       DUO_POSE: ${{ matrix.pose }}
+      SIMULATOR_LANGUAGE: ${{ matrix.language }}
     steps:
       - uses: actions/checkout@v7
       - name: Select Xcode 27.1 (required for iPhone Duo)
@@ -97,6 +111,10 @@ jobs:
           npx cap sync ios
           npx @capacitor/assets generate --ios
           python3 scripts/prepare_ios_cloud.py
+          # Keep the real iOS 27 Duo simulator's native supported orientations.
+          # Its open inner panel is reported in panel-native portrait pixels;
+          # capture that real framebuffer and rotate only those pixels during
+          # validation. Forcing landscape in Info.plist destabilized XCTest.
           ruby -e "require 'xcodeproj'" 2>/dev/null || gem install xcodeproj --no-document
           ruby scripts/patch_xcode_project.rb
           python3 .github/simulator/prepare.py native
@@ -115,8 +133,10 @@ jobs:
           xcrun -sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -O2 \
             -o "$RUNNER_TEMP/duo_fold" .github/duo/duo_fold.c -framework IOKit -framework CoreFoundation
           codesign -f -s - "$RUNNER_TEMP/duo_fold"
-          # simctl spawn accepts an absolute host path to a simulator-architecture binary.
-          # 0 degrees uses the cover screen; 180 degrees uses the unfolded inner screen.
+          # The Duo open panel is physically turned relative to its screenshot
+          # pixel grid. Let iOS select the live app/window orientation, as in the
+          # successful original capture run; do not inject Device Hub rotation
+          # events that race with XCTest launching the application.
           if [ "$DUO_POSE" = "folded" ]; then ANGLE=0; else ANGLE=180; fi
           xcrun simctl spawn "$SIMULATOR_UDID" "$RUNNER_TEMP/duo_fold" set "$ANGLE"
           sleep 5
@@ -127,6 +147,10 @@ jobs:
           set -euo pipefail
           CONTAINER=(-project ios/App/App.xcodeproj)
           if [ -d ios/App/App.xcworkspace ]; then CONTAINER=(-workspace ios/App/App.xcworkspace); fi
+
+          # XCTest launches the real app after native build. No concurrent
+          # orientation watcher: it previously raced with app activation and
+          # intermittently left the viewport stuck in portrait.
           xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" -destination-timeout 120 \
             -derivedDataPath "$RUNNER_TEMP/DuoDerivedData" \
@@ -168,7 +192,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: irgun-iphone-duo-${{ matrix.pose }}-${{ github.run_number }}
+          name: irgun-iphone-duo-${{ matrix.pose }}-${{ matrix.language }}-${{ github.run_number }}
           path: |
             duo-results/
             simulator-results/app-store/
