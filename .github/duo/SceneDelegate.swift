@@ -1,6 +1,13 @@
 import UIKit
 import Capacitor
 
+// Hide the iPhone Duo's circular 9:41 / Wi-Fi status display during App Store
+// screenshot capture only. This source file is injected into the disposable
+// simulator screenshot build and is never part of the release app.
+private final class DuoScreenshotBridgeViewController: CAPBridgeViewController {
+    override var prefersStatusBarHidden: Bool { true }
+}
+
 // Simulator-only scene migration for screenshot validation with the iOS 27 SDK.
 // The shipping iOS 26 build is not changed by this file.
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
@@ -11,7 +18,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard session.role == .windowApplication,
               let windowScene = scene as? UIWindowScene else { return }
         let appWindow = UIWindow(windowScene: windowScene)
-        appWindow.rootViewController = CAPBridgeViewController()
+        appWindow.rootViewController = DuoScreenshotBridgeViewController()
         window = appWindow
         (UIApplication.shared.delegate as? AppDelegate)?.window = appWindow
         appWindow.makeKeyAndVisible()
@@ -26,6 +33,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         appDelegate.irgunApplyWebViewMediaAndZoomPolicy()
         appDelegate.irgunScheduleAnalyticsPluginRegistration()
         appDelegate.irgunDispatchWebLifecycleEvent("irgunNativeDidBecomeActive")
+        // Reassert the screenshot-only preference after UIKit activates the
+        // scene, so iOS does not restore the circular status display on launch.
+        window?.rootViewController?.setNeedsStatusBarAppearanceUpdate()
         #if targetEnvironment(simulator)
         SimulatorProbe.shared.install(in: window)
         #endif
