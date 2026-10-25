@@ -345,7 +345,20 @@ final class PlaybackUITests: XCTestCase {
         let before=snapshot()
         XCTAssertFalse((before["nativePlayer"] as? [String:Any])?["active"] as? Bool ?? false,
                        "Direct Listen must begin with a cold player")
-        button.tap()
+        // XCTest can deliver a tap to the native test button before the WebView
+        // has reattached its JS context on a cold simulator launch. Require an
+        // observed invocation, and retry one PHYSICAL button tap only if none
+        // reached the app. Do not fake player state or silently skip playback.
+        for _ in 0..<2 {
+            button.tap()
+            for _ in 0..<16 {
+                if number(snapshot(), "directAudioTapCount") > 0 { break }
+                Thread.sleep(forTimeInterval: 0.35)
+            }
+            if number(snapshot(), "directAudioTapCount") > 0 { break }
+        }
+        XCTAssertGreaterThan(number(snapshot(), "directAudioTapCount"), 0,
+            "Native test control did not deliver a direct Listen command to the WebView")
         let opened=try waitFor("Direct audio from the live catalogue must start natively",timeout:110) { s in
             let n=s["nativePlayer"] as? [String:Any] ?? [:]
             return s["opening"] as? Bool == false &&
