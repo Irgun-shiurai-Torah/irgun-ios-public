@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - fix/ios-direct-audio-compact-speed-preview-20261023
+      - test/full-ios-regression-post-pr54-20261025
     paths:
       - '.github/workflows/ios-extended-regressions.yml'
       - '.github/regression/**'
