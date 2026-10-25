@@ -1,10 +1,22 @@
 name: iOS Extended Regression Tests
 
-# Run the true end-to-end suite explicitly, and check PR #53 automatically
-# on every relevant test-branch update BEFORE it is merged.
+# Run the true end-to-end suite on every iOS code PR BEFORE merging.
+# Manual runs and the existing regression test branch remain supported.
 # QA account and branch locks preserve isolation across concurrent suites.
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios-extended-regressions.yml'
+      - '.github/regression/**'
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'assets/**'
+      - 'package.json'
+      - 'capacitor.config.json'
+      - 'vite.config.js'
   push:
     branches:
       - fix/ios-direct-audio-compact-speed-preview-20261023
