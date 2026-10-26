@@ -1,10 +1,14 @@
 name: iOS Extended Regression Tests
 
-# Run the true end-to-end suite explicitly, and check PR #53 automatically
-# on every relevant test-branch update BEFORE it is merged.
+# Run the true end-to-end suite on every iOS code PR BEFORE merging.
+# Manual runs and the existing regression test branch remain supported.
 # QA account and branch locks preserve isolation across concurrent suites.
 on:
   workflow_dispatch:
+  # Every iOS PR needs full extended regression coverage before merging,
+  # including resource and workflow changes outside src/.
+  pull_request:
+    branches: [main]
   push:
     branches:
       - fix/ios-direct-audio-compact-speed-preview-20261023
@@ -236,3 +240,24 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+
+  # This final PR status stays red unless every iPhone, iPad and independent
+  # cross-device test completed successfully. Add this named check to GitHub's
+  # required status checks for main to block manual merges as well.
+  extended-merge-gate:
+    name: iOS extended regression merge gate
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: [device, cross-device]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all extended suites passed
+        env:
+          DEVICE_RESULT: ${{ needs.device.result }}
+          CROSS_DEVICE_RESULT: ${{ needs.cross-device.result }}
+        run: |
+          echo "iPhone/iPad extended suite: $DEVICE_RESULT"
+          echo "Independent cross-device suite: $CROSS_DEVICE_RESULT"
+          if [ "$DEVICE_RESULT" != "success" ] || [ "$CROSS_DEVICE_RESULT" != "success" ]; then
+            echo "::error::iOS Extended Regression Tests must complete successfully before merging."
+            exit 1
+          fi

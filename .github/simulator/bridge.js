@@ -75,7 +75,7 @@ document.addEventListener('click', event => {
 }, true);
 
 window.ISTSimulator = {
-  storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '',
+  storePage: '', storeReady: false, storeError: '', storeIndex: -1, selectedSampleId: '', directAudioTapCount: 0,
   reportedExpectedSource: '', reportedSources: null, reportedSelectedId: '',
   reportedVimeoKey: '', reportedEmbedPreview: '', reportedUnlistedPreview: '',
   storePages: ['home','shiurim','filter-location','filter-speaker','live','live-boro','live-flatbush','schedule','paid','donate','contact','account','register','library-likes','library-later','library-history','library-playlists','library-downloads','library-purchased','library-following','privacy','watch-video','watch-audio','audio-player','mini-player','fullscreen'],
@@ -252,6 +252,9 @@ window.ISTSimulator = {
     }
   },
   async openDirectAudioSample() {
+    // Native test-button acknowledgement. Distinguishes a missed physical tap
+    // from a real network/decoder failure without faking playback.
+    this.directAudioTapCount += 1;
     if (simulatorOpening) return;
     simulatorOpening = true;
     simulatorError = '';
@@ -350,6 +353,7 @@ window.ISTSimulator = {
       nativeRestoreBusy: Boolean(state.nativeBackgroundRestoreBusy),
       initializationFrameConnected: Boolean(state.watchVimeoInitialization?.frame?.isConnected),
       opening: simulatorOpening, error: simulatorError,
+      directAudioTapCount: this.directAudioTapCount,
       storePage:this.storePage, storeReady:this.storeReady, storeError:this.storeError,
       screenshotLanguage: window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ || '',
       screenshotDuoPose: window.__IST_SIMULATOR_DUO_POSE__ || '',
