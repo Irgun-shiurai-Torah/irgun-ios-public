@@ -77,3 +77,18 @@ test('AppDelegate does not steal an ongoing call audio session', () => {
   assert.match(interruption, /irgunNativeAudioInterruptionEndedShouldResume/);
   assert.doesNotMatch(interruption, /setActive\(true\)/);
 });
+
+test('failed native HLS open detaches its UIKit surface and restores WebView interaction', () => {
+  const cleanup = between(unified, 'private func detachViewerSurface()', 'private func installViewer()');
+  assert.match(cleanup, /viewer\.view\.isUserInteractionEnabled = false/);
+  assert.match(cleanup, /viewer\.view\.removeFromSuperview\(\)/);
+  assert.match(cleanup, /videoLayer\.player = nil/);
+  const surface = between(unified, 'private func placeSurface(', 'private func installRemoteControls()');
+  assert.match(surface, /viewer\.view\.isUserInteractionEnabled = active && mode == "video"/);
+  assert.match(surface, /viewer\.view\.isHidden = !active/);
+  const pending = between(unified, 'private func finishPendingOpenIfReady()', 'private func waitForPlayableItem(');
+  assert.match(pending, /case \.failed:[\s\S]*failOpen\(/);
+  const timeout = between(unified, 'private func waitForPlayableItem(', '@objc public func open(');
+  assert.match(timeout, /self\.failOpen\("Native HLS did not become playable within 25 seconds"/);
+  assert.match(cleanup, /notifyListeners\("state", data: snapshot\(\)\)/);
+});
