@@ -170,11 +170,30 @@ final class PlaybackUITests: XCTestCase {
                         current = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
                     }
                     if current["controlsVisible"] as? Bool != true {
-                        videoPoint(0.5,0.25).tap()
-                        _ = try waitFor("Real picture tap reveals current native controls", timeout: 10) { state in
-                            let n = state["nativePlayer"] as? [String: Any] ?? [:]
-                            return self.number(n,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500 &&
-                                n["controlsVisible"] as? Bool == true
+                        // Immediately after an iPhone landscape -> portrait
+                        // transition the first genuine UIKit tap may be ignored
+                        // while its view hierarchy reattaches. Retry PHYSICAL
+                        // picture taps only when the native state proves no
+                        // controls were revealed; never force player state.
+                        var revealed = false
+                        for _ in 0..<3 {
+                            videoPoint(0.5,0.25).tap()
+                            let deadline = Date().addingTimeInterval(3.5)
+                            while Date() < deadline {
+                                let n = snapshot()["nativePlayer"] as? [String:Any] ?? [:]
+                                if n["controlsVisible"] as? Bool == true &&
+                                   number(n,"observedAt") > Date().timeIntervalSince1970 * 1000 - 1500 {
+                                    revealed = true
+                                    break
+                                }
+                                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                            }
+                            if revealed { break }
+                        }
+                        guard revealed else {
+                            evidence("native-picture-taps-not-delivered")
+                            XCTFail("Real repeated picture taps did not reveal native controls after orientation change")
+                            throw Failure.timedOut("Native picture tap")
                         }
                     }
                     let latest = snapshot()["nativePlayer"] as? [String: Any] ?? [:]
