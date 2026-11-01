@@ -121,7 +121,7 @@ test('PiP recovery keeps playback intent without replacing the native item', () 
   const unified = readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
   assert.match(unified,/rememberPiPPlaybackIntent\(\)/);
   assert.match(unified,/let shouldResume = pipResumeWanted && !pipPausedByUser/);
-  assert.match(unified,/player\.playImmediately\(atRate: playbackRate\)/);
+  assert.match(unified,/if shouldResume \{[\s\S]*?playIfAllowed\(\)/);
 });
 
 test('Android control layout is mirrored without replacing video/audio decoders',()=>{
