@@ -134,6 +134,8 @@ def patch_app_delegate():
             text = text.replace('import UIKit', 'import UIKit\nimport WebKit', 1)
     if 'import AVFoundation' not in text:
         text = text.replace('import WebKit', 'import WebKit\nimport AVFoundation', 1)
+    if 'import CallKit' not in text:
+        text = text.replace('import AVFoundation', 'import AVFoundation\nimport CallKit', 1)
 
     additions = []
     if 'private var irgunAnalyticsPlugin: IrgunAnalyticsPlugin?' not in text:
@@ -219,6 +221,8 @@ def patch_app_delegate():
     if 'private func irgunConfigurePlaybackAudioSession()' not in text:
         additions.append('''
     private func irgunConfigurePlaybackAudioSession() {
+        // App activation must not seize the session from an ongoing call.
+        guard !CXCallObserver().calls.contains(where: { !$0.hasEnded }) else { return }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .moviePlayback)
@@ -258,8 +262,8 @@ def patch_app_delegate():
             let rawOptions = (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
             let options = AVAudioSession.InterruptionOptions(rawValue: rawOptions)
             if options.contains(.shouldResume) {
-                do { try AVAudioSession.sharedInstance().setActive(true) }
-                catch { NSLog("Irgun playback audio session reactivation failed: \\(error)") }
+                // Each player resumes only after CallKit and AVAudioSession
+                // both say that the system call has finished.
                 irgunDispatchWebLifecycleEvent("irgunNativeAudioInterruptionEndedShouldResume")
             } else {
                 irgunDispatchWebLifecycleEvent("irgunNativeAudioInterruptionEnded")
