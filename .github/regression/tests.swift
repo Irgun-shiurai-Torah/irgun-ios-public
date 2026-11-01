@@ -44,25 +44,23 @@
             native["mode"] as? String == "video" && native["layerReady"] as? Bool == true
         let surfaceBottom = videoSurface
             ? number(native,"surfaceY") + number(native,"surfaceHeight") : 0
-        // Scroll in the content area BELOW the native AVPlayer. A swipe from
-        // the WebView center can land on the UIKit video overlay on iPad and
-        // become a video tap instead of scrolling the page.
-        let lower = min(max(80,height-100),max(height*0.68,surfaceBottom+80))
-        let upper = max(surfaceBottom+30,min(lower-240,height*0.50))
-        guard lower-upper >= 90 else {
-            // Honor the target direction even when there is too little room
-            // below a native surface; an offscreen row above needs swipeDown.
+        // iPhone catalogue cards can be 1,500+ points below the fold.
+        // The former 240-point XCTest drags only moved the page a few dozen
+        // points per gesture on iPhone: nine retries never reached Watch/Listen.
+        // Use a real long finger swipe, starting clear of the bottom nav and
+        // ending below the sticky header. Do not invoke JS scroll/click helpers.
+        let lower = min(height - 120, max(height * 0.79, surfaceBottom + 80))
+        let upper = max(surfaceBottom + 36, min(height * 0.22, lower - 420))
+        guard lower-upper >= 180 else {
             if towardUp { app.webViews.firstMatch.swipeUp() }
             else { app.webViews.firstMatch.swipeDown() }
             return
         }
-        let x=max(20,min(width-20,width*0.5))
-        let startY=towardUp ? lower : upper
-        let endY=towardUp ? upper : lower
-        let origin=app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-        origin.withOffset(CGVector(dx:x,dy:startY)).press(
-            forDuration:0.08,
-            thenDragTo:origin.withOffset(CGVector(dx:x,dy:endY)))
+        let x = max(24, min(width - 24, width * 0.24))
+        let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+        let start = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
+        let end = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
+        start.press(forDuration:0.05, thenDragTo:end, withVelocity:.fast, thenHoldForDuration:0)
     }
 
     private func regressionTap(_ key: String) throws {
@@ -80,7 +78,9 @@
         }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
-        for _ in 0..<9 {
+        // One-screen flicks are real physical gestures; allow enough travel
+        // for long catalogues and a possible reverse swipe after momentum.
+        for _ in 0..<18 {
             let fullState=snapshot()
             let snap=fullState["regression"] as? [String:Any] ?? [:]
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
@@ -172,6 +172,9 @@
             "accountClickKey": finalRegression["accountClickKey"] ?? "",
             "accountClickSequence": number(finalRegression,"accountClickSequence"),
             "targetRect": (finalRegression["rects"] as? [String:Any])?[key] ?? [String:Any](),
+            "pageScrollY": number(finalRegression,"pageScrollY"),
+            "scrollRoot": finalRegression["scrollRoot"] ?? "",
+            "scrollHeight": number(finalRegression,"scrollHeight"),
             "libraryTabsRect": finalRegression["libraryTabsRect"] ?? [String:Any](),
             "libraryTabsScrollLeft": number(finalRegression,"libraryTabsScrollLeft"),
             "nativeActive": finalNative["active"] ?? false,
