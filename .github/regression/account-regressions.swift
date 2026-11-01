@@ -104,6 +104,28 @@
                 }
                 return true
             }
+            // The iPad WKWebView exposes a real "Save comment" accessibility
+            // control even when its CSS center is covered by an unrelated
+            // button after keyboard/safe-area layout. Let XCTest bring this
+            // actual button into view instead of repeatedly swiping the page.
+            // The account observer must still capture a *real* DOM click on
+            // the exact disposable QA comment before this helper can succeed.
+            if key == "commentSave" {
+                let button = app.webViews.buttons.matching(
+                    NSPredicate(format:"label == %@", "Save comment")
+                ).firstMatch
+                if button.waitForExistence(timeout:12) {
+                    for _ in 0..<2 {
+                        if clickDelivered(account()) { return }
+                        button.tap()
+                        let deadline = Date().addingTimeInterval(5)
+                        while Date() < deadline {
+                            if clickDelivered(account()) { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                    }
+                }
+            }
             func touchEvidence(_ state: [String:Any], _ stage: String) {
                 let observed = state["account"] as? [String:Any] ?? [:]
                 let native = state["nativePlayer"] as? [String:Any] ?? [:]
@@ -413,9 +435,19 @@
         nativeEditor.typeText(" updated")
         XCTAssertTrue((nativeEditor.value as? String ?? "").contains(" updated"),
                       "Real keyboard editing must reach the comment textarea")
-        // Return in a multiline comment editor inserts a newline rather than
-        // dismissing the keyboard. Tap the real Save action first, then demand
-        // that the saved editor loses focus and the native keyboard closes.
+        // The iPad onscreen keyboard can cover the tiny Save row or shift the
+        // WebView's visual viewport. Return would insert a newline rather than
+        // dismiss a multiline editor, so use the native Done accessory instead.
+        // The actual typed comment remains in the textarea until a real Save
+        // click sends its PUT request; keyboard dismissal is NOT a fake save.
+        try dismissNativeKeyboard()
+        _ = try waitFor("iPad comment keyboard is closed before Save",timeout:12) { _ in
+            self.nativeKeyboardIsClosed()
+        }
+        try awaitAccount("Exact owned QA comment Save action still exists after dismissal") {
+            let rects = $0["controlRects"] as? [String:[String:Any]] ?? [:]
+            return rects["commentSave"] != nil && $0["qaCommentPhase"] as? String == "created"
+        }
         let editBefore = successCount(account(), "/comments/edit", "PUT")
         try touch("commentSave")
         try awaitAccount("Comment edit persisted on server") {
