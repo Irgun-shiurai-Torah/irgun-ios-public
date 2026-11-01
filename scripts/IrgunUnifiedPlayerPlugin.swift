@@ -648,9 +648,58 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         try session.setActive(true)
     }
 
+    // A failed native open must never leave a transparent/black full-screen
+    // UIKit view above the WKWebView. Detach it so HTML controls and scrolling
+    // remain usable while the caller falls back to its other playback route.
+    private func detachViewerSurface() {
+        viewer.view.isHidden = true
+        viewer.view.isUserInteractionEnabled = false
+        controlsOverlay?.isHidden = true
+        videoLayer.player = nil
+        if viewer.parent != nil {
+            viewer.willMove(toParent: nil)
+            viewer.view.removeFromSuperview()
+            viewer.removeFromParent()
+        }
+    }
+
+    private func failOpen(_ message: String, call: CAPPluginCall) {
+        generation += 1
+        pendingOpen = nil
+        pendingOpenTimeout?.cancel()
+        pendingOpenTimeout = nil
+        playbackRecoveryTask?.cancel()
+        playbackRecoveryTask = nil
+        clearPendingQualityChange()
+        pipController?.stopPictureInPicture()
+        isPiPRequested = false
+        pipResumeWanted = false
+        pipPausedByUser = false
+        playingWanted = false
+        player.pause()
+        itemObserver = nil
+        player.replaceCurrentItem(with: nil)
+        active = false
+        itemID = ""
+        itemURL = ""
+        mode = "video"
+        layout = "inline"
+        lastSurfaceRect = nil
+        nativeSeekTarget = nil
+        clearRemoteControls()
+        setControlsVisible(false)
+        detachViewerSurface()
+        notifyListeners("state", data: snapshot())
+        call.reject(message)
+    }
+
     private func installViewer() -> Bool {
-        if viewer.parent != nil { return true }
+        if viewer.parent != nil {
+            videoLayer.player = player
+            return true
+        }
         guard let root = bridge?.webView?.window?.rootViewController else { return false }
+        videoLayer.player = player
         root.addChild(viewer)
         // An AVPlayerViewController surface should never resize across the WebView
         // title bar after iPad foreground/layout changes: frame is controlled by JS.
@@ -692,10 +741,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
         videoLayer.frame = viewer.view.bounds
         controlsOverlay?.frame = viewer.view.bounds
-        viewer.view.isHidden = mode == "audio" || overlayOccluded || viewer.view.frame.width < 20 || viewer.view.frame.height < 20
+        viewer.view.isHidden = !active || mode == "audio" || overlayOccluded ||
+            viewer.view.frame.width < 20 || viewer.view.frame.height < 20
+        // An inactive native surface must never intercept WebView taps or scrolls.
         // Mini video is visible but does not steal taps from the WebView's bar.
-        viewer.view.isUserInteractionEnabled = mode == "video" && layout != "mini" && !overlayOccluded && !(pipController?.isPictureInPictureActive ?? false)
-        controlsOverlay?.isHidden = mode != "video" || layout == "mini" || overlayOccluded || (pipController?.isPictureInPictureActive ?? false)
+        viewer.view.isUserInteractionEnabled = active && mode == "video" && layout != "mini" &&
+            !overlayOccluded && !(pipController?.isPictureInPictureActive ?? false)
+        controlsOverlay?.isHidden = !active || mode != "video" || layout == "mini" ||
+            overlayOccluded || (pipController?.isPictureInPictureActive ?? false)
         refreshControlsHideTimer()
         viewer.view.setNeedsLayout()
     }
@@ -836,7 +889,9 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "pipActive": pipController?.isPictureInPictureActive ?? false,
             "pipSupported": AVPictureInPictureController.isPictureInPictureSupported(),
             "pipPossible": pipController?.isPictureInPicturePossible ?? false,
-            "layerReady": videoLayer.isReadyForDisplay && !viewer.view.isHidden,
+            "layerReady": viewer.parent != nil && videoLayer.isReadyForDisplay && !viewer.view.isHidden,
+            "surfaceAttached": viewer.parent != nil,
+            "surfaceHidden": viewer.view.isHidden,
             "overlayOccluded": overlayOccluded,
             "pipRequested": isPiPRequested,
             "videoWidth": Double(player.currentItem?.presentationSize.width ?? 0),
@@ -845,7 +900,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "surfaceY": Double(viewer.view.frame.minY),
             "surfaceWidth": Double(viewer.view.frame.width),
             "surfaceHeight": Double(viewer.view.frame.height),
-            "surfaceInteractive": viewer.view.isUserInteractionEnabled,
+            "surfaceInteractive": viewer.parent != nil && !viewer.view.isHidden && viewer.view.isUserInteractionEnabled,
             "controlsVisible": controlsVisible && controlsAreAvailable,
             "fullscreenButtonTaps": fullscreenButtonTaps,
             "error": player.currentItem?.error?.localizedDescription ?? ""
@@ -959,12 +1014,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 ) { _ in DispatchQueue.main.async(execute: finish) }
             } else { finish() }
         case .failed:
-            pendingOpen = nil
-            pendingOpenTimeout?.cancel()
-            pendingOpenTimeout = nil
-            player.pause()
-            active = false
-            call.reject("Native media is not playable: " + (item.error?.localizedDescription ?? "unknown HLS error"))
+            failOpen("Native media is not playable: " + (item.error?.localizedDescription ?? "unknown HLS error"),
+                     call: call)
         default:
             return
         }
@@ -982,11 +1033,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let timeout = DispatchWorkItem { [weak self] in
             guard let self = self, self.pendingOpen != nil, self.pendingOpenGeneration == owner else { return }
             let waiting = self.pendingOpen
-            self.pendingOpen = nil
-            self.pendingOpenTimeout = nil
-            self.player.pause()
-            self.active = false
-            waiting?.reject("Native HLS did not become playable within 25 seconds")
+            guard let waiting = waiting else { return }
+            self.failOpen("Native HLS did not become playable within 25 seconds", call: waiting)
         }
         pendingOpenTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: timeout)
@@ -1056,11 +1104,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.active = true
             self.controlsTouchActive = false
             self.controlsMenuOpen = false
+            // Re-apply visibility now that active is true. The earlier layout
+            // pass intentionally keeps an inactive surface hidden.
+            self.placeSurface(self.lastSurfaceRect)
             // Match Android's unobstructed initial picture: only a real tap reveals controls.
             self.setControlsVisible(false)
             self.installRemoteControls()
             do { try self.activateAudioSession() }
-            catch { call.reject("Audio session unavailable: \(error.localizedDescription)"); return }
+            catch {
+                self.failOpen("Audio session unavailable: \(error.localizedDescription)", call: call)
+                return
+            }
             let requested = max(0, call.getDouble("position") ?? 0)
             self.waitForPlayableItem(call, position: requested)
         }
@@ -2122,11 +2176,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             self.layout = "inline"
             self.lastSurfaceRect = nil
             self.clearRemoteControls()
-            if self.viewer.parent != nil {
-                self.viewer.willMove(toParent: nil)
-                self.viewer.view.removeFromSuperview()
-                self.viewer.removeFromParent()
-            }
+            self.detachViewerSurface()
             call.resolve(self.snapshot())
         }
     }
