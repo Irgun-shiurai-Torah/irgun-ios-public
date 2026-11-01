@@ -15,6 +15,7 @@ on:
       - package.json
       - scripts/IrgunUnifiedPlayerPlugin.swift
       - scripts/test_ios_unified_avplayer.mjs
+      - scripts/test_ios_call_interruption.mjs
       - scripts/test_ios_vimeo_background.mjs
       - scripts/test_ios_follow_controls.mjs
       - src/follow-controls.js
@@ -72,7 +73,7 @@ jobs:
       - name: Install dependencies and add simulator-only observations
         run: |
           node --test scripts/test_ios_playback.cjs scripts/test_tab_swipes.cjs
-          node --test scripts/test_ios_unified_avplayer.mjs scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs
+          node --test scripts/test_ios_unified_avplayer.mjs scripts/test_ios_vimeo_background.mjs scripts/test_ios_follow_controls.mjs scripts/test_ios_call_interruption.mjs
           node --check src/main.js
           node scripts/test_ios_reader_mode.mjs
           node --test scripts/test_ios_android_parity.mjs scripts/test_ios_collection_parity.mjs scripts/test_ios_swipe_motion.mjs scripts/test_ios_sample_selection.mjs scripts/test_watch_details_swipe.mjs
