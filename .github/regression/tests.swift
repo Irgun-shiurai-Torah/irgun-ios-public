@@ -76,6 +76,72 @@
             }
             return
         }
+        if key == "listenVideo" {
+            // A direct Listen action is overlaid on a thumbnail. On iPad its
+            // CSS rectangle may be visible even when elementFromPoint briefly
+            // hits the image underneath; the generic scroll loop then keeps
+            // swiping past an already-visible button instead of tapping it.
+            // Resolve the EXACT backed-up fixture through the real accessible
+            // button and confirm the captured DOM click targets that media ID.
+            let initial = regression()
+            let expected = (initial["listenFixture"] as? [String:Any])?["id"] as? String ?? ""
+            XCTAssertFalse(expected.isEmpty,"Direct Listen must target a specific backed-up lecture")
+            let previous = number(initial,"lastClickSequence")
+            for attempt in 0..<3 {
+                let state = snapshot()
+                let observed = state["regression"] as? [String:Any] ?? [:]
+                let rects = observed["rects"] as? [String:[String:Any]] ?? [:]
+                let rect = rects[key] ?? [:]
+                guard let currentId = (observed["listenFixture"] as? [String:Any])?["id"] as? String,
+                      currentId == expected, number(rect,"w") > 25,
+                      number(rect,"h") > 20 else {
+                    XCTFail("Direct Listen fixture changed or its real button disappeared")
+                    throw Failure.timedOut("Direct Listen fixture")
+                }
+                let x = number(rect,"x"), y = number(rect,"y")
+                let options = app.webViews.buttons.matching(
+                    NSPredicate(format:"label == %@", "Listen")
+                ).allElementsBoundByIndex
+                // Never touch an unrelated lecture: require an AX frame at
+                // the exact DOM control location, not merely a matching label.
+                let target = options.first { option in
+                    let box = option.frame
+                    return abs(box.midX - x) < max(40,number(rect,"w") * 0.55) &&
+                        abs(box.midY - y) < max(32,number(rect,"h") * 0.75) &&
+                        option.isHittable
+                }
+                if let target = target {
+                    target.tap()
+                } else {
+                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        .withOffset(CGVector(dx:x,dy:y)).tap()
+                }
+                let deadline = Date().addingTimeInterval(6)
+                while Date() < deadline {
+                    let seen = regression()
+                    if number(seen,"lastClickSequence") > previous &&
+                       seen["lastClickKey"] as? String == key {
+                        XCTAssertEqual(seen["lastClickTargetId"] as? String,expected,
+                                       "Direct Listen must not open an unrelated lecture")
+                        return
+                    }
+                    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                }
+                print("UITEST: iPad direct Listen touch did not yield a DOM click, retry \(attempt+1)")
+                // Only real user swipes are allowed when the button has moved
+                // offscreen, never a synthetic JS dispatch or player override.
+                let latest = snapshot()
+                let r = (latest["regression"] as? [String:Any] ?? [:])["rects"] as? [String:[String:Any]] ?? [:]
+                let newY = number(r[key] ?? [:],"y")
+                let height = number(latest["regression"] as? [String:Any] ?? [:],"height")
+                if newY < 0 || newY > height {
+                    regressionScroll(latest,towardUp:newY > height)
+                }
+            }
+            evidence("direct-listen-physical-click-not-delivered")
+            XCTFail("iPad direct Listen button never received a real click for the selected lecture")
+            throw Failure.timedOut("Direct Listen")
+        }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
         // One-screen flicks are real physical gestures; allow enough travel
