@@ -707,7 +707,9 @@
         while Date() < promptDeadline {
             if snapshot()["nativePushAuthorized"] as? Bool == true { break }
             var accepted = false
-            for host in [app,springboard] {
+            // app is an implicitly unwrapped XCUIApplication? in PlaybackUITests.
+            // Compact away any optional before accessing XCTest's alerts query.
+            for host in [app,springboard].compactMap({ $0 }) {
                 let alerts = host.alerts.firstMatch
                 for label in ["Allow","Allow While Using App","Allow Notifications"] {
                     let button = alerts.buttons[label].firstMatch
