@@ -462,16 +462,12 @@
         nativeEditor.typeText(" updated")
         XCTAssertTrue((nativeEditor.value as? String ?? "").contains(" updated"),
                       "Real keyboard editing must reach the comment textarea")
-        // The iPad onscreen keyboard can cover the tiny Save row or shift the
-        // WebView's visual viewport. Return would insert a newline rather than
-        // dismiss a multiline editor, so use the native Done accessory instead.
-        // The actual typed comment remains in the textarea until a real Save
-        // click sends its PUT request; keyboard dismissal is NOT a fake save.
-        try dismissNativeKeyboard()
-        _ = try waitFor("iPad comment keyboard is closed before Save",timeout:12) { _ in
-            self.nativeKeyboardIsClosed()
-        }
-        try awaitAccount("Exact owned QA comment Save action still exists after dismissal") {
+        // A multiline textarea on iPad may keep the system keyboard visible
+        // even when UIKit's Hide Keyboard accessory is physically tapped.
+        // Real users can save with the keyboard open: exercise the actual
+        // accessible Save comment button and verify its server-side PUT rather
+        // than requiring an unrelated OS keyboard dismissal first.
+        try awaitAccount("Exact owned QA comment Save action exists with editor focused") {
             let rects = $0["controlRects"] as? [String:[String:Any]] ?? [:]
             return rects["commentSave"] != nil && $0["qaCommentPhase"] as? String == "created"
         }
