@@ -198,10 +198,13 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         let desiredPosition: Double
         let previousItem: AVPlayerItem
         let previousManifest: IrgunFixedHLSManifest?
-        let targetManifest: IrgunFixedHLSManifest?
-        let replacement: AVPlayerItem
+        var targetManifest: IrgunFixedHLSManifest?
+        var replacement: AVPlayerItem
         let finish: ((Bool) -> Void)?
         var isSeeking = false
+        // One bounded retry with a fresh HLS resource URL on a stalled
+        // rendition. Keep the original item as the final fallback.
+        var retryCount = 0
     }
     private var qualityChange: QualityChange?
     private var isPiPRequested = false
@@ -896,6 +899,8 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "itemEpoch": itemEpoch,
             "qualityHeight": qualityHeight,
             "qualities": availableHeights,
+            "qualityChangeTarget": qualityChange?.targetHeight ?? 0,
+            "qualityChangeAttempt": qualityChange?.retryCount ?? 0,
             "pipActive": pipController?.isPictureInPictureActive ?? false,
             "pipSupported": AVPictureInPictureController.isPictureInPictureSupported(),
             "pipPossible": pipController?.isPictureInPicturePossible ?? false,
@@ -1922,6 +1927,74 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         }
     }
 
+    private func scheduleQualityChangeDeadline(_ serial: Int) {
+        qualityTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self = self, let change = self.qualityChange,
+                  change.serial == serial else { return }
+            self.retryQualityChangeOrRestore(change)
+        }
+        qualityTimeout = timeout
+        // HLS can fail one segment request during an iPad quality switch.
+        // A 22-second deadline leaves room for one fresh-resource retry
+        // without trapping the user in an infinite loading state.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 22, execute: timeout)
+    }
+
+    private func retryQualityChangeOrRestore(_ change: QualityChange) {
+        guard qualityChange?.serial == change.serial else { return }
+        guard change.retryCount == 0 else {
+            NSLog("Irgun HLS quality %d unavailable after retry; restoring previous stream", change.targetHeight)
+            restoreQualityAfterFailure(change)
+            return
+        }
+        guard let original = playableURL(itemURL) else {
+            restoreQualityAfterFailure(change)
+            return
+        }
+        let freshManifest: IrgunFixedHLSManifest?
+        let freshItem: AVPlayerItem
+        if change.targetHeight == 0 {
+            freshManifest = nil
+            freshItem = AVPlayerItem(url: original)
+        } else {
+            guard let master = qualityMaster, let masterURL = qualityMasterURL,
+                  let loader = IrgunFixedHLSManifest(master: master, source: masterURL,
+                                                      height: change.targetHeight) else {
+                restoreQualityAfterFailure(change)
+                return
+            }
+            freshManifest = loader
+            freshItem = AVPlayerItem(asset: loader.makeAsset())
+        }
+        NSLog("Irgun HLS quality %d stalled; retrying once with a new resource", change.targetHeight)
+        var retry = change
+        retry.retryCount = 1
+        retry.replacement = freshItem
+        retry.targetManifest = freshManifest
+        retry.isSeeking = false
+        qualityChange = retry
+
+        // The retry retains the SAME AVPlayer and lecture, and restores the
+        // original timestamp. It never reports success without a playable item.
+        player.pause()
+        itemObserver = nil
+        player.replaceCurrentItem(with: freshItem)
+        itemEpoch += 1
+        #if targetEnvironment(simulator)
+        attachSimulatedFrameOutput(to: freshItem)
+        #endif
+        itemObserver = freshItem.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.finishQualityChangeIfReady()
+                self?.publishState()
+            }
+        }
+        scheduleQualityChangeDeadline(retry.serial)
+        finishQualityChangeIfReady()
+        publishState()
+    }
+
     private func finishQualityChangeIfReady() {
         guard var change = qualityChange,
               player.currentItem === change.replacement else { return }
@@ -1937,7 +2010,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 DispatchQueue.main.async {
                     guard let self = self, let waiting = self.qualityChange,
                           waiting.serial == serial else { return }
-                    guard completed else { self.restoreQualityAfterFailure(waiting); return }
+                    guard completed else { self.retryQualityChangeOrRestore(waiting); return }
                     self.qualityTimeout?.cancel()
                     self.qualityTimeout = nil
                     self.qualityChange = nil
@@ -1950,7 +2023,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 }
             }
         case .failed:
-            restoreQualityAfterFailure(change)
+            retryQualityChangeOrRestore(change)
         default:
             break
         }
@@ -1996,13 +2069,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                                     targetManifest: loader, replacement: nextItem,
                                     finish: completion)
         qualityChange = pending
-        let timeout = DispatchWorkItem { [weak self] in
-            guard let self = self, let waiting = self.qualityChange,
-                  waiting.serial == serial else { return }
-            self.restoreQualityAfterFailure(waiting)
-        }
-        qualityTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+        scheduleQualityChangeDeadline(serial)
         player.pause()
         itemObserver = nil
         player.replaceCurrentItem(with: nextItem)
