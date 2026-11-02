@@ -1942,7 +1942,11 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
     }
 
     private func retryQualityChangeOrRestore(_ change: QualityChange) {
-        guard qualityChange?.serial == change.serial else { return }
+        // A completion from an obsolete AVPlayerItem may arrive after a new
+        // rendition attempt starts. It must not roll back the newer attempt.
+        guard let current = qualityChange, current.serial == change.serial,
+              current.retryCount == change.retryCount,
+              current.replacement === change.replacement else { return }
         guard change.retryCount == 0 else {
             NSLog("Irgun HLS quality %d unavailable after retry; restoring previous stream", change.targetHeight)
             restoreQualityAfterFailure(change)
@@ -2004,12 +2008,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             change.isSeeking = true
             qualityChange = change
             let serial = change.serial
+            let attempt = change.retryCount
+            let requestedItem = change.replacement
             player.seek(to: CMTime(seconds: change.desiredPosition, preferredTimescale: 600),
                         toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
                         toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] completed in
                 DispatchQueue.main.async {
                     guard let self = self, let waiting = self.qualityChange,
-                          waiting.serial == serial else { return }
+                          waiting.serial == serial, waiting.retryCount == attempt,
+                          waiting.replacement === requestedItem,
+                          self.player.currentItem === requestedItem else { return }
                     guard completed else { self.retryQualityChangeOrRestore(waiting); return }
                     self.qualityTimeout?.cancel()
                     self.qualityTimeout = nil
