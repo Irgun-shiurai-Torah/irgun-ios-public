@@ -70,11 +70,62 @@
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
             if key == "modeAudio" || key == "modeVideo" {
-                // The public simulator suite already verifies these native
-                // accessibility buttons. Their native coordinates account for
-                // WebKit's viewport shift after email/password keyboard input.
-                try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
-                return
+                // XCTest can deliver pointerdown on an iPad Watch mode button
+                // without the matching click (the native video layer sits close
+                // to the lower edge of this header). Require the real DOM click
+                // or the resulting mode switch before accepting the touch.
+                // A retry is permitted ONLY when the first touch had no click.
+                let target = key == "modeAudio" ? "audio" : "video"
+                let label = key == "modeAudio" ? "Audio" : "Video"
+                let before = number(account(),"lastClickSequence")
+                func delivered() -> Bool {
+                    let seen = account()
+                    let clicked = (seen["clicks"] as? [String:[String:Any]])?[key] ?? [:]
+                    return number(clicked,"sequence") > before ||
+                        snapshot()["mode"] as? String == target
+                }
+                for attempt in 0..<3 {
+                    if delivered() { return }
+                    if attempt == 0 {
+                        try tapWebButton(label)
+                    } else {
+                        let s = snapshot()
+                        let observed = s["account"] as? [String:Any] ?? [:]
+                        let rects = observed["controlRects"] as? [String:[String:Any]] ?? [:]
+                        let hitTests = observed["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                        guard let rect = rects[key],
+                              hitTests[key]?["targetHit"] as? Bool == true else {
+                            let button = app.webViews.buttons.matching(
+                                NSPredicate(format:"label == %@",label)
+                            ).firstMatch
+                            XCTAssertTrue(button.waitForExistence(timeout:10),
+                                          "Real Watch mode button must remain accessible")
+                            button.tap()
+                            continue
+                        }
+                        let left = number(rect,"x"), top = number(rect,"y")
+                        let width = number(rect,"width"), height = number(rect,"height")
+                        // Touch the upper-middle of the real button, above the
+                        // native AVPlayer surface. No synthetic JS click or
+                        // player-state override is used.
+                        let native = s["nativePlayer"] as? [String:Any] ?? [:]
+                        let surfaceTop = number(native,"surfaceY")
+                        let safeY = surfaceTop > top + 4
+                            ? min(top + height * 0.45,surfaceTop - 8)
+                            : top + height * 0.35
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:left + width * 0.5,dy:safeY)).tap()
+                    }
+                    let deadline = Date().addingTimeInterval(6)
+                    while Date() < deadline {
+                        if delivered() { return }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                    }
+                    print("UITEST: Watch \(label) physical tap had no DOM click, retry \(attempt + 1)")
+                }
+                evidence("watch-mode-touch-not-delivered-" + key)
+                XCTFail("Watch \(label) did not receive a real DOM click after physical taps")
+                throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
                 let before = number(account(),"lastClickSequence")
