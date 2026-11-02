@@ -26,6 +26,11 @@ case "$group" in
   push)
     result="Push"
     methods=(testRegressionNotificationTapRestoresInlinePlayer)
+    # This is a disposable CI simulator, never a user's installed app.
+    # The previous account suite may leave a denied notification permission
+    # behind. Reinstall for an honest first-run OS consent dialog rather than
+    # faking the permission or letting simctl push bypass the authorization.
+    xcrun simctl uninstall "$udid" "$BUNDLE_ID" >/dev/null 2>&1 || true
     python3 -u .github/regression/push_sender.py "$udid" "$BUNDLE_ID" > simulator-results/push-sender.log 2>&1 &
     sender="$!"
     trap 'kill "$sender" 2>/dev/null || true' EXIT
