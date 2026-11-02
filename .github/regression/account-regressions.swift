@@ -104,6 +104,28 @@
                 }
                 return true
             }
+            // Scroll only inside the actual .watch-scroll viewport, well BELOW
+            // the video surface. The former generic downward gesture began
+            // near y=210 on iPhone, on top of the player, and never moved the
+            // owner's offscreen Edit button back into view.
+            func swipeOwnedComment(_ fullState: [String:Any], towardUp: Bool) {
+                let observed = fullState["account"] as? [String:Any] ?? [:]
+                let rect = observed["watchScrollRect"] as? [String:Any] ?? [:]
+                let height = number(observed,"height")
+                let width = number(observed,"width")
+                let upper = max(number(rect,"top")+40, height*0.46)
+                let lower = min(number(rect,"bottom")-50, height-105)
+                let web = app.webViews.firstMatch
+                guard width > 100 && lower-upper > 155 else {
+                    if towardUp { web.swipeUp() } else { web.swipeDown() }
+                    return
+                }
+                let x = min(width-35, max(35,width*0.71))
+                let origin = web.coordinate(withNormalizedOffset:.zero)
+                let from = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
+                let to = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
+                from.press(forDuration:0.05,thenDragTo:to,withVelocity:.fast,thenHoldForDuration:0)
+            }
             // The iPad WKWebView exposes a real "Save comment" accessibility
             // control even when its CSS center is covered by an unrelated
             // button after keyboard/safe-area layout. Let XCTest bring this
@@ -142,6 +164,8 @@
                     "lastPointer":observed["lastPointer"] ?? [String:Any](),
                     "playlistPickerOpen":observed["playlistPickerOpen"] ?? false,
                     "watchScrollTop":number(observed,"watchScrollTop"),
+                    "watchScrollHeight":number(observed,"watchScrollHeight"),
+                    "watchScrollRect":observed["watchScrollRect"] ?? [String:Any](),
                     "nativeSurfaceInteractive":native["surfaceInteractive"] ?? false,
                     "nativeSurfaceX":number(native,"surfaceX"),
                     "nativeSurfaceY":number(native,"surfaceY"),
@@ -182,7 +206,8 @@
                         // above it. Native .tap() auto-scroll can put Save
                         // underneath that surface. Move the scoped web control
                         // below the player through a real content swipe first.
-                        regressionScroll(fullState,towardUp:false)
+                        if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:false) }
+                        else { regressionScroll(fullState,towardUp:false) }
                         continue
                     }
                     let web=app.webViews.firstMatch, box=web.frame
@@ -238,9 +263,11 @@
                     } else {
                         directionUp = targetY >= viewportHeight * 0.55
                     }
-                    regressionScroll(fullState, towardUp: directionUp)
+                    if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:directionUp) }
+                    else { regressionScroll(fullState, towardUp:directionUp) }
                 } else {
-                    regressionScroll(fullState, towardUp: true)
+                    if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:true) }
+                    else { regressionScroll(fullState, towardUp:true) }
                 }
             }
             touchEvidence(snapshot(),"failed after native touch/scroll attempts")
