@@ -674,24 +674,59 @@
     }
 
     func testRegressionNotificationTapRestoresInlinePlayer() throws {
-        // An xcrun simctl push is accepted even if the user has never granted
-        // alerts. First exercise the actual native iOS permission dialogue.
-        // The test-only button requests OS authorization; XCTest performs the
-        // tap, and an independent native notification-settings query confirms it.
+        // simctl can accept a push even when iOS would never display it.
+        // Verify BOTH a real UIKit touchUpInside on the simulator-only button
+        // and the independent OS notification-settings status. A simulator
+        // that retained a prior denial is freshly reinstalled by run_ui.sh.
         let enable = app.buttons["ist-simulator-enable-push"]
         XCTAssertTrue(enable.waitForExistence(timeout: 12),
                       "Native push permission control must be in the simulator build")
-        enable.tap()
-        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
-        let systemAllow=springboard.alerts.buttons["Allow"].firstMatch
-        let appAllow=app.alerts.buttons["Allow"].firstMatch
-        if systemAllow.waitForExistence(timeout: 8) {
-            systemAllow.tap()
-        } else if appAllow.exists {
-            appAllow.tap()
+        let previousRequests = number(snapshot(),"nativePushRequestCount")
+        var delivered = false
+        for _ in 0..<3 {
+            enable.tap()
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                if number(snapshot(),"nativePushRequestCount") > previousRequests {
+                    delivered = true
+                    break
+                }
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+            if delivered { break }
         }
-        _ = try waitFor("Real iOS notification authorization is granted",timeout:30) {
-            $0["nativePushAuthorized"] as? Bool == true
+        guard delivered else {
+            XCTFail("Enable Push tap never reached native notification request action")
+            throw Failure.timedOut("Native push permission tap")
+        }
+        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
+        // The system sheet can be hosted in SpringBoard or the requesting
+        // app; discover whichever ACTUALLY owns the button. Do not grant
+        // through test code, assume approval, or skip the permission gate.
+        let promptDeadline = Date().addingTimeInterval(25)
+        while Date() < promptDeadline {
+            if snapshot()["nativePushAuthorized"] as? Bool == true { break }
+            var accepted = false
+            for host in [app,springboard] {
+                let alerts = host.alerts.firstMatch
+                for label in ["Allow","Allow While Using App","Allow Notifications"] {
+                    let button = alerts.buttons[label].firstMatch
+                    if button.exists && button.isHittable {
+                        button.tap()
+                        accepted = true
+                        break
+                    }
+                }
+                if accepted { break }
+            }
+            if accepted { break }
+            // The OS also may have authorization already, with no alert.
+            // In that case only the real settings read may satisfy the gate.
+            RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+        }
+        _ = try waitFor("Real iOS notification authorization is granted",timeout:35) {
+            $0["nativePushAuthorized"] as? Bool == true &&
+            self.number($0,"nativePushAuthorizationStatus") >= 2
         }
         try regressionActivateSample()
         // workflow sends a REAL xcrun simctl push via SpringBoard while Home
