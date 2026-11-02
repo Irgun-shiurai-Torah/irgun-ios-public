@@ -230,6 +230,11 @@ window.ISTAccountTest = { snapshot() {
     clicks:Object.fromEntries(Object.entries(window.__ISTAccountClicks||{}).map(([key,value])=>[key,{...value}])),
     lastPointer:{...(window.__ISTAccountLastPointer||{})},
     watchScrollTop:Number(document.querySelector('.watch-scroll')?.scrollTop || 0),
+    watchScrollHeight:Number(document.querySelector('.watch-scroll')?.scrollHeight || 0),
+    watchScrollRect:(() => {
+      const rect=document.querySelector('.watch-scroll')?.getBoundingClientRect();
+      return rect ? {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom} : null;
+    })(),
     lastClickSequence:Number(window.__ISTAccountLastClick?.sequence||0),lastClickKey:String(window.__ISTAccountLastClick?.key||''),
     lastClickTargetId:String(window.__ISTAccountLastClick?.targetId||''),
     ready:state.libraryReady&&!state.loading,loggedIn:!!state.user,isAdmin:!!state.isAdmin,
