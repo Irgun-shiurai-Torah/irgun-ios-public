@@ -885,13 +885,35 @@
                 }
             }
             try tapWebButton("Playback speed")
+            // The iPad's UIAlertController is a popover, while iPhone uses a
+            // sheet. An unscoped app.buttons["1×"] may match the underlying
+            // native speed toolbar button instead of the actual menu action,
+            // and can stall XCTest while querying a disappearing hierarchy.
+            _ = try waitFor("Native playback speed popover has actually opened",timeout:12) { state in
+                let player = state["nativePlayer"] as? [String:Any] ?? [:]
+                return player["controlsMenuOpen"] as? Bool == true
+            }
             let title=label == "1.5x" ? "1.5×" : "1×"
-            let choice=app.buttons[title].firstMatch
-            guard choice.waitForExistence(timeout:12) && choice.isHittable else {
-                XCTFail("Native speed choice unavailable: " + title)
+            let popoverChoice=app.popovers.buttons[title].firstMatch
+            let sheetChoice=app.sheets.buttons[title].firstMatch
+            let alertChoice=app.alerts.buttons[title].firstMatch
+            var selected = false
+            for choice in [popoverChoice,sheetChoice,alertChoice] {
+                guard choice.waitForExistence(timeout:5), choice.isHittable else { continue }
+                choice.tap()
+                selected = true
+                break
+            }
+            guard selected else {
+                evidence("missing-native-speed-popover-" + title)
+                XCTFail("Native playback speed popover did not expose the real " + title + " action")
                 throw Failure.timedOut("native speed choice")
             }
-            choice.tap()
+            _ = try waitFor("Native speed popover closed after real menu selection",timeout:12) { state in
+                let player = state["nativePlayer"] as? [String:Any] ?? [:]
+                return player["controlsMenuOpen"] as? Bool == false &&
+                    abs(self.number(player,"rate") - (label == "1.5x" ? 1.5 : 1.0)) < 0.03
+            }
             return
         }
         // Retain actual HTML-video fallback controls.
