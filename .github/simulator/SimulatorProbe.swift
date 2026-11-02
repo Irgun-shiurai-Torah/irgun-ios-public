@@ -14,6 +14,12 @@ final class SimulatorProbe {
     private var timer: Timer?
     private var polling = false
     private var nativePushAuthorized = false
+    // Observe actual native button delivery and OS authorization separately.
+    // This is diagnostic information only; neither field grants permissions.
+    private var nativePushRequestCount = 0
+    private var nativePushRequestGranted = false
+    private var nativePushRequestErrorCode = 0
+    private var nativePushAuthorizationStatus = -1
     private var notificationObservers = [NSObjectProtocol]()
     private var nativeBackgroundCount = 0
     private var nativeLifecycleObservedAt = 0.0
@@ -91,6 +97,7 @@ final class SimulatorProbe {
         self.panel = panel
         self.status = label
         observeNativeState()
+        refreshNativePushAuthorization()
         startObservations()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.poll() }
         poll()
@@ -172,6 +179,11 @@ final class SimulatorProbe {
                 "height":Double(nativeKeyboardFrame.height)]
         }
         state["nativeDiagnosticsVisible"] = panel?.isHidden == false
+        state["nativePushAuthorized"] = nativePushAuthorized
+        state["nativePushRequestCount"] = nativePushRequestCount
+        state["nativePushRequestGranted"] = nativePushRequestGranted
+        state["nativePushRequestErrorCode"] = nativePushRequestErrorCode
+        state["nativePushAuthorizationStatus"] = nativePushAuthorizationStatus
         state["nativeObservationPublishedAt"] = Date().timeIntervalSince1970 * 1000
         if let merged = try? JSONSerialization.data(withJSONObject: state) {
             observationLock.lock()
@@ -180,14 +192,30 @@ final class SimulatorProbe {
         }
     }
 
+    private func refreshNativePushAuthorization() {
+        // Only the real OS settings query decides whether APNs can be shown.
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.nativePushAuthorizationStatus = settings.authorizationStatus.rawValue
+                self.nativePushAuthorized = settings.authorizationStatus == .authorized ||
+                    settings.authorizationStatus == .provisional
+                self.publishObservation()
+                self.poll()
+            }
+        }
+    }
+
     @objc private func enablePushPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] granted, _ in
-            UNUserNotificationCenter.current().getNotificationSettings { settings in
-                DispatchQueue.main.async {
-                    self?.nativePushAuthorized = granted &&
-                        (settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional)
-                    self?.poll()
-                }
+        nativePushRequestCount += 1
+        publishObservation()
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) {
+            [weak self] granted, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.nativePushRequestGranted = granted
+                self.nativePushRequestErrorCode = (error as NSError?)?.code ?? 0
+                self.refreshNativePushAuthorization()
             }
         }
     }
@@ -230,6 +258,10 @@ final class SimulatorProbe {
                 state["nativeAudio"] = IrgunBackgroundAudioPlugin.current?.snapshot() ?? [:]
                 state["nativePlayer"] = IrgunUnifiedPlayerPlugin.current?.simulatorSnapshot() ?? [:]
                 state["nativePushAuthorized"] = self.nativePushAuthorized
+                state["nativePushRequestCount"] = self.nativePushRequestCount
+                state["nativePushRequestGranted"] = self.nativePushRequestGranted
+                state["nativePushRequestErrorCode"] = self.nativePushRequestErrorCode
+                state["nativePushAuthorizationStatus"] = self.nativePushAuthorizationStatus
                 self.latestState = state
                 self.publishObservation()
             }
