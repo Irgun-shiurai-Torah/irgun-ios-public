@@ -802,13 +802,23 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             attachSimulatedFrameOutput(to: item, resetStatistics: false)
         }
         #endif
-        // Skip controls should land on the requested time, not the nearest HLS keyframe.
-        // Explicit zero tolerances prevent a 15-second rewind from landing several seconds early.
+        // Zero-tolerance seeks can stall sparse HLS segments on iPadOS.
+        // Use narrow quarter-second tolerance while still seeking to the
+        // requested +/-15-second location, not to a distant keyframe.
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
-                    toleranceBefore: .zero,
-                    toleranceAfter: .zero) { finished in
-            if let completion = completion {
-                DispatchQueue.main.async { completion(finished) }
+                    toleranceBefore: CMTime(seconds: 0.25, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.25, preferredTimescale: 600)) { [weak self] finished in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if finished && self.active && self.playingWanted && !self.playbackIsBlockedByCall {
+                    // Resume the retained item without replacing it; the
+                    // recovery watchdog remains responsible if HLS still stalls.
+                    self.playIfAllowed()
+                    self.lastObservedPlaybackPosition = self.position()
+                    self.lastPlaybackProgressAt = Date()
+                    self.schedulePlaybackRecoveryIfNeeded()
+                }
+                completion?(finished)
             }
         }
         return (from, target)
