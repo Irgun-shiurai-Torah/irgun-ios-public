@@ -150,9 +150,18 @@ export function createIosNativeVideoAdapter(engine,id) {
   const unsubscribe=engine.subscribe(s=>{
     if (String(s.id)!==String(id)) return;
     fire('timeupdate',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
-    if (lastPlay!==Boolean(s.playing)) {
-      lastPlay=Boolean(s.playing);
-      fire(lastPlay?'play':'pause',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
+    // AVPlayer reports playing=false while waiting for the next HLS segment.
+    // This is NOT a user Pause: keep the media intent, analytics and screen-awake
+    // policy intact until the buffer recovers. A real call interruption or an
+    // explicit pause must still produce the normal pause event.
+    const playing=Boolean(s.playing);
+    const waitingForMedia=!playing && s.playRequested===true &&
+      s.interrupted!==true && s.failed!==true;
+    if (waitingForMedia) {
+      fire('waiting',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
+    } else if (lastPlay!==playing) {
+      lastPlay=playing;
+      fire(playing?'play':'pause',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
     }
   });
   return {
