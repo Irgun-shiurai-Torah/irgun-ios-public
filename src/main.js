@@ -399,6 +399,9 @@ function onIosUnifiedState(snapshot) {
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
     state.watchVideoPlaying=Boolean(snapshot.playing);
+    // Native buffering and an explicit pause differ. Keep the display-awake
+    // policy tied to the user's intent, not one instantaneous AVPlayer status.
+    syncIosVideoDisplay();
     refreshPersistentMiniVideoChrome();
   }
   if (state.current && snapshot.mode==='audio') {
@@ -3799,8 +3802,15 @@ function syncIosVideoDisplay() {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   const active = Boolean(state.watchVideo && state.watchMode === 'video');
   const direct = state.watchVimeo?.player;
-  const playing = active && Boolean(state.watchVideoPlaying ||
-    (direct?.autoplayWanted && !direct?.explicitlyPaused));
+  // AVPlayer.timeControlStatus switches to waiting while buffering HLS. This
+  // must not allow iOS to auto-lock an actively requested video. But a genuine
+  // user Pause, finished item, failed source or phone/WhatsApp interruption
+  // must never keep the screen awake.
+  const native = iosNativeActive() ? iosUnified.state : null;
+  const playing = active && (native
+    ? Boolean(native.mode === 'video' && native.playRequested === true &&
+        native.interrupted !== true && native.failed !== true)
+    : Boolean(state.watchVideoPlaying || (direct?.autoplayWanted && !direct?.explicitlyPaused)));
   const presentation = {
     active, playing,
     mini: active && Boolean(state.watchMinimized),
