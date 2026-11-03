@@ -44,25 +44,26 @@
             native["mode"] as? String == "video" && native["layerReady"] as? Bool == true
         let surfaceBottom = videoSurface
             ? number(native,"surfaceY") + number(native,"surfaceHeight") : 0
-        // Scroll in the content area BELOW the native AVPlayer. A swipe from
-        // the WebView center can land on the UIKit video overlay on iPad and
-        // become a video tap instead of scrolling the page.
-        let lower = min(max(80,height-100),max(height*0.68,surfaceBottom+80))
-        let upper = max(surfaceBottom+30,min(lower-240,height*0.50))
-        guard lower-upper >= 90 else {
-            // Honor the target direction even when there is too little room
-            // below a native surface; an offscreen row above needs swipeDown.
+        // iPhone catalogue cards can be 1,500+ points below the fold.
+        // The former 240-point XCTest drags only moved the page a few dozen
+        // points per gesture on iPhone: nine retries never reached Watch/Listen.
+        // Use a real long finger swipe, starting clear of the bottom nav and
+        // ending below the sticky header. Do not invoke JS scroll/click helpers.
+        let lower = min(height - 120, max(height * 0.79, surfaceBottom + 80))
+        let upper = max(surfaceBottom + 36, min(height * 0.22, lower - 420))
+        guard lower-upper >= 180 else {
             if towardUp { app.webViews.firstMatch.swipeUp() }
             else { app.webViews.firstMatch.swipeDown() }
             return
         }
-        let x=max(20,min(width-20,width*0.5))
-        let startY=towardUp ? lower : upper
-        let endY=towardUp ? upper : lower
-        let origin=app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-        origin.withOffset(CGVector(dx:x,dy:startY)).press(
-            forDuration:0.08,
-            thenDragTo:origin.withOffset(CGVector(dx:x,dy:endY)))
+        // Start in the page's left gutter, not on a card's image/Watch
+        // overlay. This keeps the gesture a scroll even when the catalogue
+        // is full of large interactive media cards.
+        let x = min(width - 4, max(4, width * 0.015))
+        let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+        let start = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
+        let end = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
+        start.press(forDuration:0.05, thenDragTo:end, withVelocity:.fast, thenHoldForDuration:0)
     }
 
     private func regressionTap(_ key: String) throws {
@@ -78,9 +79,118 @@
             }
             return
         }
+        if key == "listenVideo" {
+            // A direct Listen action is overlaid on a thumbnail. On iPad its
+            // CSS rectangle may be visible even when elementFromPoint briefly
+            // hits the image underneath; the generic scroll loop then keeps
+            // swiping past an already-visible button instead of tapping it.
+            // Resolve the EXACT backed-up fixture through the real accessible
+            // button and confirm the captured DOM click targets that media ID.
+            let initial = regression()
+            let expected = (initial["listenFixture"] as? [String:Any])?["id"] as? String ?? ""
+            XCTAssertFalse(expected.isEmpty,"Direct Listen must target a specific backed-up lecture")
+            let previous = number(initial,"lastClickSequence")
+            var physicalTapAttempts = 0
+            var lastObservedY = Double.nan
+            // The selected QA fixture can be several thousand CSS points down
+            // the live catalogue. The previous 3-iteration loop attempted a
+            // tap at y=6072 and only performed two swipes, so it could never
+            // reach the button on an iPhone-sized viewport. Scroll FIRST;
+            // only tap once the actual button is in the visible WebView.
+            for attempt in 0..<28 {
+                let state = snapshot()
+                let observed = state["regression"] as? [String:Any] ?? [:]
+                let rects = observed["rects"] as? [String:[String:Any]] ?? [:]
+                let rect = rects[key] ?? [:]
+                guard let currentId = (observed["listenFixture"] as? [String:Any])?["id"] as? String,
+                      currentId == expected, number(rect,"w") > 25,
+                      number(rect,"h") > 20 else {
+                    XCTFail("Direct Listen fixture changed or its real button disappeared")
+                    throw Failure.timedOut("Direct Listen fixture")
+                }
+                let x = number(rect,"x"), y = number(rect,"y")
+                let width = number(rect,"w"), height = number(rect,"h")
+                let viewportHeight = number(observed,"height")
+                let visibleBottom = max(0,viewportHeight - 104)
+                let fullyVisible = y - height * 0.5 >= 0 &&
+                    y + height * 0.5 <= visibleBottom
+
+                if !fullyVisible {
+                    let oldY = y
+                    regressionScroll(state,towardUp:y > viewportHeight * 0.5)
+                    let deadline = Date().addingTimeInterval(1.4)
+                    var moved = false
+                    while Date() < deadline {
+                        let latest = regression()
+                        let latestRects = latest["rects"] as? [String:[String:Any]] ?? [:]
+                        let nextY = number(latestRects[key] ?? [:],"y")
+                        if abs(nextY - oldY) > 12 {
+                            moved = true
+                            lastObservedY = nextY
+                            break
+                        }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.15))
+                    }
+                    if !moved {
+                        // Fallback is another genuine XCTest swipe on the
+                        // WebView, not window.scrollTo or a JS click.
+                        if y > viewportHeight * 0.5 { app.webViews.firstMatch.swipeUp() }
+                        else { app.webViews.firstMatch.swipeDown() }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.65))
+                        let latest = regression()
+                        let latestRects = latest["rects"] as? [String:[String:Any]] ?? [:]
+                        lastObservedY = number(latestRects[key] ?? [:],"y")
+                    }
+                    print("UITEST: Direct Listen scroll \(attempt+1), target y=\(Int(y)), next y=\(Int(lastObservedY))")
+                    continue
+                }
+
+                guard physicalTapAttempts < 3 else { break }
+                let controls = observed["controls"] as? [String:[String:Any]] ?? [:]
+                let options = app.webViews.buttons.matching(
+                    NSPredicate(format:"label == %@", "Listen")
+                ).allElementsBoundByIndex
+                // Never touch an unrelated lecture: require an AX frame at
+                // the exact DOM control location, not merely a matching label.
+                let target = options.first { option in
+                    let box = option.frame
+                    return abs(box.midX - x) < max(40,width * 0.55) &&
+                        abs(box.midY - y) < max(32,height * 0.75) &&
+                        option.isHittable
+                }
+                if let target = target {
+                    target.tap()
+                } else if controls[key] != nil {
+                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        .withOffset(CGVector(dx:x,dy:y)).tap()
+                } else {
+                    print("UITEST: Direct Listen is visible but its center is not the DOM hit target")
+                    physicalTapAttempts += 1
+                    continue
+                }
+                physicalTapAttempts += 1
+                let deadline = Date().addingTimeInterval(6)
+                while Date() < deadline {
+                    let seen = regression()
+                    if number(seen,"lastClickSequence") > previous &&
+                       seen["lastClickKey"] as? String == key {
+                        XCTAssertEqual(seen["lastClickTargetId"] as? String,expected,
+                                       "Direct Listen must not open an unrelated lecture")
+                        return
+                    }
+                    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                }
+                print("UITEST: Direct Listen physical tap was not delivered, retry \(physicalTapAttempts)")
+            }
+            evidence("direct-listen-physical-click-not-delivered")
+            XCTFail("Direct Listen button never received a real click for the selected lecture after scrolling to its visible position")
+            throw Failure.timedOut("Direct Listen")
+        }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
         if diagnostics.exists && diagnostics.isHittable { diagnostics.tap() }
-        for _ in 0..<9 {
+        // One-screen flicks are real physical gestures; allow enough travel
+        // for long catalogues and a possible reverse swipe after momentum.
+        for _ in 0..<18 {
             let fullState=snapshot()
             let snap=fullState["regression"] as? [String:Any] ?? [:]
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
@@ -172,6 +282,9 @@
             "accountClickKey": finalRegression["accountClickKey"] ?? "",
             "accountClickSequence": number(finalRegression,"accountClickSequence"),
             "targetRect": (finalRegression["rects"] as? [String:Any])?[key] ?? [String:Any](),
+            "pageScrollY": number(finalRegression,"pageScrollY"),
+            "scrollRoot": finalRegression["scrollRoot"] ?? "",
+            "scrollHeight": number(finalRegression,"scrollHeight"),
             "libraryTabsRect": finalRegression["libraryTabsRect"] ?? [String:Any](),
             "libraryTabsScrollLeft": number(finalRegression,"libraryTabsScrollLeft"),
             "nativeActive": finalNative["active"] ?? false,
@@ -671,24 +784,61 @@
     }
 
     func testRegressionNotificationTapRestoresInlinePlayer() throws {
-        // An xcrun simctl push is accepted even if the user has never granted
-        // alerts. First exercise the actual native iOS permission dialogue.
-        // The test-only button requests OS authorization; XCTest performs the
-        // tap, and an independent native notification-settings query confirms it.
+        // simctl can accept a push even when iOS would never display it.
+        // Verify BOTH a real UIKit touchUpInside on the simulator-only button
+        // and the independent OS notification-settings status. A simulator
+        // that retained a prior denial is freshly reinstalled by run_ui.sh.
         let enable = app.buttons["ist-simulator-enable-push"]
         XCTAssertTrue(enable.waitForExistence(timeout: 12),
                       "Native push permission control must be in the simulator build")
-        enable.tap()
-        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
-        let systemAllow=springboard.alerts.buttons["Allow"].firstMatch
-        let appAllow=app.alerts.buttons["Allow"].firstMatch
-        if systemAllow.waitForExistence(timeout: 8) {
-            systemAllow.tap()
-        } else if appAllow.exists {
-            appAllow.tap()
+        let previousRequests = number(snapshot(),"nativePushRequestCount")
+        var delivered = false
+        for _ in 0..<3 {
+            enable.tap()
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                if number(snapshot(),"nativePushRequestCount") > previousRequests {
+                    delivered = true
+                    break
+                }
+                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+            }
+            if delivered { break }
         }
-        _ = try waitFor("Real iOS notification authorization is granted",timeout:30) {
-            $0["nativePushAuthorized"] as? Bool == true
+        guard delivered else {
+            XCTFail("Enable Push tap never reached native notification request action")
+            throw Failure.timedOut("Native push permission tap")
+        }
+        let springboard=XCUIApplication(bundleIdentifier:"com.apple.springboard")
+        // The system sheet can be hosted in SpringBoard or the requesting
+        // app; discover whichever ACTUALLY owns the button. Do not grant
+        // through test code, assume approval, or skip the permission gate.
+        let promptDeadline = Date().addingTimeInterval(25)
+        while Date() < promptDeadline {
+            if snapshot()["nativePushAuthorized"] as? Bool == true { break }
+            var accepted = false
+            // app is an implicitly unwrapped XCUIApplication? in PlaybackUITests.
+            // Compact away any optional before accessing XCTest's alerts query.
+            for host in [app,springboard].compactMap({ $0 }) {
+                let alerts = host.alerts.firstMatch
+                for label in ["Allow","Allow While Using App","Allow Notifications"] {
+                    let button = alerts.buttons[label].firstMatch
+                    if button.exists && button.isHittable {
+                        button.tap()
+                        accepted = true
+                        break
+                    }
+                }
+                if accepted { break }
+            }
+            if accepted { break }
+            // The OS also may have authorization already, with no alert.
+            // In that case only the real settings read may satisfy the gate.
+            RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+        }
+        _ = try waitFor("Real iOS notification authorization is granted",timeout:35) {
+            $0["nativePushAuthorized"] as? Bool == true &&
+            self.number($0,"nativePushAuthorizationStatus") >= 2
         }
         try regressionActivateSample()
         // workflow sends a REAL xcrun simctl push via SpringBoard while Home
@@ -845,13 +995,35 @@
                 }
             }
             try tapWebButton("Playback speed")
+            // The iPad's UIAlertController is a popover, while iPhone uses a
+            // sheet. An unscoped app.buttons["1×"] may match the underlying
+            // native speed toolbar button instead of the actual menu action,
+            // and can stall XCTest while querying a disappearing hierarchy.
+            _ = try waitFor("Native playback speed popover has actually opened",timeout:12) { state in
+                let player = state["nativePlayer"] as? [String:Any] ?? [:]
+                return player["controlsMenuOpen"] as? Bool == true
+            }
             let title=label == "1.5x" ? "1.5×" : "1×"
-            let choice=app.buttons[title].firstMatch
-            guard choice.waitForExistence(timeout:12) && choice.isHittable else {
-                XCTFail("Native speed choice unavailable: " + title)
+            let popoverChoice=app.popovers.buttons[title].firstMatch
+            let sheetChoice=app.sheets.buttons[title].firstMatch
+            let alertChoice=app.alerts.buttons[title].firstMatch
+            var selected = false
+            for choice in [popoverChoice,sheetChoice,alertChoice] {
+                guard choice.waitForExistence(timeout:5), choice.isHittable else { continue }
+                choice.tap()
+                selected = true
+                break
+            }
+            guard selected else {
+                evidence("missing-native-speed-popover-" + title)
+                XCTFail("Native playback speed popover did not expose the real " + title + " action")
                 throw Failure.timedOut("native speed choice")
             }
-            choice.tap()
+            _ = try waitFor("Native speed popover closed after real menu selection",timeout:12) { state in
+                let player = state["nativePlayer"] as? [String:Any] ?? [:]
+                return player["controlsMenuOpen"] as? Bool == false &&
+                    abs(self.number(player,"rate") - (label == "1.5x" ? 1.5 : 1.0)) < 0.03
+            }
             return
         }
         // Retain actual HTML-video fallback controls.

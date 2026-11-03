@@ -138,7 +138,7 @@ test('manual HLS resolution uses a narrowed source and restores the original mas
   assert.match(swift,/player\.replaceCurrentItem\(with: nextItem\)/);
   assert.match(swift,/desiredPosition: previousPosition/);
   assert.match(swift,/player\.seek\(to: CMTime\(seconds: change\.desiredPosition/);
-  assert.match(swift,/player\.playImmediately\(atRate: self\.playbackRate\)/);
+  assert.match(swift,/if self\.playingWanted \{ self\.playIfAllowed\(\) \}/);
   assert.match(swift,/targetHeight = waiting\.targetHeight|qualityHeight = waiting\.targetHeight/);
   assert.doesNotMatch(swift,/preferredMaximumResolution = CGSize\(/);
 });

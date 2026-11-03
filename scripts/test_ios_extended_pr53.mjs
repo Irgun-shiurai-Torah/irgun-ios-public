@@ -38,6 +38,18 @@ test('direct Listen QA taps the actual library button from a cold player',()=>{
   assert.match(observer,/listenFixture,/);
   assert.match(swift,/XCTAssertFalse\(initialNative\["active"\]/);
   assert.match(swift,/regressionTap\("listenVideo"\)/);
+  // The real fixture may be thousands of points below the first viewport.
+  // Verify the test scrolls until it is visible before tapping and has enough
+  // physical swipes to reach it; no JS scroll or synthetic click is allowed.
+  const directTap = swift.slice(
+    swift.indexOf('if key == "listenVideo"'),
+    swift.indexOf('let diagnostics = app.buttons["ist-simulator-hide-controls"]')
+  );
+  assert.match(directTap,/for attempt in 0\.\.\<28/);
+  assert.match(directTap,/if !fullyVisible \{[\s\S]*?regressionScroll\(state/);
+  assert.ok(directTap.indexOf('if !fullyVisible {') < directTap.indexOf('target.tap()'));
+  assert.match(directTap,/physicalTapAttempts < 3/);
+  assert.match(swift,/let x = min\(width - 4, max\(4, width \* 0\.015\)\)/);
   assert.match(swift,/Direct Listen must advance the actual AVPlayer audio clock/);
   assert.match(swift,/fullSpeedChoiceCount/);
   assert.match(swift,/fullSpeedPopupCount/);

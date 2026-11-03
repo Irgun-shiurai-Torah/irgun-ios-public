@@ -197,6 +197,10 @@
       // Actual WKWebView viewport: native gestures require CSS-pixel bounds.
       // Without these, tests mis-classify offscreen controls and always scroll up.
       width:innerWidth,height:innerHeight,
+      // Observe the actual scroll container without mutating page state.
+      pageScrollY:Math.max(window.scrollY || 0,document.scrollingElement?.scrollTop || 0),
+      scrollRoot:document.scrollingElement?.tagName || '',
+      scrollHeight:document.scrollingElement?.scrollHeight || 0,
       screen:state.screen,
       lastClickSequence:Number(window.__ISTRegressionLastClick?.sequence||0),
       lastClickKey:String(window.__ISTRegressionLastClick?.key||''),

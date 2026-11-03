@@ -70,11 +70,62 @@
         func touch(_ key: String) throws {
             report["stage"] = "Native touch: " + key; persistReport()
             if key == "modeAudio" || key == "modeVideo" {
-                // The public simulator suite already verifies these native
-                // accessibility buttons. Their native coordinates account for
-                // WebKit's viewport shift after email/password keyboard input.
-                try tapWebButton(key == "modeAudio" ? "Audio" : "Video")
-                return
+                // XCTest can deliver pointerdown on an iPad Watch mode button
+                // without the matching click (the native video layer sits close
+                // to the lower edge of this header). Require the real DOM click
+                // or the resulting mode switch before accepting the touch.
+                // A retry is permitted ONLY when the first touch had no click.
+                let target = key == "modeAudio" ? "audio" : "video"
+                let label = key == "modeAudio" ? "Audio" : "Video"
+                let before = number(account(),"lastClickSequence")
+                func delivered() -> Bool {
+                    let seen = account()
+                    let clicked = (seen["clicks"] as? [String:[String:Any]])?[key] ?? [:]
+                    return number(clicked,"sequence") > before ||
+                        snapshot()["mode"] as? String == target
+                }
+                for attempt in 0..<3 {
+                    if delivered() { return }
+                    if attempt == 0 {
+                        try tapWebButton(label)
+                    } else {
+                        let s = snapshot()
+                        let observed = s["account"] as? [String:Any] ?? [:]
+                        let rects = observed["controlRects"] as? [String:[String:Any]] ?? [:]
+                        let hitTests = observed["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                        guard let rect = rects[key],
+                              hitTests[key]?["targetHit"] as? Bool == true else {
+                            let button = app.webViews.buttons.matching(
+                                NSPredicate(format:"label == %@",label)
+                            ).firstMatch
+                            XCTAssertTrue(button.waitForExistence(timeout:10),
+                                          "Real Watch mode button must remain accessible")
+                            button.tap()
+                            continue
+                        }
+                        let left = number(rect,"x"), top = number(rect,"y")
+                        let width = number(rect,"width"), height = number(rect,"height")
+                        // Touch the upper-middle of the real button, above the
+                        // native AVPlayer surface. No synthetic JS click or
+                        // player-state override is used.
+                        let native = s["nativePlayer"] as? [String:Any] ?? [:]
+                        let surfaceTop = number(native,"surfaceY")
+                        let safeY = surfaceTop > top + 4
+                            ? min(top + height * 0.45,surfaceTop - 8)
+                            : top + height * 0.35
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:left + width * 0.5,dy:safeY)).tap()
+                    }
+                    let deadline = Date().addingTimeInterval(6)
+                    while Date() < deadline {
+                        if delivered() { return }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                    }
+                    print("UITEST: Watch \(label) physical tap had no DOM click, retry \(attempt + 1)")
+                }
+                evidence("watch-mode-touch-not-delivered-" + key)
+                XCTFail("Watch \(label) did not receive a real DOM click after physical taps")
+                throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
                 let before = number(account(),"lastClickSequence")
@@ -104,6 +155,50 @@
                 }
                 return true
             }
+            // Scroll only inside the actual .watch-scroll viewport, well BELOW
+            // the video surface. The former generic downward gesture began
+            // near y=210 on iPhone, on top of the player, and never moved the
+            // owner's offscreen Edit button back into view.
+            func swipeOwnedComment(_ fullState: [String:Any], towardUp: Bool) {
+                let observed = fullState["account"] as? [String:Any] ?? [:]
+                let rect = observed["watchScrollRect"] as? [String:Any] ?? [:]
+                let height = number(observed,"height")
+                let width = number(observed,"width")
+                let upper = max(number(rect,"top")+40, height*0.46)
+                let lower = min(number(rect,"bottom")-50, height-105)
+                let web = app.webViews.firstMatch
+                guard width > 100 && lower-upper > 155 else {
+                    if towardUp { web.swipeUp() } else { web.swipeDown() }
+                    return
+                }
+                let x = min(width-35, max(35,width*0.71))
+                let origin = web.coordinate(withNormalizedOffset:.zero)
+                let from = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
+                let to = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
+                from.press(forDuration:0.05,thenDragTo:to,withVelocity:.fast,thenHoldForDuration:0)
+            }
+            // The iPad WKWebView exposes a real "Save comment" accessibility
+            // control even when its CSS center is covered by an unrelated
+            // button after keyboard/safe-area layout. Let XCTest bring this
+            // actual button into view instead of repeatedly swiping the page.
+            // The account observer must still capture a *real* DOM click on
+            // the exact disposable QA comment before this helper can succeed.
+            if key == "commentSave" {
+                let button = app.webViews.buttons.matching(
+                    NSPredicate(format:"label == %@", "Save comment")
+                ).firstMatch
+                if button.waitForExistence(timeout:12) {
+                    for _ in 0..<2 {
+                        if clickDelivered(account()) { return }
+                        button.tap()
+                        let deadline = Date().addingTimeInterval(5)
+                        while Date() < deadline {
+                            if clickDelivered(account()) { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                    }
+                }
+            }
             func touchEvidence(_ state: [String:Any], _ stage: String) {
                 let observed = state["account"] as? [String:Any] ?? [:]
                 let native = state["nativePlayer"] as? [String:Any] ?? [:]
@@ -120,6 +215,8 @@
                     "lastPointer":observed["lastPointer"] ?? [String:Any](),
                     "playlistPickerOpen":observed["playlistPickerOpen"] ?? false,
                     "watchScrollTop":number(observed,"watchScrollTop"),
+                    "watchScrollHeight":number(observed,"watchScrollHeight"),
+                    "watchScrollRect":observed["watchScrollRect"] ?? [String:Any](),
                     "nativeSurfaceInteractive":native["surfaceInteractive"] ?? false,
                     "nativeSurfaceX":number(native,"surfaceX"),
                     "nativeSurfaceY":number(native,"surfaceY"),
@@ -160,7 +257,8 @@
                         // above it. Native .tap() auto-scroll can put Save
                         // underneath that surface. Move the scoped web control
                         // below the player through a real content swipe first.
-                        regressionScroll(fullState,towardUp:false)
+                        if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:false) }
+                        else { regressionScroll(fullState,towardUp:false) }
                         continue
                     }
                     let web=app.webViews.firstMatch, box=web.frame
@@ -216,9 +314,11 @@
                     } else {
                         directionUp = targetY >= viewportHeight * 0.55
                     }
-                    regressionScroll(fullState, towardUp: directionUp)
+                    if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:directionUp) }
+                    else { regressionScroll(fullState, towardUp:directionUp) }
                 } else {
-                    regressionScroll(fullState, towardUp: true)
+                    if key.hasPrefix("comment") { swipeOwnedComment(fullState,towardUp:true) }
+                    else { regressionScroll(fullState, towardUp:true) }
                 }
             }
             touchEvidence(snapshot(),"failed after native touch/scroll attempts")
@@ -413,9 +513,15 @@
         nativeEditor.typeText(" updated")
         XCTAssertTrue((nativeEditor.value as? String ?? "").contains(" updated"),
                       "Real keyboard editing must reach the comment textarea")
-        // Return in a multiline comment editor inserts a newline rather than
-        // dismissing the keyboard. Tap the real Save action first, then demand
-        // that the saved editor loses focus and the native keyboard closes.
+        // A multiline textarea on iPad may keep the system keyboard visible
+        // even when UIKit's Hide Keyboard accessory is physically tapped.
+        // Real users can save with the keyboard open: exercise the actual
+        // accessible Save comment button and verify its server-side PUT rather
+        // than requiring an unrelated OS keyboard dismissal first.
+        try awaitAccount("Exact owned QA comment Save action exists with editor focused") {
+            let rects = $0["controlRects"] as? [String:[String:Any]] ?? [:]
+            return rects["commentSave"] != nil && $0["qaCommentPhase"] as? String == "created"
+        }
         let editBefore = successCount(account(), "/comments/edit", "PUT")
         try touch("commentSave")
         try awaitAccount("Comment edit persisted on server") {

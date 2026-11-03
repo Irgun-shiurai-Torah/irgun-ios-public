@@ -2,13 +2,14 @@ import Foundation
 import Capacitor
 import AVFoundation
 import MediaPlayer
+import CallKit
 import UIKit
 import WebKit
 
 // Prepare while the WebView is active. Home/lock starts AVPlayer from a native
 // lifecycle notification, so playback and seeking do not require suspended JS.
 @objc(IrgunBackgroundAudioPlugin)
-public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
+public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin, CXCallObserverDelegate {
     public let identifier = "IrgunBackgroundAudioPlugin"
     public let jsName = "IrgunBackgroundAudio"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -30,6 +31,8 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var seeking = false
     private var generation = 0
     private var observers: [NSObjectProtocol] = []
+    private let systemCallObserver = CXCallObserver()
+    private var audioSessionInterrupted = false
     private var timeObserver: Any?
     private var remoteTargets: [(MPRemoteCommand, Any)] = []
     private var title = ""
@@ -38,6 +41,7 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     override public func load() {
         Self.current = self
+        systemCallObserver.setDelegate(self, queue: .main)
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.startBackground() })
         observers.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
@@ -48,14 +52,50 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.pauseNative() }
         })
-        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-            guard let self = self, self.active else { return }
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] note in
+            guard let self = self else { return }
             let type = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            if type == AVAudioSession.InterruptionType.began.rawValue { self.player?.pause() }
-            else if type == AVAudioSession.InterruptionType.ended.rawValue,
-                    ((note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0) & AVAudioSession.InterruptionOptions.shouldResume.rawValue != 0,
-                    self.desiredPlaying { self.activateSession(); self.player?.playImmediately(atRate: self.speed) }
+            if type == AVAudioSession.InterruptionType.began.rawValue {
+                self.audioSessionInterrupted = true
+                self.player?.pause()
+                self.updateNowPlaying()
+            } else if type == AVAudioSession.InterruptionType.ended.rawValue {
+                self.audioSessionInterrupted = false
+                let raw = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+                if AVAudioSession.InterruptionOptions(rawValue: raw).contains(.shouldResume) {
+                    self.playIfAllowed()
+                } else {
+                    self.desiredPlaying = false
+                    self.player?.pause()
+                    self.updateNowPlaying()
+                }
+            }
         })
+    }
+
+    private var playbackIsBlockedByCall: Bool {
+        audioSessionInterrupted || systemCallObserver.calls.contains(where: { !$0.hasEnded })
+    }
+
+    private func playIfAllowed() {
+        guard active, desiredPlaying, !playbackIsBlockedByCall else {
+            player?.pause()
+            updateNowPlaying()
+            return
+        }
+        activateSession()
+        guard !playbackIsBlockedByCall else { return }
+        player?.playImmediately(atRate: speed)
+        updateNowPlaying()
+    }
+
+    public func callObserver(_ callObserver: CXCallObserver, callChanged call: CXCall) {
+        if playbackIsBlockedByCall {
+            player?.pause()
+            updateNowPlaying()
+        } else if active && desiredPlaying {
+            playIfAllowed()
+        }
     }
 
     @objc public func prepare(_ call: CAPPluginCall) {
@@ -100,7 +140,8 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func startBackground() {
-        guard UIApplication.shared.applicationState != .active, !active, desiredPlaying, !pip, let player = player else { return }
+        guard UIApplication.shared.applicationState != .active, !active, desiredPlaying, !pip,
+              !playbackIsBlockedByCall, let player = player else { return }
         active = true
         backgroundSamples = []
         generation += 1
@@ -115,14 +156,14 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             DispatchQueue.main.async {
                 guard let self = self, finished, self.generation == owner, self.active, self.desiredPlaying else { return }
                 self.seeking = false
-                self.activateSession()
-                player.playImmediately(atRate: self.speed)
+                self.playIfAllowed()
                 self.updateNowPlaying()
             }
         }
     }
 
     private func activateSession() {
+        guard !playbackIsBlockedByCall else { return }
         do { let session = AVAudioSession.sharedInstance(); try session.setCategory(.playback, mode: .moviePlayback); try session.setActive(true) }
         catch { NSLog("Irgun background audio session failed: %@", String(describing: error)) }
     }
@@ -176,7 +217,13 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             command.isEnabled = true; remoteTargets.append((command, command.addTarget(handler: action)))
         }
         add(commands.pauseCommand) { [weak self] _ in self?.pauseNative(); return .success }
-        add(commands.playCommand) { [weak self] _ in guard let self = self, self.active else { return .noSuchContent }; self.desiredPlaying = true; self.activateSession(); self.player?.playImmediately(atRate: self.speed); return .success }
+        add(commands.playCommand) { [weak self] _ in
+            guard let self = self, self.active else { return .noSuchContent }
+            guard !self.playbackIsBlockedByCall else { return .commandFailed }
+            self.desiredPlaying = true
+            self.playIfAllowed()
+            return .success
+        }
         add(commands.skipForwardCommand) { [weak self] _ in self?.seekNative(by: 15); return .success }
         add(commands.skipBackwardCommand) { [weak self] _ in self?.seekNative(by: -15); return .success }
         add(commands.changePlaybackPositionCommand) { [weak self] event in guard let event = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }; self?.player?.seek(to: CMTime(seconds: event.positionTime, preferredTimescale: 600)); return .success }
@@ -191,5 +238,9 @@ public class IrgunBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         player?.replaceCurrentItem(with: nil)
         player = nil; active = false; removeRemoteCommands()
     }
-    deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) }; clearPlayer() }
+    deinit {
+        systemCallObserver.setDelegate(nil, queue: nil)
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        clearPlayer()
+    }
 }
