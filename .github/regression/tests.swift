@@ -56,7 +56,10 @@
             else { app.webViews.firstMatch.swipeDown() }
             return
         }
-        let x = max(24, min(width - 24, width * 0.24))
+        // Start in the page's left gutter, not on a card's image/Watch
+        // overlay. This keeps the gesture a scroll even when the catalogue
+        // is full of large interactive media cards.
+        let x = min(width - 4, max(4, width * 0.015))
         let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
         let start = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
         let end = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
@@ -87,7 +90,14 @@
             let expected = (initial["listenFixture"] as? [String:Any])?["id"] as? String ?? ""
             XCTAssertFalse(expected.isEmpty,"Direct Listen must target a specific backed-up lecture")
             let previous = number(initial,"lastClickSequence")
-            for attempt in 0..<3 {
+            var physicalTapAttempts = 0
+            var lastObservedY = Double.nan
+            // The selected QA fixture can be several thousand CSS points down
+            // the live catalogue. The previous 3-iteration loop attempted a
+            // tap at y=6072 and only performed two swipes, so it could never
+            // reach the button on an iPhone-sized viewport. Scroll FIRST;
+            // only tap once the actual button is in the visible WebView.
+            for attempt in 0..<28 {
                 let state = snapshot()
                 let observed = state["regression"] as? [String:Any] ?? [:]
                 let rects = observed["rects"] as? [String:[String:Any]] ?? [:]
@@ -99,6 +109,44 @@
                     throw Failure.timedOut("Direct Listen fixture")
                 }
                 let x = number(rect,"x"), y = number(rect,"y")
+                let width = number(rect,"w"), height = number(rect,"h")
+                let viewportHeight = number(observed,"height")
+                let visibleBottom = max(0,viewportHeight - 104)
+                let fullyVisible = y - height * 0.5 >= 0 &&
+                    y + height * 0.5 <= visibleBottom
+
+                if !fullyVisible {
+                    let oldY = y
+                    regressionScroll(state,towardUp:y > viewportHeight * 0.5)
+                    let deadline = Date().addingTimeInterval(1.4)
+                    var moved = false
+                    while Date() < deadline {
+                        let latest = regression()
+                        let latestRects = latest["rects"] as? [String:[String:Any]] ?? [:]
+                        let nextY = number(latestRects[key] ?? [:],"y")
+                        if abs(nextY - oldY) > 12 {
+                            moved = true
+                            lastObservedY = nextY
+                            break
+                        }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.15))
+                    }
+                    if !moved {
+                        // Fallback is another genuine XCTest swipe on the
+                        // WebView, not window.scrollTo or a JS click.
+                        if y > viewportHeight * 0.5 { app.webViews.firstMatch.swipeUp() }
+                        else { app.webViews.firstMatch.swipeDown() }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.65))
+                        let latest = regression()
+                        let latestRects = latest["rects"] as? [String:[String:Any]] ?? [:]
+                        lastObservedY = number(latestRects[key] ?? [:],"y")
+                    }
+                    print("UITEST: Direct Listen scroll \(attempt+1), target y=\(Int(y)), next y=\(Int(lastObservedY))")
+                    continue
+                }
+
+                guard physicalTapAttempts < 3 else { break }
+                let controls = observed["controls"] as? [String:[String:Any]] ?? [:]
                 let options = app.webViews.buttons.matching(
                     NSPredicate(format:"label == %@", "Listen")
                 ).allElementsBoundByIndex
@@ -106,16 +154,21 @@
                 // the exact DOM control location, not merely a matching label.
                 let target = options.first { option in
                     let box = option.frame
-                    return abs(box.midX - x) < max(40,number(rect,"w") * 0.55) &&
-                        abs(box.midY - y) < max(32,number(rect,"h") * 0.75) &&
+                    return abs(box.midX - x) < max(40,width * 0.55) &&
+                        abs(box.midY - y) < max(32,height * 0.75) &&
                         option.isHittable
                 }
                 if let target = target {
                     target.tap()
-                } else {
+                } else if controls[key] != nil {
                     app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
                         .withOffset(CGVector(dx:x,dy:y)).tap()
+                } else {
+                    print("UITEST: Direct Listen is visible but its center is not the DOM hit target")
+                    physicalTapAttempts += 1
+                    continue
                 }
+                physicalTapAttempts += 1
                 let deadline = Date().addingTimeInterval(6)
                 while Date() < deadline {
                     let seen = regression()
@@ -127,19 +180,10 @@
                     }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
-                print("UITEST: iPad direct Listen touch did not yield a DOM click, retry \(attempt+1)")
-                // Only real user swipes are allowed when the button has moved
-                // offscreen, never a synthetic JS dispatch or player override.
-                let latest = snapshot()
-                let r = (latest["regression"] as? [String:Any] ?? [:])["rects"] as? [String:[String:Any]] ?? [:]
-                let newY = number(r[key] ?? [:],"y")
-                let height = number(latest["regression"] as? [String:Any] ?? [:],"height")
-                if newY < 0 || newY > height {
-                    regressionScroll(latest,towardUp:newY > height)
-                }
+                print("UITEST: Direct Listen physical tap was not delivered, retry \(physicalTapAttempts)")
             }
             evidence("direct-listen-physical-click-not-delivered")
-            XCTFail("iPad direct Listen button never received a real click for the selected lecture")
+            XCTFail("Direct Listen button never received a real click for the selected lecture after scrolling to its visible position")
             throw Failure.timedOut("Direct Listen")
         }
         let diagnostics = app.buttons["ist-simulator-hide-controls"]
