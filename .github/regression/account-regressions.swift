@@ -405,6 +405,13 @@
         try touch("open")
         try awaitAccount("Lecture opened") { !($0["watchId"] as? String ?? "").isEmpty }
         let id=account()["watchId"] as! String, before=account()
+        // A followed speaker can have a legacy alias and a canonical server ID.
+        // Record the *real button's resolved state* for the exact lecture
+        // rather than treating unordered account-wide follow IDs as equivalent.
+        let originalFollowIdentity = before["followIdentity"] as? String ?? ""
+        let originalFollowActive = before["followActive"] as? Bool ?? false
+        XCTAssertTrue(originalFollowIdentity.hasPrefix("speaker:"),
+                      "The test must target a real speaker Follow control")
         report["accountMutationsStartedAt"] = timestamp(); persistReport()
         try touch("like")
         try awaitAccount("Like toggled") { values($0,"likes").contains(id) != values(before,"likes").contains(id) }
@@ -415,7 +422,10 @@
         let followRequestCount = completedFollowRequests(account())
         try touch("follow")
         try awaitSuccessfulFollowRequest(after: followRequestCount)
-        try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
+        try awaitAccount("Follow toggled") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == !originalFollowActive
+        }
         checked("Native speaker follow toggle")
         try awaitAccount("Playing lecture records real history") {
             $0["videoPlaying"] as? Bool == true &&
@@ -631,13 +641,30 @@
         }
         checked("Native Watch Later flag restored")
         let followRestoreRequestCount = completedFollowRequests(account())
+        let priorFollowRequestTotal = (account()["requests"] as? [[String:Any]] ?? [])
+            .filter { $0["path"] as? String == "/follows/toggle" }.count
         try touch("follow")
-        try awaitSuccessfulFollowRequest(after: followRestoreRequestCount)
-        try awaitAccount("Follow restored") {
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+        try awaitAccount("Restore Follow request completed with original server state") { observed in
+            let requests = observed["requests"] as? [[String:Any]] ?? []
+            let followRequests = requests.filter { $0["path"] as? String == "/follows/toggle" }
+            guard followRequests.count > priorFollowRequestTotal,
+                  let latest = followRequests.last else { return false }
+            // A successful HTTP request is not enough: require the server to
+            // confirm precisely the originally observed speaker follow state.
+            return latest["ok"] as? Bool == true &&
+                   latest["following"] as? Bool == originalFollowActive
         }
-        checked("Native Follow flag restored")
-        try awaitAccount("Lecture flags restored") { values($0,"likes").contains(id) == values(before,"likes").contains(id) && values($0,"later").contains(id) == values(before,"later").contains(id) && values($0,"follows").sorted() == values(before,"follows").sorted() }
+        try awaitAccount("Follow restored") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
+        checked("Native Follow flag restored and server-confirmed")
+        try awaitAccount("Lecture flags restored") {
+            values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
+            values($0,"later").contains(id) == values(before,"later").contains(id) &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
         checked("Lecture flags restored")
         // Relaunch rather than depending on the same top-edge close control,
         // then require the restored server state and session to load normally.
@@ -646,7 +673,15 @@
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
             values($0,"later").contains(id) == values(before,"later").contains(id) &&
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+            // Restarted collections are authoritative; don't compare raw
+            // canonical follow IDs to a potentially legacy pre-toggle alias.
+            ($0["follows"] as? [String] != nil)
+        }
+        try touch("shiurim"); try touch("open")
+        try awaitAccount("Original speaker Follow state survives relaunch") {
+            $0["watchId"] as? String == id &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
         }
         try touch("account"); try touch("logout")
         try awaitAccount("Logout clears account state") { $0["loggedIn"] as? Bool == false && values($0,"likes").isEmpty && values($0,"later").isEmpty && ($0["playlists"] as? [[String:Any]] ?? []).isEmpty }
