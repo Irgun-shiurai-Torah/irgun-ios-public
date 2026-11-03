@@ -56,8 +56,9 @@
                     followRequests.last?["ok"] as? Bool == true
             }
         }
-        func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { state in
+        func awaitAccount(_ message: String, timeout: TimeInterval = 60,
+                          _ condition: @escaping ([String: Any]) -> Bool) throws {
+            try waitFor(message, timeout: timeout) { state in
                 var observed = state["account"] as? [String: Any] ?? [:]
                 // Use live catalog/bootstrap state if the nested observer omits
                 // its readiness key after a native process restart.
@@ -555,7 +556,11 @@
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
-        try awaitAccount("Signed-in library reloads after playback") {
+        // A true process relaunch starts a new WKWebView and refetches the
+        // catalog, profile, and collections. A cold macOS simulator can leave
+        // the loopback observer empty for over one minute (no stale success).
+        // Preserve the original server-backed identity/ready assertions.
+        try awaitAccount("Signed-in library reloads after playback", timeout: 180) {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             $0["name"] as? String == originalName
         }
