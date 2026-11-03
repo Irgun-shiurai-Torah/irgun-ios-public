@@ -1141,17 +1141,63 @@
 
     func testRegressionLongPlaybackLockAndModeChanges() throws {
         try regressionActivateSample()
-        let start=number(snapshot(),"videoTime")
-        // Check repeatedly for three minutes, not just a single advancing tick.
-        for _ in 0..<12 {
+        let initial = snapshot()
+        let start = number(initial,"videoTime")
+        let initialNative = initial["nativePlayer"] as? [String:Any] ?? [:]
+        let initialId = initialNative["id"] as? String ?? ""
+        let initialEpoch = number(initialNative,"itemEpoch")
+        XCTAssertFalse(initialId.isEmpty,"A real native lecture must start the long-play test")
+        // Check repeatedly for three minutes; only allow an actual AVPlayer
+        // waiting-to-play HLS buffer to recover without user interaction. The
+        // original check interpreted one transient buffer as an explicit Pause.
+        // A user Pause, call, source replacement, failed item or long stall
+        // must still fail, with the actual AVPlayer diagnostics in CI logs.
+        for checkpoint in 0..<12 {
             Thread.sleep(forTimeInterval:15)
-            let s=snapshot()
-            XCTAssertEqual(s["videoPlaying"] as? Bool,true)
-            XCTAssertTrue(regressionSingleVideoOwner(s))
-            XCTAssertEqual(s["audioPlaying"] as? Bool,false)
+            let s = snapshot()
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
+            let diagnosticKeys = ["active","mode","playing","playRequested","interrupted",
+                "ready","failed","position","duration","timeControlStatus",
+                "waitingReason","bufferEmpty","likelyToKeepUp","progressAge",
+                "recoveryAttempts","recoveryScheduled","nativeSeekPending",
+                "error","errorEvents"]
+            let diagnostic = diagnosticKeys.map { key in
+                "\(key)=\(native[key] ?? "nil")"
+            }.joined(separator:", ")
+            XCTAssertEqual(native["id"] as? String,initialId,
+                           "Native lecture changed without user interaction: \(diagnostic)")
+            XCTAssertEqual(number(native,"itemEpoch"),initialEpoch,
+                           "AVPlayerItem was silently replaced: \(diagnostic)")
+            XCTAssertTrue(regressionSingleVideoOwner(s),
+                          "Expected one native video player: \(diagnostic)")
+            XCTAssertEqual(s["audioPlaying"] as? Bool,false,
+                           "Competing HTML audio started during native video")
+            if s["videoPlaying"] as? Bool != true {
+                print("UITEST: HLS not playing at checkpoint \(checkpoint+1): \(diagnostic)")
+                guard native["playRequested"] as? Bool == true,
+                      native["interrupted"] as? Bool != true,
+                      native["failed"] as? Bool != true,
+                      native["ready"] as? Bool == true,
+                      number(native,"timeControlStatus") == 1 else {
+                    evidence("long-playback-unexpected-pause")
+                    XCTFail("Video stopped for a reason other than a recoverable HLS buffer: \(diagnostic)")
+                    throw Failure.timedOut("Long playback stopped")
+                }
+                let stalledAt = number(s,"videoTime")
+                _ = try waitFor("Real HLS buffering must recover within 25s, with advancing frames",
+                                timeout:25) { resumed in
+                    let n = resumed["nativePlayer"] as? [String:Any] ?? [:]
+                    return n["id"] as? String == initialId &&
+                        self.number(n,"itemEpoch") == initialEpoch &&
+                        n["playRequested"] as? Bool == true &&
+                        n["interrupted"] as? Bool != true &&
+                        resumed["videoPlaying"] as? Bool == true &&
+                        self.number(resumed,"videoTime") > stalledAt+1.0
+                }
+            }
         }
         XCTAssertGreaterThan(number(snapshot(),"videoTime"),start+90,
-                             "Video must sustain playback beyond a brief startup")
+                             "Video must sustain genuine clock progress across the long session")
         // XCUITest provides no public .lock button (only Home, volume, etc.).
         // Use the simulator-only XCUIDevice lock selector, verify it genuinely
         // backgrounds the app, and fail if this Xcode runtime lacks it.
