@@ -142,3 +142,71 @@ test('manual HLS resolution uses a narrowed source and restores the original mas
   assert.match(swift,/targetHeight = waiting\.targetHeight|qualityHeight = waiting\.targetHeight/);
   assert.doesNotMatch(swift,/preferredMaximumResolution = CGSize\(/);
 });
+
+
+test('native HLS waiting is not misreported as Pause, but calls and user pauses still are',async()=>{
+  const t=testEngine(),e=t.engine;
+  await e.open({id:'video:123',url,autoplay:true});
+  const adapter=createIosNativeVideoAdapter(e,'video:123');
+  const events=[];
+  for(const name of ['play','pause','waiting'])adapter.on(name,()=>events.push(name));
+  const publish = value => t.watchers.state({...e.state,...value,
+    stateSequence:(Number(e.state.stateSequence)||0)+1});
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play']);
+  publish({playing:false,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting'],
+    'temporary buffering must not generate an explicit Pause event');
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting'],
+    'resuming from a buffer must not double-count an uninterrupted play');
+  publish({playing:false,playRequested:true,interrupted:true,failed:false});
+  assert.deepEqual(events,['play','waiting','pause'],
+    'a genuine phone/WhatsApp interruption must remain a pause');
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting','pause','play']);
+  publish({playing:false,playRequested:false,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting','pause','play','pause']);
+  await adapter.destroy();
+});
+
+test('native iOS awake policy survives HLS buffering but respects calls, pauses and failures',()=>{
+  const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  const start=main.indexOf('let iosVideoDisplayKey =');
+  const end=main.indexOf('let iosVideoOrientationListenerAttached =',start);
+  assert.ok(start>=0 && end>start,'Expected iOS awake-policy implementation');
+  const policy=main.slice(start,end);
+  const calls=[];
+  const state={watchVideo:{id:'123'},watchMode:'video',watchVideoPlaying:false,
+    watchMinimized:false,watchPictureInPicture:false,watchVimeo:null};
+  const iosUnified={active:true,state:{mode:'video',playing:false,
+    playRequested:true,interrupted:false,failed:false}};
+  const display={playback:params=>{calls.push(params);return Promise.resolve();}};
+  const sync=new Function('IS_IOS','Capacitor','state','iosUnified',
+    'iosNativeActive','IrgunVideoDisplay',
+    policy+'\nreturn syncIosVideoDisplay;'
+  )(true,{isNativePlatform:()=>true},state,iosUnified,()=>iosUnified.active,display);
+  sync();
+  assert.equal(calls.at(-1).playing,true,
+    'temporary HLS buffering must not enable the automatic screen lock');
+  iosUnified.state.interrupted=true;
+  sync();
+  assert.equal(calls.at(-1).playing,false,
+    'the screen must not be kept awake by a paused phone/WhatsApp call');
+  iosUnified.state.interrupted=false;
+  iosUnified.state.playRequested=false;
+  sync();
+  assert.equal(calls.at(-1).playing,false,'user Pause remains paused');
+  iosUnified.state.playRequested=true;
+  iosUnified.state.failed=true;
+  sync();
+  assert.equal(calls.at(-1).playing,false,'failed media cannot hold the screen awake');
+  iosUnified.state.failed=false;
+  sync();
+  assert.equal(calls.at(-1).playing,true,'a new Play request restores the awake policy');
+  state.watchMode='audio';
+  sync();
+  assert.equal(calls.at(-1).active,false,'audio mode does not claim video screen awake');
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(swift,/"interrupted": playbackIsBlockedByCall/);
+});
