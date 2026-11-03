@@ -894,6 +894,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "failed": player.currentItem?.status == .failed,
             "playing": active && player.timeControlStatus == .playing,
             "playRequested": playingWanted,
+            // Buffering still represents an active Play request. Expose call
+            // interruption separately so WebView never interprets either
+            // condition as a user-initiated Pause.
+            "interrupted": playbackIsBlockedByCall,
             "rate": Double(playbackRate),
             "sameItem": active && player.currentItem != nil,
             "itemEpoch": itemEpoch,
