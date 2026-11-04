@@ -1,3 +1,24 @@
+// Retry only transient secure-transport failures from AVFoundation. Never
+// retry non-network decoder errors, and never silently count a failed source
+// as working playback. The caller still tries the next real source on failure.
+export async function openNativeWithTransientTlsRetry(open, {
+  isCurrent = () => true,
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!isCurrent()) throw new Error('Video initialization cancelled');
+    try {
+      return await open();
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      const transientSecureTransport = /TLS error|secure connection to fail|network connection was lost/i.test(message);
+      if (!transientSecureTransport || attempt > 0) throw error;
+      await delay(1200);
+      if (!isCurrent()) throw new Error('Video initialization cancelled');
+    }
+  }
+}
+
 // The ONE playback engine for the native iOS app. Every Video/Audio mode,
 // fullscreen/Mini/PiP surface, and background session controls the same
 // IrgunUnifiedPlayer Swift singleton and its AVPlayer (not a WKWebView media
