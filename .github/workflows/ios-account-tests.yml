@@ -13,11 +13,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Runs share one dedicated non-admin server account; queue them rather than
-  # cancelling another workflow halfway through account mutations or cleanup.
+  # A new account-test run supersedes the older one instead of building up a
+  # stale queue. The global group still prevents two workflows from mutating
+  # the same non-admin QA account concurrently.
   group: ios-account-shared-test-account
-  queue: max
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   account:
