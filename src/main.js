@@ -19,7 +19,7 @@ import { BELSKY_VOL1_ID, nextPaidTrackInFolder } from './paid-collections.js';
 import { createPaidQuestionController } from './paid-index-controller.js';
 import { verifiedPurchasedIds, mergeVerifiedPaidCatalog, paidCatalogAccountKey } from './paid-entitlements.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
-import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
+import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame, openNativeWithTransientTlsRetry } from './ios-native-avplayer.js';
 import { IOS_VIMEO_MODE_STORAGE_KEY, IOS_VIDEO_CATALOG_PATH, normalizeIosVimeoMode, isIosVimeoOnlyLecture, visibleIosLectureCatalog, iosVimeoWatchEngine, iosVideoDescriptorPath } from './ios-vimeo-mode.js';
 import { lectureFollowTargets, followVerb, isFollowTargetActive } from './follow-controls.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
@@ -5706,7 +5706,9 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     for (let index = 0; index < urls.length; index += 1) {
       assertCurrent();
       try {
-        await openNative(urls[index]);
+        await openNativeWithTransientTlsRetry(() => openNative(urls[index]), {
+          isCurrent,
+        });
         lastError = null;
         break;
       } catch (error) {
@@ -9343,6 +9345,11 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVimeoReady = false;
       if (state.watchVimeo === player) state.watchVimeo = null;
       console.warn('Vimeo player init failed', error);
+      if (/TLS error|secure connection to fail|network connection was lost/i.test(String(error?.message || error || ''))) {
+        setToast(currentLanguage()==='he'
+          ? 'חיבור מאובטח לשרת הווידאו נכשל. בדקו את החיבור ונסו שוב.'
+          : 'Secure video connection failed. Check your connection and try Watch again.');
+      }
     }
     try { await player?.destroy?.(); } catch (_) {}
   } finally {
