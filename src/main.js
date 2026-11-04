@@ -1,5 +1,6 @@
 import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
 import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
+import { fetchLoginWithDeadline } from './ios-login-deadline.js';
 import './ios-audio-speed-popup.css';
 import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
@@ -2665,12 +2666,18 @@ async function login(email, password) {
   state.authMessage = '';
   render();
   try {
-    const response = await apiFetch('/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+    // WebKit sometimes leaves a network request pending indefinitely on
+    // iPhone. A bounded request both aborts it and releases the form so the
+    // user can retry; do not automatically duplicate a credential POST.
+    const {response, data} = await fetchLoginWithDeadline(async signal => {
+      const response = await apiFetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+        signal
+      });
+      return {response, data:await response.json().catch(() => ({}))};
     });
-    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (data.verificationRequired) {
         state.authVerifyEmail = String(data.email || email || '').trim().toLowerCase();
