@@ -87,6 +87,36 @@ jobs:
             pod install --repo-update
           fi
 
+      # Firebase's binary gRPC archive occasionally drops its dl.google.com
+      # connection on a fresh GitHub macOS runner. Resolve SPM packages before
+      # the real XCTest and retry only the dependency download step; never
+      # mark a failing application test as green.
+      - name: Resolve Swift packages with transient download retries
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONTAINER=(-project ios/App/App.xcodeproj)
+          if [ -d ios/App/App.xcworkspace ]; then
+            CONTAINER=(-workspace ios/App/App.xcworkspace)
+          fi
+          mkdir -p simulator-results
+          for attempt in 1 2 3; do
+            echo "Resolving Swift packages (attempt ${attempt}/3)"
+            if xcodebuild "${CONTAINER[@]}" -scheme SimulatorPlayback \
+              -derivedDataPath "$RUNNER_TEMP/SimulatorDerivedData" \
+              -resolvePackageDependencies \
+              > simulator-results/resolve-packages.log 2>&1; then
+              echo "Resolved Apple Swift packages successfully"
+              exit 0
+            fi
+            tail -n 30 simulator-results/resolve-packages.log
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Swift dependency downloads failed on all three attempts"
+              exit 1
+            fi
+            sleep $((attempt * 12))
+          done
+
       - name: Select and boot an installed simulator
         shell: bash
         run: |
