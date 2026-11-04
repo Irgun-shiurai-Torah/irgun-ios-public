@@ -69,7 +69,14 @@ window.__ISTQAChooseWatchButton = function(elements) {
 document.addEventListener('click', event => {
   const element = event.target instanceof Element ? event.target.closest('[data-watch]') : null;
   const id = String(element?.dataset.watch || '');
-  if (['1235946832','1235511026'].includes(id)) {
+  const lecture = state.videoById?.get(id);
+  const isBacked = lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
+    ['drive-library','city-drive'].includes(lecture?.sourceType) ||
+    ['1235946832','1235511026'].includes(id);
+  if (id && lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0 && isBacked) {
+    // Persist only AFTER a real native tap on the actual catalog card.
+    // Never silently change the selected lecture between a restart and
+    // cleanup of Like / Follow / Watch Later server state.
     try { localStorage.setItem('istIOSQABackedWatchId', id); } catch (_) {}
   }
 }, true);
