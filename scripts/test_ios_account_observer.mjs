@@ -272,3 +272,16 @@ test('startup request observation preserves real results and excludes unapproved
   assert.ok(requests[0].finishedAt>=requests[0].startedAt);
   assert.ok(!JSON.stringify(requests).includes('private'));
 });
+
+
+test('native account Watch test accepts only the exact real opened lecture after a physical tap',()=>{
+  const swift=readFileSync(new URL('../.github/account-tests/test.swift',import.meta.url),'utf8');
+  assert.match(swift,/let expectedWatchId = key == "open" \? \(fixture\["id"\] as\? String \?\? ""\) : ""/);
+  assert.match(swift,/beforeWatchId != expectedWatchId/);
+  assert.match(swift,/observed\["watchId"\] as\? String == expectedWatchId/);
+  assert.match(swift,/number\(observed,"observedAt"\) > number\(s,"observedAt"\)/);
+  assert.match(swift,/watchFixtureClickMatches\(observed,requested:s\)/);
+  assert.match(swift,/let visibleTarget = key == "open" && controls\[key\] != nil/);
+  assert.match(swift,/web\.coordinate\(withNormalizedOffset: \.zero\).*\.tap\(\)/);
+  assert.match(swift,/evidence\("account-control-not-opened-" \+ key\)/);
+});
