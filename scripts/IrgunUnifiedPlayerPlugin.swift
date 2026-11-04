@@ -946,6 +946,30 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             ["domain": event.errorDomain, "code": event.errorStatusCode]
         } ?? []
         data["controlsMenuOpen"] = controlsMenuOpen
+        // Xcode 26 accessibility snapshots sometimes hang when searching a
+        // UIKit action-sheet popover on iPad. Observe the actual visible action
+        // UILabel positions (never simulate a selection) so XCTest can deliver
+        // a physical tap without querying a disappearing accessibility tree.
+        var nativeSpeedMenuChoices: [String: [String: Double]] = [:]
+        if controlsMenuOpen, let alert = viewer.presentedViewController as? UIAlertController,
+           alert.title == "Playback speed", alert.isViewLoaded {
+            let allowed = Set(["0.75×", "1×", "1.2×", "1.5×", "1.8×", "2×"])
+            func findActionLabels(in view: UIView) {
+                if let label = view as? UILabel, let title = label.text,
+                   allowed.contains(title), view.window != nil,
+                   !view.isHidden, view.alpha > 0.01 {
+                    let rect = view.convert(view.bounds, to: nil)
+                    if rect.width > 8, rect.height > 8 {
+                        nativeSpeedMenuChoices[title] = [
+                            "x": Double(rect.midX), "y": Double(rect.midY)
+                        ]
+                    }
+                }
+                for child in view.subviews { findActionLabels(in: child) }
+            }
+            findActionLabels(in: alert.view)
+        }
+        data["speedMenuChoices"] = nativeSpeedMenuChoices
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
         if let output = simulatorFrameOutput {
