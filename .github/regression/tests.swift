@@ -1004,21 +1004,27 @@
                 return player["controlsMenuOpen"] as? Bool == true
             }
             let title=label == "1.5x" ? "1.5×" : "1×"
-            let popoverChoice=app.popovers.buttons[title].firstMatch
-            let sheetChoice=app.sheets.buttons[title].firstMatch
-            let alertChoice=app.alerts.buttons[title].firstMatch
-            var selected = false
-            for choice in [popoverChoice,sheetChoice,alertChoice] {
-                guard choice.waitForExistence(timeout:5), choice.isHittable else { continue }
-                choice.tap()
-                selected = true
-                break
+            // Inspect the real UIKit action label's onscreen geometry. Querying
+            // app.popovers.buttons["1×"] causes XCTest to hang on iOS 26 iPads
+            // while their WebView/speed-button hierarchy changes. These
+            // coordinates come from UIAlertController's *visible UILabel*;
+            // the tap is a genuine XCUITest screen interaction, not a mocked
+            // speed command. The actual AVPlayer rate is checked below.
+            let menu = try waitFor("Real native speed menu choice is onscreen",timeout:20) { s in
+                let n = s["nativePlayer"] as? [String:Any] ?? [:]
+                let choices = n["speedMenuChoices"] as? [String:[String:Any]] ?? [:]
+                guard n["controlsMenuOpen"] as? Bool == true,
+                      let rect = choices[title] else { return false }
+                return self.number(rect,"x") > 0 && self.number(rect,"y") > 0
             }
-            guard selected else {
-                evidence("missing-native-speed-popover-" + title)
-                XCTFail("Native playback speed popover did not expose the real " + title + " action")
+            let nativeMenu = menu["nativePlayer"] as? [String:Any] ?? [:]
+            let choices = nativeMenu["speedMenuChoices"] as? [String:[String:Any]] ?? [:]
+            guard let action = choices[title] else {
+                evidence("missing-native-speed-geometry-" + title)
                 throw Failure.timedOut("native speed choice")
             }
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx:number(action,"x"),dy:number(action,"y"))).tap()
             _ = try waitFor("Native speed popover closed after real menu selection",timeout:12) { state in
                 let player = state["nativePlayer"] as? [String:Any] ?? [:]
                 return player["controlsMenuOpen"] as? Bool == false &&
