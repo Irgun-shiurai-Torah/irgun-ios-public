@@ -24,25 +24,36 @@ export async function simulatorHlsSourceReady(url, request = fetch, depth = 0) {
   finally { clearTimeout(timer); }
 }
 
-// The account regression suite must keep the same real backed-up lecture
-// across relaunches. Missing or unusable fixtures are a test failure, not a
-// reason to silently pick the newest (possibly Vimeo-only) catalog entry.
+// A real catalog card, with audio and an associated speaker, must be chosen
+// for account playback tests. Keep the same selected lecture across restarts.
+// The historic fixtures still have priority if displayed; a current backed-up
+// lecture is a valid fallback when those older IDs are no longer on the first
+// page. NEVER substitute a different ID once one has actually been selected.
 export const IOS_ACCOUNT_SAMPLE_IDS = Object.freeze(['1235946832', '1235511026']);
 
 export function selectIosAccountFixture(elements, videosById, savedId = '') {
   const eligible = (elements || []).filter(element => {
-    const lecture = videosById?.get(String(element.dataset.watch || ''));
+    const lecture = videosById?.get(String(element?.dataset?.watch || ''));
     return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
   });
-  for (const id of [savedId, ...IOS_ACCOUNT_SAMPLE_IDS]) {
-    if (!IOS_ACCOUNT_SAMPLE_IDS.includes(String(id))) continue;
-    const found = eligible.find(element => String(element.dataset.watch || '') === id);
-    if (found) {
-      // Native XCTest can identify the existing title button by its real label.
-      // Cover buttons all share 'Watch' and stale coordinates can hit a neighbour.
-      return eligible.find(element => String(element.dataset.watch || '') === id &&
-        element.classList?.contains('media-title')) || found;
-    }
+  const bestTitle = id => eligible.find(element =>
+    String(element.dataset.watch || '') === id &&
+    element.classList?.contains('media-title')) ||
+    eligible.find(element => String(element.dataset.watch || '') === id) || null;
+
+  if (savedId) return bestTitle(String(savedId));
+  for (const id of IOS_ACCOUNT_SAMPLE_IDS) {
+    const found = bestTitle(id);
+    if (found) return found;
   }
-  return null;
+  // Only choose an actual Drive-backed video/audio shiur. Selecting an
+  // arbitrary recent Vimeo-only recording would make the test dependent on
+  // Vimeo privacy settings, rather than verifying account and history state.
+  const backed = eligible.filter(element => {
+    const lecture = videosById?.get(String(element.dataset.watch || ''));
+    return lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
+      ['drive-library','city-drive'].includes(lecture?.sourceType);
+  });
+  return backed.find(element => element.classList?.contains('media-title')) ||
+    backed[0] || null;
 }
