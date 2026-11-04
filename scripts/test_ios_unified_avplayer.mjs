@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter} from '../src/ios-native-avplayer.js';
+import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter,openNativeWithTransientTlsRetry} from '../src/ios-native-avplayer.js';
 
 function testEngine({ios=true, nativeFail=false}={}){
   const calls=[],watchers={};let epoch=0,now=40,mode='video',playing=false,rate=1,id='',url='',sequence=0;
@@ -209,4 +209,49 @@ test('native iOS awake policy survives HLS buffering but respects calls, pauses 
   assert.equal(calls.at(-1).active,false,'audio mode does not claim video screen awake');
   const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
   assert.match(swift,/"interrupted": playbackIsBlockedByCall/);
+});
+
+
+test('native TLS handshake retries exactly once without changing the lecture',async()=>{
+  let calls=0,waits=0;
+  const result=await openNativeWithTransientTlsRetry(async()=>{
+    calls++;
+    if(calls===1)throw Error('Native media is not playable: A TLS error caused the secure connection to fail.');
+    return {id:'video:123',position:42,playing:true};
+  },{delay:async ms=>{assert.equal(ms,1200);waits++}});
+  assert.equal(calls,2);
+  assert.equal(waits,1);
+  assert.deepEqual(result,{id:'video:123',position:42,playing:true});
+});
+
+test('native persistent TLS and non-network media failures never fake a player',async()=>{
+  let calls=0;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('A TLS error caused the secure connection to fail.');
+  },{delay:async()=>{}}),/TLS error/);
+  assert.equal(calls,2,'Persistent TLS failure must remain a real failure after one retry');
+  calls=0;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('AVPlayer unsupported codec');
+  },{delay:async()=>{}}),/unsupported codec/);
+  assert.equal(calls,1,'Codec failures must not be treated as temporary network errors');
+});
+
+test('native transient retry cancels when the Watch lecture was replaced',async()=>{
+  let calls=0,active=true;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('TLS error');
+  },{isCurrent:()=>active,delay:async()=>{active=false}}),/cancelled/);
+  assert.equal(calls,1,'Retry cannot reopen a superseded lecture');
+});
+
+test('the real simulator UI taps an onscreen UIKit speed action and verifies the native rate',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  const tests=readFileSync(new URL('../.github/regression/tests.swift',import.meta.url),'utf8');
+  assert.match(swift,/data\["speedMenuChoices"\] = nativeSpeedMenuChoices/);
+  assert.match(swift,/findActionLabels\(in: alert\.view\)/);
+  assert.match(tests,/app\.coordinate\(withNormalizedOffset: \.zero\)/);
+  assert.match(tests,/Native speed popover closed after real menu selection/);
+  assert.doesNotMatch(tests,/app\.popovers\.buttons\[title\]/,
+    'Avoid iOS 26 iPad accessibility snapshot hangs while querying the menu');
 });
