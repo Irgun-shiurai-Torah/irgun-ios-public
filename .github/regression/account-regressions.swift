@@ -129,12 +129,51 @@
                 throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
-                let before = number(account(),"lastClickSequence")
-                try tapNativeFormButton(["Post Comment"])
-                try awaitAccount("Real comment form submit tap: " + key) {
-                    self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
+                let observed = account()
+                let beforeClick = number(observed,"lastClickSequence")
+                let startedBefore = (observed["requests"] as? [[String:Any]] ?? []).filter {
+                    $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
+                }.count
+                func submitted() -> Bool {
+                    let now = account()
+                    let captured = number(now,"lastClickSequence") > beforeClick &&
+                        now["lastClickKey"] as? String == "commentPost"
+                    let started = (now["requests"] as? [[String:Any]] ?? []).filter {
+                        $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
+                    }.count > startedBefore
+                    // A real HTTP POST is even stronger evidence than a click
+                    // ledger which can disappear during a WebKit re-render.
+                    return captured || started
                 }
-                return
+                // XCTest often auto-scrolls the button into view with the
+                // first AX tap but leaves the keyboard open. When that tap
+                // does not submit, use a real on-screen coordinate on the
+                // verified button, never a synthetic JavaScript submit.
+                try tapNativeFormButton(["Post Comment"])
+                for attempt in 0..<3 {
+                    let until = Date().addingTimeInterval(5)
+                    while Date() < until {
+                        if submitted() { return }
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                    }
+                    guard attempt < 2 else { break }
+                    let current = account()
+                    let rects = current["controlRects"] as? [String:[String:Any]] ?? [:]
+                    let hits = current["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                    guard let rect = rects["commentPost"],
+                          hits["commentPost"]?["targetHit"] as? Bool == true,
+                          hits["commentPost"]?["disabled"] as? Bool != true else {
+                        // The button moved under the keyboard; let the real
+                        // accessibility element scroll it back into view.
+                        try tapNativeFormButton(["Post Comment"])
+                        continue
+                    }
+                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        .withOffset(CGVector(dx:number(rect,"x"),dy:number(rect,"y"))).tap()
+                }
+                evidence("comment-submit-native-touch-not-delivered")
+                XCTFail("Post Comment neither registered its native DOM click nor started a real POST")
+                throw Failure.timedOut("Real comment form submit tap")
             }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
