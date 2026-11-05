@@ -47,3 +47,35 @@ test('production login uses the deadline and still clears authBusy',()=>{
   assert.match(login,/signal\s*\n\s*\}\)/);
   assert.match(login,/finally\s*\{\s*state\.authBusy = false;/);
 });
+
+
+test('session restoration and optional startup never leave the app under a permanent spinner',()=>{
+  const source=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  const bootstrap=source.slice(source.indexOf('async function bootstrap(options'),source.indexOf('async function restoreSession()'));
+  assert.match(bootstrap,/await restoreSession\(\)/);
+  assert.doesNotMatch(bootstrap,/await Promise\.all\(\[loadSponsorRibbon\(\), loadScheduleData\(\), loadLiveStatus\(\)\]\)/);
+  assert.match(bootstrap,/void loadSponsorRibbon\(\)/);
+  assert.match(bootstrap,/void loadLiveStatus\(\)/);
+  const restore=source.slice(source.indexOf('async function restoreSession()'),source.indexOf('async function loadUserCollections()'));
+  assert.match(restore,/boundedAccountRead\('\/me', 12000\)/);
+  assert.match(restore,/error\?\.status === 401/);
+  assert.match(restore,/setToken\(''\)/);
+  assert.match(restore,/Session restore deferred until the network recovers/);
+  const collections=source.slice(source.indexOf('async function loadUserCollections()'),source.indexOf('async function checkAdminStatus('));
+  for(const path of ['/my-like-ids','/watch-later','/follows','/history','/notification-settings','/custom-playlists']){
+    assert.ok(collections.includes("boundedAccountRead('"+path+"')"),
+      path+' must not be able to hang all other startup requests');
+  }
+});
+
+test('session timeout can be reported distinctly from a sign-in timeout',async()=>{
+  let deadline=()=>{};
+  const promise=fetchLoginWithDeadline(()=>new Promise(()=>{}),{
+    timeoutMs:12000,
+    timeoutMessage:'Account connection timed out. Please try again.',
+    setTimer:cb=>{deadline=cb;return 42;},
+    clearTimer:()=>{}
+  });
+  deadline();
+  await assert.rejects(promise,/Account connection timed out/);
+});
