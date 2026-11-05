@@ -3,6 +3,7 @@
 // can delay reporting AbortError even after the abort signal has fired.
 export async function fetchLoginWithDeadline(fetchLogin, {
   timeoutMs = 25000,
+  timeoutMessage = 'Sign-in timed out. Check your connection and try again.',
   controller = new AbortController(),
   setTimer = setTimeout,
   clearTimer = clearTimeout
@@ -10,7 +11,7 @@ export async function fetchLoginWithDeadline(fetchLogin, {
   let timeoutId;
   const expired = new Promise((_, reject) => {
     timeoutId = setTimer(() => {
-      const error = new Error('Sign-in timed out. Check your connection and try again.');
+      const error = new Error(timeoutMessage);
       error.name = 'AbortError';
       try { controller.abort(); } catch (_) {}
       reject(error);
@@ -20,7 +21,7 @@ export async function fetchLoginWithDeadline(fetchLogin, {
     return await Promise.race([Promise.resolve().then(() => fetchLogin(controller.signal)), expired]);
   } catch (error) {
     if (controller.signal.aborted && error?.name === 'AbortError') {
-      throw new Error('Sign-in timed out. Check your connection and try again.');
+      throw new Error(timeoutMessage);
     }
     throw error;
   } finally {
