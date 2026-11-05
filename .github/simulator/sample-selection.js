@@ -36,24 +36,37 @@ export function selectIosAccountFixture(elements, videosById, savedId = '') {
     const lecture = videosById?.get(String(element?.dataset?.watch || ''));
     return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
   });
-  const bestTitle = id => eligible.find(element =>
-    String(element.dataset.watch || '') === id &&
-    element.classList?.contains('media-title')) ||
-    eligible.find(element => String(element.dataset.watch || '') === id) || null;
-
+  const bestTitle = (id, candidates=eligible) =>
+    candidates.find(element => String(element.dataset.watch || '') === id &&
+      element.classList?.contains('media-title')) ||
+    candidates.find(element => String(element.dataset.watch || '') === id) || null;
+  // Once a real QA lecture has been opened, never silently substitute another
+  // ID: the test's server-side cleanup MUST target the same lecture.
   if (savedId) return bestTitle(String(savedId));
-  for (const id of IOS_ACCOUNT_SAMPLE_IDS) {
-    const found = bestTitle(id);
-    if (found) return found;
-  }
-  // Only choose an actual Drive-backed video/audio shiur. Selecting an
-  // arbitrary recent Vimeo-only recording would make the test dependent on
-  // Vimeo privacy settings, rather than verifying account and history state.
+
   const backed = eligible.filter(element => {
-    const lecture = videosById?.get(String(element.dataset.watch || ''));
-    return lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
+    const id = String(element.dataset.watch || '');
+    const lecture = videosById?.get(id);
+    return IOS_ACCOUNT_SAMPLE_IDS.includes(id) ||
+      lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
       ['drive-library','city-drive'].includes(lecture?.sourceType);
   });
-  return backed.find(element => element.classList?.contains('media-title')) ||
+  // On iPhone the older preferred lecture can exist deep in an infinite
+  // catalog yet never be tappable. Select an actually VISIBLE backed lecture,
+  // preferring a title button, instead of scrolling indefinitely to a stale ID.
+  const visible = backed.filter(element => {
+    if (typeof element.getBoundingClientRect !== 'function') return true;
+    const r = element.getBoundingClientRect();
+    const width = Number(globalThis.innerWidth) || 390;
+    const height = Number(globalThis.innerHeight) || 844;
+    return r.width > 0 && r.height > 0 && r.bottom > 0 &&
+      r.right > 0 && r.left < width && r.top < height;
+  });
+  for (const id of IOS_ACCOUNT_SAMPLE_IDS) {
+    const preferred = bestTitle(id,visible);
+    if (preferred) return preferred;
+  }
+  return visible.find(element => element.classList?.contains('media-title')) ||
+    visible[0] || backed.find(element => element.classList?.contains('media-title')) ||
     backed[0] || null;
 }
