@@ -196,6 +196,9 @@
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
             let previousClick=number(snap,"lastClickSequence")
             let previousAccountClick=number(snap,"accountClickSequence")
+            let expectedOpenId = key == "open"
+                ? ((snap["watchFixture"] as? [String:Any])?["id"] as? String ?? "") : ""
+            let previousOpenedId = fullState["id"] as? String ?? ""
             let fixtureTapped = key == "open" && tapWatchFixture(snap)
             if fixtureTapped || (key != "open" && controls[key] != nil) {
                 let point = controls[key] ?? [:]
@@ -215,7 +218,19 @@
                         number(observed,"accountClickSequence") > previousAccountClick &&
                         observed["accountClickKey"] as? String == key &&
                         (key != "open" || watchFixtureClickMatches(observed,requested:snap,clickIdKey:"accountClickTargetId"))
-                    if genericClick || accountClick { return }
+                    // WebKit may replace the observer's click ledger during
+                    // openWatch() rendering. A *physical* Watch tap also
+                    // counts when the actual native player opens the exact
+                    // selected lecture, never another or stale item.
+                    let playingState = snapshot()
+                    let native = playingState["nativePlayer"] as? [String:Any] ?? [:]
+                    let realNavigation = key == "open" &&
+                        !expectedOpenId.isEmpty && previousOpenedId != expectedOpenId &&
+                        playingState["id"] as? String == expectedOpenId &&
+                        playingState["mode"] as? String == "video" &&
+                        native["active"] as? Bool == true &&
+                        native["id"] as? String == expectedOpenId
+                    if genericClick || accountClick || realNavigation { return }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
                 // WKWebView coordinate taps can miss an otherwise visible
@@ -281,6 +296,11 @@
             "lastClickSequence": number(finalRegression,"lastClickSequence"),
             "accountClickKey": finalRegression["accountClickKey"] ?? "",
             "accountClickSequence": number(finalRegression,"accountClickSequence"),
+            "lastClickTargetId": finalRegression["lastClickTargetId"] ?? "",
+            "accountClickTargetId": finalRegression["accountClickTargetId"] ?? "",
+            "fixtureId": (finalRegression["watchFixture"] as? [String:Any])?["id"] ?? "",
+            "openedVideoId": finalState["id"] ?? "",
+            "nativeVideoId": finalNative["id"] ?? "",
             "targetRect": (finalRegression["rects"] as? [String:Any])?[key] ?? [String:Any](),
             "pageScrollY": number(finalRegression,"pageScrollY"),
             "scrollRoot": finalRegression["scrollRoot"] ?? "",
