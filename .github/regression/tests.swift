@@ -229,7 +229,7 @@
                         playingState["id"] as? String == expectedOpenId &&
                         playingState["mode"] as? String == "video" &&
                         native["active"] as? Bool == true &&
-                        native["id"] as? String == expectedOpenId
+                        native["id"] as? String == "video:" + expectedOpenId
                     if genericClick || accountClick || realNavigation { return }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
