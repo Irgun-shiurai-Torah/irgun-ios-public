@@ -2080,7 +2080,10 @@ function offlineBannerHtml() {
 }
 
 function updateReconnectTimer() {
-  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary);
+  // Retain and retry a valid-looking saved session token when /me temporarily
+  // stalls. Only a real HTTP 401 may clear it.
+  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary ||
+    (state.token && !state.user));
   if (needsRetry && !reconnectTimer) {
     reconnectTimer = setInterval(() => {
       if (!document.hidden && !bootstrapInFlight) bootstrap({ background:true });
@@ -2538,7 +2541,12 @@ async function bootstrap(options = {}) {
     state.error = '';
 
     await restoreSession();
-    await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
+    // These public decorations are not prerequisites for a usable catalog or
+    // a restored account. The old Promise.all could leave the entire app on
+    // "Loading the Torah library" forever if just one request never settled.
+    void loadSponsorRibbon().then(() => { if (!state.loading) render(); }).catch(() => {});
+    void loadScheduleData().catch(() => {});
+    void loadLiveStatus().catch(() => {});
     await handleAppReturn();
   } catch (error) {
     console.error(error);
@@ -2557,40 +2565,66 @@ async function bootstrap(options = {}) {
   }
 }
 
+// WebKit may leave a fetch pending even after navigation or a previous native
+// process restart. Aborting *and* racing a deadline is essential; an AbortSignal
+// alone does not guarantee the promise resolves in all iOS versions.
+function boundedAccountRead(path, timeoutMs = 12000) {
+  return fetchLoginWithDeadline(signal => apiJson(path, {signal}), {
+    timeoutMs,
+    timeoutMessage: 'Account connection timed out. Please try again.'
+  });
+}
+
 async function restoreSession() {
   if (!state.token) {
     resetUserState();
     return;
   }
-  try {
-    const data = await apiJson('/me');
-    if (!data.loggedIn || !data.user) {
-      setToken('');
-      resetUserState();
-      return;
-    }
-    state.user = data.user;
-    await loadUserCollections();
-    warmNativePaidCatalog();
-    await checkAdminStatus();
-  } catch (error) {
-    if (error.status === 401) {
-      setToken('');
-      resetUserState();
+  let data = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      data = await boundedAccountRead('/me', 12000);
+      break;
+    } catch (error) {
+      // An expired/revoked token must be cleared, but no transient timeout
+      // or offline error is evidence that a signed-in user logged out.
+      if (error?.status === 401) {
+        setToken('');
+        resetUserState();
+        return;
+      }
+      if (attempt === 1) {
+        console.warn('Session restore deferred until the network recovers', error);
+        // Keep the token. updateReconnectTimer() will retry on connectivity
+        // recovery; do not strand the user under the bootstrap spinner.
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 600));
     }
   }
+  if (!data?.loggedIn || !data?.user) {
+    setToken('');
+    resetUserState();
+    return;
+  }
+  state.user = data.user;
+  await loadUserCollections();
+  warmNativePaidCatalog();
+  await checkAdminStatus();
 }
 
 async function loadUserCollections() {
   if (!state.user) return;
   try {
+    // Each read has its own deadline: Promise.all must not hang for the
+    // lifetime of a WKWebView when a single account endpoint stalls.
     const [likes, later, follows, history, notificationSettings, playlists] = await Promise.all([
-      apiJson('/my-like-ids').catch(() => ({ ids: [] })),
-      apiJson('/watch-later').catch(() => ({ items: [] })),
-      apiJson('/follows').catch(() => ({ items: [] })),
-      apiJson('/history').catch(() => ({ items: [] })),
-      apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
-      apiJson('/custom-playlists').catch(() => ({ items: [] }))
+      boundedAccountRead('/my-like-ids').catch(() => ({ ids: [] })),
+      boundedAccountRead('/watch-later').catch(() => ({ items: [] })),
+      boundedAccountRead('/follows').catch(() => ({ items: [] })),
+      boundedAccountRead('/history').catch(() => ({ items: [] })),
+      boundedAccountRead('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
+      boundedAccountRead('/custom-playlists').catch(() => ({ items: [] }))
     ]);
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
@@ -2620,7 +2654,7 @@ async function checkAdminStatus(force = false) {
   }
   if (state.adminChecked && !force) return state.isAdmin;
   try {
-    const data = await apiJson('/admin/status');
+    const data = await boundedAccountRead('/admin/status', 10000);
     state.isAdmin = Boolean(data?.isAdmin);
     state.adminStatus = data || null;
     state.adminAdmins = Array.isArray(data?.admins) ? data.admins : [];
