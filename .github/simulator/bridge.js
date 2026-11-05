@@ -69,7 +69,14 @@ window.__ISTQAChooseWatchButton = function(elements) {
 document.addEventListener('click', event => {
   const element = event.target instanceof Element ? event.target.closest('[data-watch]') : null;
   const id = String(element?.dataset.watch || '');
-  if (['1235946832','1235511026'].includes(id)) {
+  const lecture = state.videoById?.get(id);
+  const isBacked = lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
+    ['drive-library','city-drive'].includes(lecture?.sourceType) ||
+    ['1235946832','1235511026'].includes(id);
+  if (id && lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0 && isBacked) {
+    // Persist only AFTER a real native tap on the actual catalog card.
+    // Never silently change the selected lecture between a restart and
+    // cleanup of Like / Follow / Watch Later server state.
     try { localStorage.setItem('istIOSQABackedWatchId', id); } catch (_) {}
   }
 }, true);
@@ -191,21 +198,29 @@ window.ISTSimulator = {
       ].filter(eligible);
       const unique = preferred.filter((video,index,list) =>
         list.findIndex(other => videoId(other) === videoId(video)) === index);
-      for (const video of unique) {
-        const sources = await loadIosDirectVideoSources(video);
-        if (!sources?.hls && !sources?.mp4) continue;
-        // Historical descriptors can outlive an incomplete/unreachable backup.
-        // Use the same real playlist/segment probe as the normal sample path;
-        // still require the actual decoder to use this owned source afterward.
-        if (!await simulatorHlsSourceReady(sources.hls) &&
-            !await simulatorHlsSourceReady(sources.mp4)) continue;
+      // Descriptors and media segments are remote and can each take up to
+      // nine seconds. Sequentially probing every historical candidate made a
+      // perfectly healthy iPhone fail after XCTest's 170s timeout. Probe real
+      // production sources in bounded groups; keep the preferred-ID ordering.
+      for (let offset=0;offset<unique.length;offset+=4) {
+        const group=unique.slice(offset,offset+4);
+        const results=await Promise.all(group.map(async video => {
+          const sources=await loadIosDirectVideoSources(video);
+          if (!sources?.hls && !sources?.mp4) return null;
+          const playable=await simulatorHlsSourceReady(sources.hls) ||
+            await simulatorHlsSourceReady(sources.mp4);
+          return playable ? {video,sources} : null;
+        }));
+        const selected=results.find(Boolean);
+        if (!selected) continue;
+        const {video,sources}=selected;
         const id=String(videoId(video));
-        this.reportedSelectedId = id;
-        this.reportedVimeoKey = String(video.vimeoId || video.id || '');
-        this.reportedEmbedPreview = watchVimeoEmbedSrc(video,0);
-        this.reportedSources = sources;
-        this.reportedExpectedSource = sources.hls || sources.mp4;
-        await openWatch(id, 0);
+        this.reportedSelectedId=id;
+        this.reportedVimeoKey=String(video.vimeoId || video.id || '');
+        this.reportedEmbedPreview=watchVimeoEmbedSrc(video,0);
+        this.reportedSources=sources;
+        this.reportedExpectedSource=sources.hls || sources.mp4;
+        await openWatch(id,0);
         return;
       }
       throw new Error('No cataloged Drive-backed lecture exposes real native HLS or MP4');
@@ -367,7 +382,7 @@ window.ISTSimulator = {
       backend: native ? (String(native.sourceUrl||'').includes('.m3u8')?'hls-native':'mp4') : (state.watchVimeo?.player?.backend || ''),
       videoSource: native?.sourceUrl || video?.currentSrc || video?.src || '',
       reportedExpectedSource: this.reportedExpectedSource, reportedSources: this.reportedSources,
-      reportedSelectedId: this.reportedSelectedId, reportedVimeoKey: this.reportedVimeoKey,
+      simulatorError, reportedSelectedId: this.reportedSelectedId, reportedVimeoKey: this.reportedVimeoKey,
       reportedEmbedPreview: this.reportedEmbedPreview, reportedUnlistedPreview: this.reportedUnlistedPreview,
       vimeoEmbed: document.getElementById('watchVimeoFrame')?.dataset?.vimeoSrc || '',
       fallbackBanner: Boolean(document.querySelector('.watch-hls-fallback-note')) || /HLS could not start.*Playing Vimeo/.test(document.body.innerText),

@@ -1,5 +1,6 @@
 import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
 import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
+import { fetchLoginWithDeadline } from './ios-login-deadline.js';
 import './ios-audio-speed-popup.css';
 import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
@@ -19,7 +20,7 @@ import { BELSKY_VOL1_ID, nextPaidTrackInFolder } from './paid-collections.js';
 import { createPaidQuestionController } from './paid-index-controller.js';
 import { verifiedPurchasedIds, mergeVerifiedPaidCatalog, paidCatalogAccountKey } from './paid-entitlements.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
-import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
+import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame, openNativeWithTransientTlsRetry } from './ios-native-avplayer.js';
 import { IOS_VIMEO_MODE_STORAGE_KEY, IOS_VIDEO_CATALOG_PATH, normalizeIosVimeoMode, isIosVimeoOnlyLecture, visibleIosLectureCatalog, iosVimeoWatchEngine, iosVideoDescriptorPath } from './ios-vimeo-mode.js';
 import { lectureFollowTargets, followVerb, isFollowTargetActive } from './follow-controls.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
@@ -399,6 +400,9 @@ function onIosUnifiedState(snapshot) {
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
     state.watchVideoPlaying=Boolean(snapshot.playing);
+    // Native buffering and an explicit pause differ. Keep the display-awake
+    // policy tied to the user's intent, not one instantaneous AVPlayer status.
+    syncIosVideoDisplay();
     refreshPersistentMiniVideoChrome();
   }
   if (state.current && snapshot.mode==='audio') {
@@ -2076,7 +2080,10 @@ function offlineBannerHtml() {
 }
 
 function updateReconnectTimer() {
-  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary);
+  // Retain and retry a valid-looking saved session token when /me temporarily
+  // stalls. Only a real HTTP 401 may clear it.
+  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary ||
+    (state.token && !state.user));
   if (needsRetry && !reconnectTimer) {
     reconnectTimer = setInterval(() => {
       if (!document.hidden && !bootstrapInFlight) bootstrap({ background:true });
@@ -2534,7 +2541,12 @@ async function bootstrap(options = {}) {
     state.error = '';
 
     await restoreSession();
-    await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
+    // These public decorations are not prerequisites for a usable catalog or
+    // a restored account. The old Promise.all could leave the entire app on
+    // "Loading the Torah library" forever if just one request never settled.
+    void loadSponsorRibbon().then(() => { if (!state.loading) render(); }).catch(() => {});
+    void loadScheduleData().catch(() => {});
+    void loadLiveStatus().catch(() => {});
     await handleAppReturn();
   } catch (error) {
     console.error(error);
@@ -2553,40 +2565,66 @@ async function bootstrap(options = {}) {
   }
 }
 
+// WebKit may leave a fetch pending even after navigation or a previous native
+// process restart. Aborting *and* racing a deadline is essential; an AbortSignal
+// alone does not guarantee the promise resolves in all iOS versions.
+function boundedAccountRead(path, timeoutMs = 12000) {
+  return fetchLoginWithDeadline(signal => apiJson(path, {signal}), {
+    timeoutMs,
+    timeoutMessage: 'Account connection timed out. Please try again.'
+  });
+}
+
 async function restoreSession() {
   if (!state.token) {
     resetUserState();
     return;
   }
-  try {
-    const data = await apiJson('/me');
-    if (!data.loggedIn || !data.user) {
-      setToken('');
-      resetUserState();
-      return;
-    }
-    state.user = data.user;
-    await loadUserCollections();
-    warmNativePaidCatalog();
-    await checkAdminStatus();
-  } catch (error) {
-    if (error.status === 401) {
-      setToken('');
-      resetUserState();
+  let data = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      data = await boundedAccountRead('/me', 12000);
+      break;
+    } catch (error) {
+      // An expired/revoked token must be cleared, but no transient timeout
+      // or offline error is evidence that a signed-in user logged out.
+      if (error?.status === 401) {
+        setToken('');
+        resetUserState();
+        return;
+      }
+      if (attempt === 1) {
+        console.warn('Session restore deferred until the network recovers', error);
+        // Keep the token. updateReconnectTimer() will retry on connectivity
+        // recovery; do not strand the user under the bootstrap spinner.
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 600));
     }
   }
+  if (!data?.loggedIn || !data?.user) {
+    setToken('');
+    resetUserState();
+    return;
+  }
+  state.user = data.user;
+  await loadUserCollections();
+  warmNativePaidCatalog();
+  await checkAdminStatus();
 }
 
 async function loadUserCollections() {
   if (!state.user) return;
   try {
+    // Each read has its own deadline: Promise.all must not hang for the
+    // lifetime of a WKWebView when a single account endpoint stalls.
     const [likes, later, follows, history, notificationSettings, playlists] = await Promise.all([
-      apiJson('/my-like-ids').catch(() => ({ ids: [] })),
-      apiJson('/watch-later').catch(() => ({ items: [] })),
-      apiJson('/follows').catch(() => ({ items: [] })),
-      apiJson('/history').catch(() => ({ items: [] })),
-      apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
-      apiJson('/custom-playlists').catch(() => ({ items: [] }))
+      boundedAccountRead('/my-like-ids').catch(() => ({ ids: [] })),
+      boundedAccountRead('/watch-later').catch(() => ({ items: [] })),
+      boundedAccountRead('/follows').catch(() => ({ items: [] })),
+      boundedAccountRead('/history').catch(() => ({ items: [] })),
+      boundedAccountRead('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
+      boundedAccountRead('/custom-playlists').catch(() => ({ items: [] }))
     ]);
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
@@ -2616,7 +2654,7 @@ async function checkAdminStatus(force = false) {
   }
   if (state.adminChecked && !force) return state.isAdmin;
   try {
-    const data = await apiJson('/admin/status');
+    const data = await boundedAccountRead('/admin/status', 10000);
     state.isAdmin = Boolean(data?.isAdmin);
     state.adminStatus = data || null;
     state.adminAdmins = Array.isArray(data?.admins) ? data.admins : [];
@@ -2662,12 +2700,18 @@ async function login(email, password) {
   state.authMessage = '';
   render();
   try {
-    const response = await apiFetch('/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+    // WebKit sometimes leaves a network request pending indefinitely on
+    // iPhone. A bounded request both aborts it and releases the form so the
+    // user can retry; do not automatically duplicate a credential POST.
+    const {response, data} = await fetchLoginWithDeadline(async signal => {
+      const response = await apiFetch('/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+        signal
+      });
+      return {response, data:await response.json().catch(() => ({}))};
     });
-    const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (data.verificationRequired) {
         state.authVerifyEmail = String(data.email || email || '').trim().toLowerCase();
@@ -3799,8 +3843,15 @@ function syncIosVideoDisplay() {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   const active = Boolean(state.watchVideo && state.watchMode === 'video');
   const direct = state.watchVimeo?.player;
-  const playing = active && Boolean(state.watchVideoPlaying ||
-    (direct?.autoplayWanted && !direct?.explicitlyPaused));
+  // AVPlayer.timeControlStatus switches to waiting while buffering HLS. This
+  // must not allow iOS to auto-lock an actively requested video. But a genuine
+  // user Pause, finished item, failed source or phone/WhatsApp interruption
+  // must never keep the screen awake.
+  const native = iosNativeActive() ? iosUnified.state : null;
+  const playing = active && (native
+    ? Boolean(native.mode === 'video' && native.playRequested === true &&
+        native.interrupted !== true && native.failed !== true)
+    : Boolean(state.watchVideoPlaying || (direct?.autoplayWanted && !direct?.explicitlyPaused)));
   const presentation = {
     active, playing,
     mini: active && Boolean(state.watchMinimized),
@@ -5696,7 +5747,9 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     for (let index = 0; index < urls.length; index += 1) {
       assertCurrent();
       try {
-        await openNative(urls[index]);
+        await openNativeWithTransientTlsRetry(() => openNative(urls[index]), {
+          isCurrent,
+        });
         lastError = null;
         break;
       } catch (error) {
@@ -9333,6 +9386,11 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVimeoReady = false;
       if (state.watchVimeo === player) state.watchVimeo = null;
       console.warn('Vimeo player init failed', error);
+      if (/TLS error|secure connection to fail|network connection was lost/i.test(String(error?.message || error || ''))) {
+        setToast(currentLanguage()==='he'
+          ? 'חיבור מאובטח לשרת הווידאו נכשל. בדקו את החיבור ונסו שוב.'
+          : 'Secure video connection failed. Check your connection and try Watch again.');
+      }
     }
     try { await player?.destroy?.(); } catch (_) {}
   } finally {

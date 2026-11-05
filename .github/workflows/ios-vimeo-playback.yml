@@ -25,6 +25,11 @@ on:
 permissions:
   contents: read
 
+# New source commits cancel superseded Vimeo routing checks for this PR.
+concurrency:
+  group: ios-vimeo-playback-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   apple-vimeo-modes:
     runs-on: ubuntu-latest

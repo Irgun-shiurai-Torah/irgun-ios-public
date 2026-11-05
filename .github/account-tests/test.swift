@@ -83,23 +83,39 @@
                 report["lastTargetRect"] = (s["controlRects"] as? [String:[String:Any]])?[key] ?? [String:Any]()
                 persistReport()
                 let beforeClick = number(s,"lastClickSequence")
-                let fixtureTapped = key == "open" && tapWatchFixture(s)
-                if fixtureTapped || (key != "open" && controls[key] != nil) {
+                let fixture = s["watchFixture"] as? [String:Any] ?? [:]
+                let expectedWatchId = key == "open" ? (fixture["id"] as? String ?? "") : ""
+                let beforeWatchId = s["watchId"] as? String ?? ""
+                // Prefer tapping a DOM-verified, visible title coordinate. Its
+                // click target is tied to the exact selected lecture ID. Only
+                // use native accessibility auto-scrolling for offscreen titles.
+                let visibleTarget = key == "open" && controls[key] != nil
+                let fixtureTapped = key == "open" && !visibleTarget && tapWatchFixture(s)
+                if fixtureTapped || controls[key] != nil {
                     let point = controls[key] ?? [:]
                     let web=app.webViews.firstMatch, box=web.frame
                     XCTAssertTrue(box.width>0 && box.height>0)
-                    // Use the same CSS-point mapping as the native playback suite.
                     if !fixtureTapped {
                         web.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx:number(point,"x"),dy:number(point,"y"))).tap()
                     }
-                    // A render can move a control between observation and touch.
-                    // Continue only after the real native tap produced its click.
-                    let clickDeadline = Date().addingTimeInterval(3)
+                    // The click observer can be replaced by WebKit while
+                    // openWatch() rerenders the overlay. Accept either the
+                    // captured click for the EXACT lecture, or actual app state
+                    // transitioning from no lecture to that SAME lecture.
+                    // Never mark a different video or an old stale Watch as
+                    // successful. The caller independently verifies watchId.
+                    let clickDeadline = Date().addingTimeInterval(5)
                     while Date() < clickDeadline {
                         let observed = account()
                         if number(observed,"lastClickSequence") > beforeClick,
                            observed["lastClickKey"] as? String == key,
                            key != "open" || watchFixtureClickMatches(observed,requested:s) { return }
+                        if key == "open", !expectedWatchId.isEmpty,
+                           beforeWatchId != expectedWatchId,
+                           observed["watchId"] as? String == expectedWatchId,
+                           number(observed,"observedAt") > number(s,"observedAt") {
+                            return
+                        }
                         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
                     }
                     continue
@@ -136,7 +152,18 @@
                         withVelocity:.slow,thenHoldForDuration:0.2)
                 }
             }
-            XCTFail("Visible account control missing: \(key)"); throw Failure.timedOut(key)
+            let last = account()
+            let lastFixture = last["watchFixture"] as? [String:Any] ?? [:]
+            report["lastScreen"] = last["screen"] as? String ?? ""
+            report["lastClickKey"] = last["lastClickKey"] as? String ?? ""
+            report["lastClickTargetId"] = last["lastClickTargetId"] as? String ?? ""
+            report["lastWatchId"] = last["watchId"] as? String ?? ""
+            report["expectedWatchId"] = lastFixture["id"] as? String ?? ""
+            report["lastControlKeys"] = (last["controls"] as? [String:Any] ?? [:]).keys.sorted()
+            persistReport()
+            evidence("account-control-not-opened-" + key)
+            XCTFail("Account control not opened: \(key). Expected lecture: \(lastFixture["id"] ?? "none"), actual: \(last["watchId"] ?? "none"), click key: \(last["lastClickKey"] ?? "none")")
+            throw Failure.timedOut(key)
         }
         func dismissNativeKeyboard() throws {
             guard app.keyboards.firstMatch.exists else { return }

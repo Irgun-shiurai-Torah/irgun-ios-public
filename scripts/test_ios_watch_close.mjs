@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter} from '../src/ios-native-avplayer.js';
+import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter,openNativeWithTransientTlsRetry} from '../src/ios-native-avplayer.js';
 
 // Execute the production Watch handlers, including native fallback selection.
 const source=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
@@ -19,7 +19,8 @@ const factory=new Function('state','iosUnified','deps',`
     clearPersistentVideoMount,syncIosVideoDisplay,render,stopNativeBackgroundAudio,
     preserveWatchTime,usageAnalytics,isIosVimeoOnlyLecture,iosVimeoWatchEngine,
     loadIosDirectVideoSources,displayShiurTitle,nativeVideoFrame,document,
-    createIosNativeVideoAdapter,hardStopHtmlAudioForVideo,audioUrl,mediaApiId,API}=deps;
+    createIosNativeVideoAdapter,openNativeWithTransientTlsRetry,
+    hardStopHtmlAudioForVideo,audioUrl,mediaApiId,API}=deps;
   ${handlers}
   return {closeWatch,openWatch,createIosWatchPlayer,initWatchVimeo,
     watchPlayerInitializationIsCurrent};
@@ -69,6 +70,11 @@ function harness({loading=false,blockHistory=false,failHls=false,mode='video'}={
     loadIosDirectVideoSources:async()=>({hls:'https://fixture/master.m3u8',mp4:'https://fixture/video.mp4'}),
     displayShiurTitle:v=>v,nativeVideoFrame:()=>null,
     document:{getElementById:()=>frame},createIosNativeVideoAdapter,
+    // Use the production retry helper even in this isolated Watch-close
+    // harness. The six previous failures came from omitting this dependency,
+    // not from actual playback teardown or audio-mode behavior.
+    openNativeWithTransientTlsRetry: (open,opts) =>
+      openNativeWithTransientTlsRetry(open,{...opts,delay:async()=>{}}),
     hardStopHtmlAudioForVideo(){},audioUrl:id=>'https://fixture/audio/'+id,
     mediaApiId:(_video,id)=>id,API:'https://fixture'};
   const api=factory(state,engine,deps);

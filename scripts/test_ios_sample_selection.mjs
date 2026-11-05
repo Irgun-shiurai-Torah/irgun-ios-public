@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {simulatorHlsSourceReady} from '../.github/simulator/sample-selection.js';
+import {simulatorHlsSourceReady, selectIosAccountFixture} from '../.github/simulator/sample-selection.js';
 import {readFileSync} from 'node:fs';
 
 test('test sample requires a real master, media playlist, and available first fragment',async()=>{
@@ -58,4 +58,39 @@ test('reported regression fails without opening Vimeo when no owned sample is re
   const t=reportedSelection([]);await t.h.open();
   assert.deepEqual(t.opened,[]);
   assert.match(t.h.getError(),/No cataloged Drive-backed lecture/);
+});
+
+
+function qaCard(id, title=false) {
+  return {dataset:{watch:id},classList:{contains:name=>name==='media-title'&&title}};
+}
+const backed=(id,extra={})=>[id,{hasAudio:true,_speakerIds:['rav'],hasDriveVideo:true,...extra}];
+
+test('signed-in UI chooses visible current Drive-backed shiur when older IDs are not rendered',()=>{
+  const cards=[qaCard('new-vimeo',true),qaCard('new-backed'),qaCard('new-backed',true)];
+  const videos=new Map([backed('new-vimeo',{hasDriveVideo:false}),
+    backed('new-backed')]);
+  assert.equal(selectIosAccountFixture(cards,videos)?.dataset.watch,'new-backed');
+  assert.equal(selectIosAccountFixture(cards,videos)?.classList.contains('media-title'),true);
+});
+
+test('account verification maintains the same lecture across relaunch even if ordering changes',()=>{
+  const cards=[qaCard('1235946832',true),qaCard('new-backed',true)];
+  const videos=new Map([backed('1235946832'),backed('new-backed')]);
+  assert.equal(selectIosAccountFixture(cards,videos,'new-backed')?.dataset.watch,'new-backed');
+  assert.equal(selectIosAccountFixture(cards,videos,'no-longer-visible'),null,
+    'Do not substitute a different lecture and accidentally mutate its account flags');
+});
+
+test('account fixture must have audio and a real speaker, with verified Drive backing',()=>{
+  const cards=[qaCard('vimeo-only',true),qaCard('no-speaker',true),
+    qaCard('audio-missing',true),qaCard('drive-working',true)];
+  const videos=new Map([
+    backed('vimeo-only',{hasDriveVideo:false}),
+    backed('no-speaker',{_speakerIds:[]}),
+    backed('audio-missing',{hasAudio:false}),
+    backed('drive-working',{sourceType:'drive-library'})
+  ]);
+  assert.equal(selectIosAccountFixture(cards,videos)?.dataset.watch,'drive-working');
+  assert.equal(selectIosAccountFixture([qaCard('vimeo-only',true)],videos),null);
 });

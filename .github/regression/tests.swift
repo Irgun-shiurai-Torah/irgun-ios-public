@@ -196,6 +196,9 @@
             let controls=snap["controls"] as? [String: [String:Any]] ?? [:]
             let previousClick=number(snap,"lastClickSequence")
             let previousAccountClick=number(snap,"accountClickSequence")
+            let expectedOpenId = key == "open"
+                ? ((snap["watchFixture"] as? [String:Any])?["id"] as? String ?? "") : ""
+            let previousOpenedId = fullState["id"] as? String ?? ""
             let fixtureTapped = key == "open" && tapWatchFixture(snap)
             if fixtureTapped || (key != "open" && controls[key] != nil) {
                 let point = controls[key] ?? [:]
@@ -215,7 +218,19 @@
                         number(observed,"accountClickSequence") > previousAccountClick &&
                         observed["accountClickKey"] as? String == key &&
                         (key != "open" || watchFixtureClickMatches(observed,requested:snap,clickIdKey:"accountClickTargetId"))
-                    if genericClick || accountClick { return }
+                    // WebKit may replace the observer's click ledger during
+                    // openWatch() rendering. A *physical* Watch tap also
+                    // counts when the actual native player opens the exact
+                    // selected lecture, never another or stale item.
+                    let playingState = snapshot()
+                    let native = playingState["nativePlayer"] as? [String:Any] ?? [:]
+                    let realNavigation = key == "open" &&
+                        !expectedOpenId.isEmpty && previousOpenedId != expectedOpenId &&
+                        playingState["id"] as? String == expectedOpenId &&
+                        playingState["mode"] as? String == "video" &&
+                        native["active"] as? Bool == true &&
+                        native["id"] as? String == "video:" + expectedOpenId
+                    if genericClick || accountClick || realNavigation { return }
                     RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                 }
                 // WKWebView coordinate taps can miss an otherwise visible
@@ -281,6 +296,11 @@
             "lastClickSequence": number(finalRegression,"lastClickSequence"),
             "accountClickKey": finalRegression["accountClickKey"] ?? "",
             "accountClickSequence": number(finalRegression,"accountClickSequence"),
+            "lastClickTargetId": finalRegression["lastClickTargetId"] ?? "",
+            "accountClickTargetId": finalRegression["accountClickTargetId"] ?? "",
+            "fixtureId": (finalRegression["watchFixture"] as? [String:Any])?["id"] ?? "",
+            "openedVideoId": finalState["id"] ?? "",
+            "nativeVideoId": finalNative["id"] ?? "",
             "targetRect": (finalRegression["rects"] as? [String:Any])?[key] ?? [String:Any](),
             "pageScrollY": number(finalRegression,"pageScrollY"),
             "scrollRoot": finalRegression["scrollRoot"] ?? "",
@@ -507,6 +527,12 @@
             let rects = $0["rects"] as? [String:[String:Any]] ?? [:]
             return rects["open"] != nil
         }
+        // The QA chooser now selects a real, backed lecture visible in the
+        // current catalogue, not only two historical IDs. Verify the EXACT
+        // selected ID and an actual owned decoder; never accept another shiur.
+        let fixture = regression()["watchFixture"] as? [String:Any] ?? [:]
+        let requestedId = fixture["id"] as? String ?? ""
+        XCTAssertFalse(requestedId.isEmpty, "A real backed-up lecture must be selected before Watch")
         try regressionTap("open")
         _ = try waitFor("Real backed-up Watch control starts direct HLS or its own MP4", timeout: 120) { s in
             let source = s["videoSource"] as? String ?? ""
@@ -514,7 +540,7 @@
                 source.contains("/media/") && source.contains("/video.mp4")
             return s["mode"] as? String == "video" && s["ready"] as? Bool == true &&
                 (s["backend"] as? String == "hls-native" || sameMP4) &&
-                ["1235946832","1235511026"].contains(s["id"] as? String ?? "") &&
+                s["id"] as? String == requestedId &&
                 s["videoPlaying"] as? Bool == true && s["videoVisible"] as? Bool == true &&
                 self.regressionSingleVideoOwner(s)
         }
@@ -1004,21 +1030,27 @@
                 return player["controlsMenuOpen"] as? Bool == true
             }
             let title=label == "1.5x" ? "1.5×" : "1×"
-            let popoverChoice=app.popovers.buttons[title].firstMatch
-            let sheetChoice=app.sheets.buttons[title].firstMatch
-            let alertChoice=app.alerts.buttons[title].firstMatch
-            var selected = false
-            for choice in [popoverChoice,sheetChoice,alertChoice] {
-                guard choice.waitForExistence(timeout:5), choice.isHittable else { continue }
-                choice.tap()
-                selected = true
-                break
+            // Inspect the real UIKit action label's onscreen geometry. Querying
+            // app.popovers.buttons["1×"] causes XCTest to hang on iOS 26 iPads
+            // while their WebView/speed-button hierarchy changes. These
+            // coordinates come from UIAlertController's *visible UILabel*;
+            // the tap is a genuine XCUITest screen interaction, not a mocked
+            // speed command. The actual AVPlayer rate is checked below.
+            let menu = try waitFor("Real native speed menu choice is onscreen",timeout:20) { s in
+                let n = s["nativePlayer"] as? [String:Any] ?? [:]
+                let choices = n["speedMenuChoices"] as? [String:[String:Any]] ?? [:]
+                guard n["controlsMenuOpen"] as? Bool == true,
+                      let rect = choices[title] else { return false }
+                return self.number(rect,"x") > 0 && self.number(rect,"y") > 0
             }
-            guard selected else {
-                evidence("missing-native-speed-popover-" + title)
-                XCTFail("Native playback speed popover did not expose the real " + title + " action")
+            let nativeMenu = menu["nativePlayer"] as? [String:Any] ?? [:]
+            let choices = nativeMenu["speedMenuChoices"] as? [String:[String:Any]] ?? [:]
+            guard let action = choices[title] else {
+                evidence("missing-native-speed-geometry-" + title)
                 throw Failure.timedOut("native speed choice")
             }
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx:number(action,"x"),dy:number(action,"y"))).tap()
             _ = try waitFor("Native speed popover closed after real menu selection",timeout:12) { state in
                 let player = state["nativePlayer"] as? [String:Any] ?? [:]
                 return player["controlsMenuOpen"] as? Bool == false &&
@@ -1141,17 +1173,63 @@
 
     func testRegressionLongPlaybackLockAndModeChanges() throws {
         try regressionActivateSample()
-        let start=number(snapshot(),"videoTime")
-        // Check repeatedly for three minutes, not just a single advancing tick.
-        for _ in 0..<12 {
+        let initial = snapshot()
+        let start = number(initial,"videoTime")
+        let initialNative = initial["nativePlayer"] as? [String:Any] ?? [:]
+        let initialId = initialNative["id"] as? String ?? ""
+        let initialEpoch = number(initialNative,"itemEpoch")
+        XCTAssertFalse(initialId.isEmpty,"A real native lecture must start the long-play test")
+        // Check repeatedly for three minutes; only allow an actual AVPlayer
+        // waiting-to-play HLS buffer to recover without user interaction. The
+        // original check interpreted one transient buffer as an explicit Pause.
+        // A user Pause, call, source replacement, failed item or long stall
+        // must still fail, with the actual AVPlayer diagnostics in CI logs.
+        for checkpoint in 0..<12 {
             Thread.sleep(forTimeInterval:15)
-            let s=snapshot()
-            XCTAssertEqual(s["videoPlaying"] as? Bool,true)
-            XCTAssertTrue(regressionSingleVideoOwner(s))
-            XCTAssertEqual(s["audioPlaying"] as? Bool,false)
+            let s = snapshot()
+            let native = s["nativePlayer"] as? [String:Any] ?? [:]
+            let diagnosticKeys = ["active","mode","playing","playRequested","interrupted",
+                "ready","failed","position","duration","timeControlStatus",
+                "waitingReason","bufferEmpty","likelyToKeepUp","progressAge",
+                "recoveryAttempts","recoveryScheduled","nativeSeekPending",
+                "error","errorEvents"]
+            let diagnostic = diagnosticKeys.map { key in
+                "\(key)=\(native[key] ?? "nil")"
+            }.joined(separator:", ")
+            XCTAssertEqual(native["id"] as? String,initialId,
+                           "Native lecture changed without user interaction: \(diagnostic)")
+            XCTAssertEqual(number(native,"itemEpoch"),initialEpoch,
+                           "AVPlayerItem was silently replaced: \(diagnostic)")
+            XCTAssertTrue(regressionSingleVideoOwner(s),
+                          "Expected one native video player: \(diagnostic)")
+            XCTAssertEqual(s["audioPlaying"] as? Bool,false,
+                           "Competing HTML audio started during native video")
+            if s["videoPlaying"] as? Bool != true {
+                print("UITEST: HLS not playing at checkpoint \(checkpoint+1): \(diagnostic)")
+                guard native["playRequested"] as? Bool == true,
+                      native["interrupted"] as? Bool != true,
+                      native["failed"] as? Bool != true,
+                      native["ready"] as? Bool == true,
+                      number(native,"timeControlStatus") == 1 else {
+                    evidence("long-playback-unexpected-pause")
+                    XCTFail("Video stopped for a reason other than a recoverable HLS buffer: \(diagnostic)")
+                    throw Failure.timedOut("Long playback stopped")
+                }
+                let stalledAt = number(s,"videoTime")
+                _ = try waitFor("Real HLS buffering must recover within 25s, with advancing frames",
+                                timeout:25) { resumed in
+                    let n = resumed["nativePlayer"] as? [String:Any] ?? [:]
+                    return n["id"] as? String == initialId &&
+                        self.number(n,"itemEpoch") == initialEpoch &&
+                        n["playRequested"] as? Bool == true &&
+                        n["interrupted"] as? Bool != true &&
+                        resumed["videoPlaying"] as? Bool == true &&
+                        self.number(resumed,"videoTime") > stalledAt+1.0
+                }
+            }
         }
         XCTAssertGreaterThan(number(snapshot(),"videoTime"),start+90,
-                             "Video must sustain playback beyond a brief startup")
+                             "Video must sustain genuine clock progress across the long session")
         // XCUITest provides no public .lock button (only Home, volume, etc.).
         // Use the simulator-only XCUIDevice lock selector, verify it genuinely
         // backgrounds the app, and fail if this Xcode runtime lacks it.

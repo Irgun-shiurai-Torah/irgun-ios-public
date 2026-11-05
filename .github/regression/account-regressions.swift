@@ -56,8 +56,9 @@
                     followRequests.last?["ok"] as? Bool == true
             }
         }
-        func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { state in
+        func awaitAccount(_ message: String, timeout: TimeInterval = 60,
+                          _ condition: @escaping ([String: Any]) -> Bool) throws {
+            try waitFor(message, timeout: timeout) { state in
                 var observed = state["account"] as? [String: Any] ?? [:]
                 // Use live catalog/bootstrap state if the nested observer omits
                 // its readiness key after a native process restart.
@@ -128,12 +129,51 @@
                 throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
-                let before = number(account(),"lastClickSequence")
-                try tapNativeFormButton(["Post Comment"])
-                try awaitAccount("Real comment form submit tap: " + key) {
-                    self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
+                let observed = account()
+                let beforeClick = number(observed,"lastClickSequence")
+                let startedBefore = (observed["requests"] as? [[String:Any]] ?? []).filter {
+                    $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
+                }.count
+                func submitted() -> Bool {
+                    let now = account()
+                    let captured = number(now,"lastClickSequence") > beforeClick &&
+                        now["lastClickKey"] as? String == "commentPost"
+                    let started = (now["requests"] as? [[String:Any]] ?? []).filter {
+                        $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
+                    }.count > startedBefore
+                    // A real HTTP POST is even stronger evidence than a click
+                    // ledger which can disappear during a WebKit re-render.
+                    return captured || started
                 }
-                return
+                // XCTest often auto-scrolls the button into view with the
+                // first AX tap but leaves the keyboard open. When that tap
+                // does not submit, use a real on-screen coordinate on the
+                // verified button, never a synthetic JavaScript submit.
+                try tapNativeFormButton(["Post Comment"])
+                for attempt in 0..<3 {
+                    let until = Date().addingTimeInterval(5)
+                    while Date() < until {
+                        if submitted() { return }
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                    }
+                    guard attempt < 2 else { break }
+                    let current = account()
+                    let rects = current["controlRects"] as? [String:[String:Any]] ?? [:]
+                    let hits = current["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                    guard let rect = rects["commentPost"],
+                          hits["commentPost"]?["targetHit"] as? Bool == true,
+                          hits["commentPost"]?["disabled"] as? Bool != true else {
+                        // The button moved under the keyboard; let the real
+                        // accessibility element scroll it back into view.
+                        try tapNativeFormButton(["Post Comment"])
+                        continue
+                    }
+                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        .withOffset(CGVector(dx:number(rect,"x"),dy:number(rect,"y"))).tap()
+                }
+                evidence("comment-submit-native-touch-not-delivered")
+                XCTFail("Post Comment neither registered its native DOM click nor started a real POST")
+                throw Failure.timedOut("Real comment form submit tap")
             }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
@@ -404,6 +444,13 @@
         try touch("open")
         try awaitAccount("Lecture opened") { !($0["watchId"] as? String ?? "").isEmpty }
         let id=account()["watchId"] as! String, before=account()
+        // A followed speaker can have a legacy alias and a canonical server ID.
+        // Record the *real button's resolved state* for the exact lecture
+        // rather than treating unordered account-wide follow IDs as equivalent.
+        let originalFollowIdentity = before["followIdentity"] as? String ?? ""
+        let originalFollowActive = before["followActive"] as? Bool ?? false
+        XCTAssertTrue(originalFollowIdentity.hasPrefix("speaker:"),
+                      "The test must target a real speaker Follow control")
         report["accountMutationsStartedAt"] = timestamp(); persistReport()
         try touch("like")
         try awaitAccount("Like toggled") { values($0,"likes").contains(id) != values(before,"likes").contains(id) }
@@ -414,7 +461,10 @@
         let followRequestCount = completedFollowRequests(account())
         try touch("follow")
         try awaitSuccessfulFollowRequest(after: followRequestCount)
-        try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
+        try awaitAccount("Follow toggled") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == !originalFollowActive
+        }
         checked("Native speaker follow toggle")
         try awaitAccount("Playing lecture records real history") {
             $0["videoPlaying"] as? Bool == true &&
@@ -555,7 +605,11 @@
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
-        try awaitAccount("Signed-in library reloads after playback") {
+        // A true process relaunch starts a new WKWebView and refetches the
+        // catalog, profile, and collections. A cold macOS simulator can leave
+        // the loopback observer empty for over one minute (no stale success).
+        // Preserve the original server-backed identity/ready assertions.
+        try awaitAccount("Signed-in library reloads after playback", timeout: 180) {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             $0["name"] as? String == originalName
         }
@@ -626,13 +680,30 @@
         }
         checked("Native Watch Later flag restored")
         let followRestoreRequestCount = completedFollowRequests(account())
+        let priorFollowRequestTotal = (account()["requests"] as? [[String:Any]] ?? [])
+            .filter { $0["path"] as? String == "/follows/toggle" }.count
         try touch("follow")
-        try awaitSuccessfulFollowRequest(after: followRestoreRequestCount)
-        try awaitAccount("Follow restored") {
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+        try awaitAccount("Restore Follow request completed with original server state") { observed in
+            let requests = observed["requests"] as? [[String:Any]] ?? []
+            let followRequests = requests.filter { $0["path"] as? String == "/follows/toggle" }
+            guard followRequests.count > priorFollowRequestTotal,
+                  let latest = followRequests.last else { return false }
+            // A successful HTTP request is not enough: require the server to
+            // confirm precisely the originally observed speaker follow state.
+            return latest["ok"] as? Bool == true &&
+                   latest["following"] as? Bool == originalFollowActive
         }
-        checked("Native Follow flag restored")
-        try awaitAccount("Lecture flags restored") { values($0,"likes").contains(id) == values(before,"likes").contains(id) && values($0,"later").contains(id) == values(before,"later").contains(id) && values($0,"follows").sorted() == values(before,"follows").sorted() }
+        try awaitAccount("Follow restored") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
+        checked("Native Follow flag restored and server-confirmed")
+        try awaitAccount("Lecture flags restored") {
+            values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
+            values($0,"later").contains(id) == values(before,"later").contains(id) &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
         checked("Lecture flags restored")
         // Relaunch rather than depending on the same top-edge close control,
         // then require the restored server state and session to load normally.
@@ -641,7 +712,15 @@
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
             values($0,"later").contains(id) == values(before,"later").contains(id) &&
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+            // Restarted collections are authoritative; don't compare raw
+            // canonical follow IDs to a potentially legacy pre-toggle alias.
+            ($0["follows"] as? [String] != nil)
+        }
+        try touch("shiurim"); try touch("open")
+        try awaitAccount("Original speaker Follow state survives relaunch") {
+            $0["watchId"] as? String == id &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
         }
         try touch("account"); try touch("logout")
         try awaitAccount("Logout clears account state") { $0["loggedIn"] as? Bool == false && values($0,"likes").isEmpty && values($0,"later").isEmpty && ($0["playlists"] as? [[String:Any]] ?? []).isEmpty }

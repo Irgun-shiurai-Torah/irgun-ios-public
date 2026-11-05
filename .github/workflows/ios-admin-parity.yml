@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+# Only the latest run for a PR/branch should consume test capacity.
+concurrency:
+  group: ios-admin-parity-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   parity:
     name: Protected iOS Admin controls and web build

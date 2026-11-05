@@ -226,7 +226,14 @@ window.ISTAccountTest = { snapshot() {
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
   const native = iosNativeActive() ? iosUnified.state : null;
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,controlHitTests,watchFixture,
+  // Track the actual speaker button separately from the full follow list.
+  // Server-issued canonical IDs may differ from legacy button keys; the UI's
+  // aria-pressed value is the resolved follow state for this lecture.
+  const followButton = document.querySelector('[data-follow-type="speaker"][data-follow-key]');
+  const followIdentity = followButton
+    ? 'speaker:' + String(followButton.dataset.followKey || '') : '';
+  const followActive = followButton ? followButton.getAttribute('aria-pressed') === 'true' : false;
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,controlHitTests,watchFixture,followIdentity,followActive,
     clicks:Object.fromEntries(Object.entries(window.__ISTAccountClicks||{}).map(([key,value])=>[key,{...value}])),
     lastPointer:{...(window.__ISTAccountLastPointer||{})},
     watchScrollTop:Number(document.querySelector('.watch-scroll')?.scrollTop || 0),
