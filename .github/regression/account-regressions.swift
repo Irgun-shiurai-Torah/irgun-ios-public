@@ -136,43 +136,86 @@
                 }.count
                 func submitted() -> Bool {
                     let now = account()
-                    let captured = number(now,"lastClickSequence") > beforeClick &&
+                    let clicked = number(now,"lastClickSequence") > beforeClick &&
                         now["lastClickKey"] as? String == "commentPost"
                     let started = (now["requests"] as? [[String:Any]] ?? []).filter {
                         $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
                     }.count > startedBefore
-                    // A real HTTP POST is even stronger evidence than a click
-                    // ledger which can disappear during a WebKit re-render.
-                    return captured || started
+                    return clicked || started
                 }
-                // XCTest often auto-scrolls the button into view with the
-                // first AX tap but leaves the keyboard open. When that tap
-                // does not submit, use a real on-screen coordinate on the
-                // verified button, never a synthetic JavaScript submit.
-                try tapNativeFormButton(["Post Comment"])
-                for attempt in 0..<3 {
-                    let until = Date().addingTimeInterval(5)
-                    while Date() < until {
-                        if submitted() { return }
-                        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-                    }
-                    guard attempt < 2 else { break }
-                    let current = account()
-                    let rects = current["controlRects"] as? [String:[String:Any]] ?? [:]
-                    let hits = current["controlHitTests"] as? [String:[String:Any]] ?? [:]
-                    guard let rect = rects["commentPost"],
-                          hits["commentPost"]?["targetHit"] as? Bool == true,
-                          hits["commentPost"]?["disabled"] as? Bool != true else {
-                        // The button moved under the keyboard; let the real
-                        // accessibility element scroll it back into view.
-                        try tapNativeFormButton(["Post Comment"])
+                var physicalTaps = 0
+                // The video is a native UIKit surface layered ABOVE WebKit.
+                // A CSS hit test can report Post Comment as hittable even while
+                // the same screen coordinate is physically covered by AVPlayer.
+                // On iPhone 17 Pro Max the failing tap was at y=389, inside
+                // the native video surface y=163...411. Do not repeat it.
+                for attempt in 0..<14 {
+                    if submitted() { return }
+                    let state = snapshot()
+                    let now = state["account"] as? [String:Any] ?? [:]
+                    let native = state["nativePlayer"] as? [String:Any] ?? [:]
+                    let controls = now["controls"] as? [String:[String:Any]] ?? [:]
+                    let point = controls["commentPost"] ?? [:]
+                    let x = number(point,"x"), y = number(point,"y")
+                    let width = number(now,"width"), height = number(now,"height")
+                    let surfaceX = number(native,"surfaceX")
+                    let surfaceY = number(native,"surfaceY")
+                    let surfaceRight = surfaceX + number(native,"surfaceWidth")
+                    let surfaceBottom = surfaceY + number(native,"surfaceHeight")
+                    let coveredByVideo = native["active"] as? Bool == true &&
+                        native["mode"] as? String == "video" &&
+                        native["surfaceInteractive"] as? Bool == true &&
+                        x >= surfaceX && x <= surfaceRight &&
+                        y >= surfaceY && y <= surfaceBottom + 12
+                    if coveredByVideo {
+                        // Move the real .watch-scroll content DOWN, so Post
+                        // Comment is no longer under the native video player.
+                        // Use a genuine XCTest drag in the scroll viewport,
+                        // never window.scrollTo or a synthetic JS click.
+                        let scroll = now["watchScrollRect"] as? [String:Any] ?? [:]
+                        let upper = max(number(scroll,"top") + 40,height * 0.46)
+                        let lower = min(number(scroll,"bottom") - 50,height - 105)
+                        guard width > 100 && lower - upper > 155 else {
+                            evidence("comment-post-video-covered-no-scroll-area")
+                            XCTFail("Native video covers Post Comment but no scroll area is available")
+                            throw Failure.timedOut("Post Comment video overlap")
+                        }
+                        let swipeX = min(width - 35,max(35,width * 0.71))
+                        let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                        origin.withOffset(CGVector(dx:swipeX,dy:upper))
+                            .press(forDuration:0.05,
+                                   thenDragTo:origin.withOffset(CGVector(dx:swipeX,dy:lower)),
+                                   withVelocity:.fast,thenHoldForDuration:0)
+                        print("UITEST: moved Post Comment below native video (attempt \(attempt+1))")
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.3))
                         continue
                     }
-                    app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-                        .withOffset(CGVector(dx:number(rect,"x"),dy:number(rect,"y"))).tap()
+                    guard physicalTaps < 3 else { break }
+                    if x > 0 && y > 0 && x < width && y < height {
+                        // This position is verified to be outside the UIKit
+                        // video surface; tap the real WebView coordinate.
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:x,dy:y)).tap()
+                    } else {
+                        // An offscreen button is allowed one genuine AX tap
+                        // to scroll it into view. Re-evaluate native overlay
+                        // geometry before any subsequent tap.
+                        try tapNativeFormButton(["Post Comment"])
+                    }
+                    physicalTaps += 1
+                    let until = Date().addingTimeInterval(6)
+                    while Date() < until {
+                        if submitted() { return }
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                    }
                 }
+                let final = snapshot()
+                let finalNative = final["nativePlayer"] as? [String:Any] ?? [:]
+                let finalAccount = final["account"] as? [String:Any] ?? [:]
+                let finalPoint = (finalAccount["controls"] as? [String:[String:Any]])?["commentPost"] ?? [:]
+                print("UITEST: Post Comment failed with tap y=\(number(finalPoint,"y")), native video bottom=\(number(finalNative,"surfaceY")+number(finalNative,"surfaceHeight")), taps=\(physicalTaps)")
                 evidence("comment-submit-native-touch-not-delivered")
-                XCTFail("Post Comment neither registered its native DOM click nor started a real POST")
+                XCTFail("Post Comment neither registered a real DOM click nor started an HTTP POST")
                 throw Failure.timedOut("Real comment form submit tap")
             }
             let hide = app.buttons["ist-simulator-hide-controls"]
