@@ -155,7 +155,10 @@
                     let now = state["account"] as? [String:Any] ?? [:]
                     let native = state["nativePlayer"] as? [String:Any] ?? [:]
                     let controls = now["controls"] as? [String:[String:Any]] ?? [:]
-                    let point = controls["commentPost"] ?? [:]
+                    let rects = now["controlRects"] as? [String:[String:Any]] ?? [:]
+                    // Retain real DOM geometry even when an unrelated native
+                    // layer hides the button from document.elementFromPoint.
+                    let point = controls["commentPost"] ?? rects["commentPost"] ?? [:]
                     let x = number(point,"x"), y = number(point,"y")
                     let width = number(now,"width"), height = number(now,"height")
                     let surfaceX = number(native,"surfaceX")
@@ -168,25 +171,37 @@
                         x >= surfaceX && x <= surfaceRight &&
                         y >= surfaceY && y <= surfaceBottom + 12
                     if coveredByVideo {
-                        // Move the real .watch-scroll content DOWN, so Post
-                        // Comment is no longer under the native video player.
-                        // Use a genuine XCTest drag in the scroll viewport,
-                        // never window.scrollTo or a synthetic JS click.
+                        // If the keyboard has reappeared after typing or
+                        // focusing the comment, close it before evaluating
+                        // available scroll space. Never tap the native video
+                        // overlay in an attempt to submit the comment.
+                        if !nativeKeyboardIsClosed() {
+                            try dismissNativeKeyboard()
+                            continue
+                        }
+                        // Move the real .watch-scroll content DOWN, so the
+                        // button becomes physically reachable below the UIKit
+                        // video surface. The drag begins and ends in the
+                        // unobscured part of the actual scrolling viewport.
                         let scroll = now["watchScrollRect"] as? [String:Any] ?? [:]
-                        let upper = max(number(scroll,"top") + 40,height * 0.46)
-                        let lower = min(number(scroll,"bottom") - 50,height - 105)
-                        guard width > 100 && lower - upper > 155 else {
+                        let upper = max(number(scroll,"top") + 16,surfaceBottom + 20)
+                        let lower = min(number(scroll,"bottom") - 24,height - 60)
+                        guard width > 100 && lower - upper >= 65 else {
+                            print("UITEST: no safe Post Comment scroll area: top=\(number(scroll,"top")) bottom=\(number(scroll,"bottom")) surfaceBottom=\(surfaceBottom) height=\(height)")
                             evidence("comment-post-video-covered-no-scroll-area")
-                            XCTFail("Native video covers Post Comment but no scroll area is available")
+                            XCTFail("Native video covers Post Comment and the keyboard-free scroll viewport is too small")
                             throw Failure.timedOut("Post Comment video overlap")
                         }
                         let swipeX = min(width - 35,max(35,width * 0.71))
                         let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-                        origin.withOffset(CGVector(dx:swipeX,dy:upper))
+                        let beforeTop = number(now,"watchScrollTop")
+                        origin.withOffset(CGVector(dx:swipeX,dy:upper + 8))
                             .press(forDuration:0.05,
-                                   thenDragTo:origin.withOffset(CGVector(dx:swipeX,dy:lower)),
+                                   thenDragTo:origin.withOffset(CGVector(dx:swipeX,dy:lower - 8)),
                                    withVelocity:.fast,thenHoldForDuration:0)
-                        print("UITEST: moved Post Comment below native video (attempt \(attempt+1))")
+                        let afterAccount = account()
+                        let postRect = (afterAccount["controlRects"] as? [String:[String:Any]])?["commentPost"] ?? [:]
+                        print("UITEST: real Post Comment scroll: top \(beforeTop) -> \(number(afterAccount,"watchScrollTop")), y=\(number(postRect,"y")), videoBottom=\(surfaceBottom), attempt=\(attempt+1)")
                         RunLoop.current.run(until:Date().addingTimeInterval(0.3))
                         continue
                     }
@@ -567,8 +582,18 @@
         try awaitAccount("Native keyboard entered the exact disposable QA comment") {
             $0["qaDraftValid"] as? Bool == true && $0["qaDraftMarker"] as? String == commentMarker
         }
-        // Tap the real Post button through native accessibility; XCTest can
-        // scroll it into view without inserting Return into the comment.
+        // On iPhone, opening the native keyboard shrinks the .watch-scroll
+        // viewport to the area above the keyboard. If we try to scroll the
+        // Post button while it is still open, XCTest can have no safe gesture
+        // area beneath the UIKit video surface. Dismiss it using the real
+        // keyboard accessory first, keeping the actual typed draft intact.
+        if number(account(),"width") < 600 {
+            try dismissNativeKeyboard()
+            try awaitAccount("iPhone comment draft survives native keyboard dismissal") {
+                $0["qaDraftValid"] as? Bool == true &&
+                $0["qaDraftMarker"] as? String == commentMarker
+            }
+        }
         let postBefore = successCount(account(), "/comments", "POST")
         try touch("commentPost")
         try awaitAccount("QA comment POST accepted by the actual server") {
