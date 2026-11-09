@@ -275,6 +275,75 @@
                 let to = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
                 from.press(forDuration:0.05,thenDragTo:to,withVelocity:.fast,thenHoldForDuration:0)
             }
+            if key == "commentEdit" {
+                // The observer filters this target to the disposable comment
+                // created by this test. Its true DOM rect can be available even
+                // when the generic "controls" dictionary is transiently empty.
+                // A previous iPhone run scrolled 24 times while the owned Edit
+                // button was actually at (43, 340) with targetHit=true.
+                guard let ownedId = requested["qaCommentId"] as? String,
+                      !ownedId.isEmpty,
+                      requested["qaCommentPhase"] as? String == "created" else {
+                    XCTFail("Owned QA comment not ready for its Edit control")
+                    throw Failure.timedOut("Owned comment identity")
+                }
+                func ownedEditOpened() -> Bool {
+                    let observed = account()
+                    let editRect = (observed["controlRects"] as? [String:[String:Any]])?["commentEditText"]
+                    return clickDelivered(observed) ||
+                        (observed["qaCommentId"] as? String == ownedId &&
+                         editRect != nil)
+                }
+                for attempt in 0..<6 {
+                    if ownedEditOpened() { return }
+                    let fullState = snapshot()
+                    let observed = fullState["account"] as? [String:Any] ?? [:]
+                    // Recheck ownership before each physical touch: the test
+                    // must never edit an unrelated viewer's comment.
+                    guard observed["qaCommentId"] as? String == ownedId else {
+                        XCTFail("Owned comment changed before Edit tap")
+                        throw Failure.timedOut("Owned comment changed")
+                    }
+                    let rects = observed["controlRects"] as? [String:[String:Any]] ?? [:]
+                    let hits = observed["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                    let rect = rects["commentEdit"] ?? [:]
+                    let x = number(rect,"x"), y = number(rect,"y")
+                    let width = number(observed,"width"), height = number(observed,"height")
+                    let hit = hits["commentEdit"]?["targetHit"] as? Bool == true &&
+                        hits["commentEdit"]?["disabled"] as? Bool != true
+                    let native = fullState["nativePlayer"] as? [String:Any] ?? [:]
+                    let surfaceX = number(native,"surfaceX"), surfaceY = number(native,"surfaceY")
+                    let covered = native["active"] as? Bool == true &&
+                        native["mode"] as? String == "video" &&
+                        native["surfaceInteractive"] as? Bool == true &&
+                        x >= surfaceX && x <= surfaceX + number(native,"surfaceWidth") &&
+                        y >= surfaceY && y <= surfaceY + number(native,"surfaceHeight") + 8
+                    let inViewport = number(rect,"width") > 0 && number(rect,"height") > 0 &&
+                        x > 0 && x < width && y > 0 && y < height
+                    if inViewport && hit && !covered {
+                        // Tap the real button at its observer-verified centre.
+                        // Do not rely on an optional "controls" entry that
+                        // may disappear between WKWebView snapshots.
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:x,dy:y)).tap()
+                        let deadline = Date().addingTimeInterval(5)
+                        while Date() < deadline {
+                            if ownedEditOpened() { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                        print("UITEST: owned Edit tap not delivered, retry \(attempt + 1)")
+                    } else {
+                        // A real swipe is still necessary for offscreen or
+                        // UIKit-covered buttons; do not fake a JavaScript click.
+                        let upward = !covered && y >= height * 0.65
+                        swipeOwnedComment(fullState,towardUp:upward)
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.25))
+                    }
+                }
+                evidence("owned-comment-edit-native-touch-not-delivered")
+                XCTFail("Owned Edit control did not receive a physical tap or open its actual editor")
+                throw Failure.timedOut("Real owned comment Edit")
+            }
             // The iPad WKWebView exposes a real "Save comment" accessibility
             // control even when its CSS center is covered by an unrelated
             // button after keyboard/safe-area layout. Let XCTest bring this
