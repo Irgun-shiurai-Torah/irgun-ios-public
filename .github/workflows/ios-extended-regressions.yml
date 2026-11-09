@@ -23,13 +23,12 @@ permissions:
   actions: read
   contents: read
 
-# Separate accounts let this suite run alongside Login & Account Tests, which
-# retains the original shared-account lock. Keep successive extended runs queued;
-# each job also takes its account's lock before any server mutations.
+# New commits to the same PR supersede all older extended-suite runs.
+# Keep the separate job-level QA-account locks below: they protect mutations
+# across different branches and workflows even if a superseded run is cancelled.
 concurrency:
   group: ios-extended-regressions-${{ github.ref }}
-  queue: max
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   device:

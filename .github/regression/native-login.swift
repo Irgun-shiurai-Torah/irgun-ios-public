@@ -70,6 +70,37 @@
         }
     }
 
+    // Exercise the user's actual Retry path once when WebKit received NO HTTP
+    // response. Never retry a rejected password, rate limit or server error,
+    // and never count a tap or a timeout as successful authentication.
+    @discardableResult
+    private func nativeAwaitLoginResponse(email: String, password: String) throws -> [String:Any] {
+        for attempt in 0..<2 {
+            let settled = try waitFor("Native login receives a response or its bounded connection error",timeout:90) { state in
+                let account = state["account"] as? [String:Any] ?? [:]
+                if account["loggedIn"] as? Bool == true && account["profileVisible"] as? Bool == true { return true }
+                let requests = account["requests"] as? [[String:Any]] ?? []
+                let login = requests.last { $0["path"] as? String == "/login" }
+                return account["authBusy"] as? Bool == false &&
+                    account["authError"] as? Bool == true &&
+                    self.number(login ?? [:],"finishedAt") > 0
+            }
+            let account = settled["account"] as? [String:Any] ?? [:]
+            if account["loggedIn"] as? Bool == true { return account }
+            let requests = account["requests"] as? [[String:Any]] ?? []
+            let response = requests.last { $0["path"] as? String == "/login" } ?? [:]
+            if number(response,"status") > 0 { return account }
+            guard attempt == 0 && account["authFormPresent"] as? Bool == true else {
+                XCTFail("Native login received no HTTP response on either bounded attempt")
+                throw Failure.timedOut("Native login connection")
+            }
+            try nativeEnterLoginField("email",email)
+            try nativeEnterLoginField("password",password)
+            try nativeSubmitLoginForm()
+        }
+        throw Failure.timedOut("Native login connection")
+    }
+
     private func nativeKeyboardIsClosed() -> Bool {
         let native = snapshot()
         if native["nativeKeyboardObserved"] as? Bool == true {

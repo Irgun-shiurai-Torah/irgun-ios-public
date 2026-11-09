@@ -20,6 +20,11 @@ on:
 permissions:
   contents: read
 
+# Only the latest run for a PR/branch should consume test capacity.
+concurrency:
+  group: ios-admin-parity-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   parity:
     name: Protected iOS Admin controls and web build
@@ -38,5 +43,10 @@ jobs:
           node --test scripts/test_ios_admin_website_parity.mjs
       - name: Bundle complete iOS web UI
         run: |
-          npm install --no-audit --no-fund
+          # Capacitor's asset-generation dependency installs sharp/libvips by
+          # downloading a GitHub Release. That download repeatedly times out
+          # on Linux CI although Vite does not run image asset generation.
+          # Install the exact packages without third-party lifecycle scripts;
+          # the real prebuild tests and Vite bundler must still succeed.
+          npm install --ignore-scripts --no-audit --no-fund
           npm run build

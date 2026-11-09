@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { clearCommentComposerAfterPost } from '../src/comment-draft.js';
+import { clearCommentComposerAfterPost, createCommentDraftStore, commentDraftScope } from '../src/comment-draft.js';
 
 const source = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const start = source.indexOf('let commentPostPending = false;');
@@ -13,14 +13,18 @@ assert.match(handler, /clearCommentComposerAfterPost\(/);
 const makePostComment = new Function(
   'state', 'document', 'preserveWatchTime', 'apiJson', 'videoId',
   'loadComments', 'alert', 'requireLogin', 'clearCommentComposerAfterPost',
+  'commentDraftScope', 'commentDrafts',
   handler + '\nreturn postComment;'
 );
 
 function harness({ onPost, onPreserve } = {}) {
+  const drafts = createCommentDraftStore();
   const button = { disabled: false };
   const makeField = (value = '  Test comment  ') => ({
     value, blurred: false,
-    blur() { this.blurred = true; },
+    handlers: {},
+    addEventListener(name, handler) { this.handlers[name] = handler; },
+    blur() { this.blurred = true; this.handlers.blur?.(); },
     closest() { return { querySelector() { return button; } }; }
   });
   let current = makeField();
@@ -29,6 +33,7 @@ function harness({ onPost, onPreserve } = {}) {
   const events = { posts: [], loads: 0, errors: [] };
   const context = {
     state,
+    drafts,
     get field() { return current; },
     replace(value = '  Test comment  ') { current = makeField(value); return current; },
     button
@@ -44,7 +49,7 @@ function harness({ onPost, onPreserve } = {}) {
     async () => { events.loads++; },
     message => { events.errors.push(message); },
     () => { throw Error('Unexpected login prompt'); },
-    clearCommentComposerAfterPost
+    clearCommentComposerAfterPost, commentDraftScope, drafts
   );
   return { ...context, get field() { return current; }, postComment, events };
 }
@@ -119,6 +124,70 @@ test('empty and whitespace-only drafts are never posted', async () => {
   h.field.value = ' \n ';
   await h.postComment();
   assert.equal(h.events.posts.length, 0);
+});
+
+test('unsent comment survives a Watch remount and posts to the same account/lecture', async () => {
+  const h = harness();
+  const scope = commentDraftScope(h.state.user.id, h.state.watchVideo.id);
+  h.drafts.bind(h.field, scope);
+  h.field.value = 'IST iOS QA 1794220000000 created';
+  h.field.handlers.input();
+  // Reproduces a render during keyboard dismissal: the old DOM textarea
+  // disappears before the user physically taps Post Comment.
+  h.replace('');
+  h.drafts.bind(h.field, scope);
+  await h.postComment();
+  assert.equal(h.events.posts.length, 1);
+  assert.deepEqual(JSON.parse(h.events.posts[0].options.body), {
+    videoId: 'lecture-a', text: 'IST iOS QA 1794220000000 created'
+  });
+  assert.equal(h.drafts.read(scope), '');
+  assert.equal(h.field.value, '');
+});
+
+test('drafts are scoped to account and lecture and are not shared on logout', () => {
+  const drafts = createCommentDraftStore();
+  const field = {value:'private draft',handlers:{},addEventListener(k,v){this.handlers[k]=v;}};
+  const scope = commentDraftScope('user-a', 'lecture-a');
+  drafts.bind(field, scope); field.handlers.input();
+  assert.equal(drafts.read(scope), 'private draft');
+  assert.equal(drafts.read(commentDraftScope('user-b', 'lecture-a')), '');
+  assert.equal(drafts.read(commentDraftScope('user-a', 'lecture-b')), '');
+  assert.equal(drafts.clearIfUnchanged(scope, 'another comment'), false);
+  drafts.clear();
+  assert.equal(drafts.read(scope), '');
+});
+
+test('new draft entered during a POST is preserved in memory as well as the textarea', async () => {
+  const h = harness({onPost: c => {
+    c.field.value='My next comment';
+    c.field.handlers.input();
+  }});
+  const scope = commentDraftScope(h.state.user.id,h.state.watchVideo.id);
+  h.drafts.bind(h.field,scope); h.field.handlers.input();
+  await h.postComment();
+  h.replace(''); h.drafts.bind(h.field,scope);
+  assert.equal(h.field.value,'My next comment');
+});
+
+test('a reused persistent textarea switches draft ownership and clears on logout', () => {
+  const drafts=createCommentDraftStore();
+  const field={value:'',handlers:{},addEventListener(k,v){this.handlers[k]=v;}};
+  const a=commentDraftScope('a','lecture'),b=commentDraftScope('b','lecture');
+  drafts.bind(field,a);field.value='Account A draft';field.handlers.input();
+  drafts.bind(field,b);
+  assert.equal(field.value,'','Account B must never see A\'s textarea contents');
+  field.value='Account B draft';field.handlers.input();
+  assert.equal(drafts.read(a),'Account A draft');
+  assert.equal(drafts.read(b),'Account B draft');
+  drafts.clear(field);
+  assert.equal(field.value,'');assert.equal(drafts.read(a),'');assert.equal(drafts.read(b),'');
+});
+
+test('a completed POST cannot clear the same lecture draft after an account switch', async () => {
+  const h=harness({onPost:c=>{c.state.user={id:99};c.replace('Test comment');}});
+  await h.postComment();
+  assert.equal(h.field.value,'Test comment');
 });
 
 const editStart = source.indexOf('async function saveEditedComment(');

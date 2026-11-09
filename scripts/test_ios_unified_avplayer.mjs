@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter} from '../src/ios-native-avplayer.js';
+import {createIosUnifiedAVPlayer,createIosNativeVideoAdapter,openNativeWithTransientTlsRetry} from '../src/ios-native-avplayer.js';
 
 function testEngine({ios=true, nativeFail=false}={}){
   const calls=[],watchers={};let epoch=0,now=40,mode='video',playing=false,rate=1,id='',url='',sequence=0;
@@ -141,4 +141,154 @@ test('manual HLS resolution uses a narrowed source and restores the original mas
   assert.match(swift,/if self\.playingWanted \{ self\.playIfAllowed\(\) \}/);
   assert.match(swift,/targetHeight = waiting\.targetHeight|qualityHeight = waiting\.targetHeight/);
   assert.doesNotMatch(swift,/preferredMaximumResolution = CGSize\(/);
+});
+
+
+test('native HLS waiting is not misreported as Pause, but calls and user pauses still are',async()=>{
+  const t=testEngine(),e=t.engine;
+  await e.open({id:'video:123',url,autoplay:true});
+  const adapter=createIosNativeVideoAdapter(e,'video:123');
+  const events=[];
+  for(const name of ['play','pause','waiting'])adapter.on(name,()=>events.push(name));
+  const publish = value => t.watchers.state({...e.state,...value,
+    stateSequence:(Number(e.state.stateSequence)||0)+1});
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play']);
+  publish({playing:false,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting'],
+    'temporary buffering must not generate an explicit Pause event');
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting'],
+    'resuming from a buffer must not double-count an uninterrupted play');
+  publish({playing:false,playRequested:true,interrupted:true,failed:false});
+  assert.deepEqual(events,['play','waiting','pause'],
+    'a genuine phone/WhatsApp interruption must remain a pause');
+  publish({playing:true,playRequested:true,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting','pause','play']);
+  publish({playing:false,playRequested:false,interrupted:false,failed:false});
+  assert.deepEqual(events,['play','waiting','pause','play','pause']);
+  await adapter.destroy();
+});
+
+test('native iOS awake policy survives HLS buffering but respects calls, pauses and failures',()=>{
+  const main=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+  const start=main.indexOf('let iosVideoDisplayKey =');
+  const end=main.indexOf('let iosVideoOrientationListenerAttached =',start);
+  assert.ok(start>=0 && end>start,'Expected iOS awake-policy implementation');
+  const policy=main.slice(start,end);
+  const calls=[];
+  const state={watchVideo:{id:'123'},watchMode:'video',watchVideoPlaying:false,
+    watchMinimized:false,watchPictureInPicture:false,watchVimeo:null};
+  const iosUnified={active:true,state:{mode:'video',playing:false,
+    playRequested:true,interrupted:false,failed:false}};
+  const display={playback:params=>{calls.push(params);return Promise.resolve();}};
+  const sync=new Function('IS_IOS','Capacitor','state','iosUnified',
+    'iosNativeActive','IrgunVideoDisplay',
+    policy+'\nreturn syncIosVideoDisplay;'
+  )(true,{isNativePlatform:()=>true},state,iosUnified,()=>iosUnified.active,display);
+  sync();
+  assert.equal(calls.at(-1).playing,true,
+    'temporary HLS buffering must not enable the automatic screen lock');
+  iosUnified.state.interrupted=true;
+  sync();
+  assert.equal(calls.at(-1).playing,false,
+    'the screen must not be kept awake by a paused phone/WhatsApp call');
+  iosUnified.state.interrupted=false;
+  iosUnified.state.playRequested=false;
+  sync();
+  assert.equal(calls.at(-1).playing,false,'user Pause remains paused');
+  iosUnified.state.playRequested=true;
+  iosUnified.state.failed=true;
+  sync();
+  assert.equal(calls.at(-1).playing,false,'failed media cannot hold the screen awake');
+  iosUnified.state.failed=false;
+  sync();
+  assert.equal(calls.at(-1).playing,true,'a new Play request restores the awake policy');
+  state.watchMode='audio';
+  sync();
+  assert.equal(calls.at(-1).active,false,'audio mode does not claim video screen awake');
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(swift,/"interrupted": playbackIsBlockedByCall/);
+});
+
+
+test('native TLS handshake retries exactly once without changing the lecture',async()=>{
+  let calls=0,waits=0;
+  const result=await openNativeWithTransientTlsRetry(async()=>{
+    calls++;
+    if(calls===1)throw Error('Native media is not playable: A TLS error caused the secure connection to fail.');
+    return {id:'video:123',position:42,playing:true};
+  },{delay:async ms=>{assert.equal(ms,1200);waits++}});
+  assert.equal(calls,2);
+  assert.equal(waits,1);
+  assert.deepEqual(result,{id:'video:123',position:42,playing:true});
+});
+
+test('native persistent TLS and non-network media failures never fake a player',async()=>{
+  let calls=0;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('A TLS error caused the secure connection to fail.');
+  },{delay:async()=>{}}),/TLS error/);
+  assert.equal(calls,2,'Persistent TLS failure must remain a real failure after one retry');
+  calls=0;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('AVPlayer unsupported codec');
+  },{delay:async()=>{}}),/unsupported codec/);
+  assert.equal(calls,1,'Codec failures must not be treated as temporary network errors');
+});
+
+test('native transient retry cancels when the Watch lecture was replaced',async()=>{
+  let calls=0,active=true;
+  await assert.rejects(openNativeWithTransientTlsRetry(async()=>{
+    calls++;throw Error('TLS error');
+  },{isCurrent:()=>active,delay:async()=>{active=false}}),/cancelled/);
+  assert.equal(calls,1,'Retry cannot reopen a superseded lecture');
+});
+
+test('the real simulator UI taps an onscreen UIKit speed action and verifies the native rate',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  const tests=readFileSync(new URL('../.github/regression/tests.swift',import.meta.url),'utf8');
+  assert.match(swift,/data\["speedMenuChoices"\] = nativeSpeedMenuChoices/);
+  assert.match(swift,/findActionLabels\(in: alert\.view\)/);
+  assert.match(tests,/app\.coordinate\(withNormalizedOffset: \.zero\)/);
+  assert.match(tests,/Native speed popover closed after real menu selection/);
+  assert.doesNotMatch(tests,/app\.popovers\.buttons\[title\]/,
+    'Avoid iOS 26 iPad accessibility snapshot hangs while querying the menu');
+});
+
+
+test('native HLS recovery records actual clock movement, not mere restart attempts',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  const statusStart=swift.indexOf('playerObserver = player.observe(');
+  const statusEnd=swift.indexOf('timeObserver = player.addPeriodicTimeObserver(',statusStart);
+  assert.ok(statusStart>=0&&statusEnd>statusStart);
+  const status=swift.slice(statusStart,statusEnd);
+  assert.match(status,/self\.monitorPlaybackProgress\(\)/);
+  assert.doesNotMatch(status,/self\.lastPlaybackProgressAt = Date\(\)/,
+    'timeControlStatus=playing alone cannot prove playback progressed');
+  const recoveryStart=swift.indexOf('let verifyRecovery: (Double) -> Void');
+  const recoveryEnd=swift.indexOf('if self.playbackRecoveryAttempts % 2 == 0',recoveryStart);
+  assert.ok(recoveryStart>=0&&recoveryEnd>recoveryStart);
+  const recovery=swift.slice(recoveryStart,recoveryEnd);
+  assert.match(recovery,/if observed > self\.lastObservedPlaybackPosition \+ 0\.35/);
+  assert.match(recovery,/self\.lastPlaybackProgressAt = Date\(\)/);
+  assert.match(swift,/item\.preferredForwardBufferDuration = 18/);
+});
+
+test('network-buffer waiting never enters retained-item seek repair or bypasses the call gate',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(swift,/player\.automaticallyWaitsToMinimizeStalling = true/);
+  const start=swift.indexOf('private func schedulePlaybackRecoveryIfNeeded()');
+  const end=swift.indexOf('private func playableURL(',start);
+  const recovery=swift.slice(start,end);
+  const waiting=recovery.indexOf('let waitingForMedia =');
+  const seek=recovery.indexOf('if self.playbackRecoveryAttempts % 2 == 0');
+  assert.ok(waiting>=0&&seek>waiting,'The network wait must be handled before any seek');
+  const networkWait=recovery.slice(waiting,seek);
+  assert.match(networkWait,/timeControlStatus == \.waitingToPlayAtSpecifiedRate/);
+  assert.match(networkWait,/expectedItem\.isPlaybackBufferEmpty \|\| !expectedItem\.isPlaybackLikelyToKeepUp/);
+  assert.match(networkWait,/if waitingForMedia \{\s*self\.playIfAllowed\(\)\s*verifyRecovery\(current\)\s*return\s*\}/);
+  assert.doesNotMatch(networkWait,/\.seek\(|replaceCurrentItem|lastPlaybackProgressAt\s*=/);
+  assert.match(recovery,/guard self\.active, self\.playingWanted, !self\.playbackIsBlockedByCall/);
+  assert.doesNotMatch(recovery,/replaceCurrentItem/,'A buffer wait must retain the actual player item');
 });

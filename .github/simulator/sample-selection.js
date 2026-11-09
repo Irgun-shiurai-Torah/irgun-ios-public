@@ -24,25 +24,73 @@ export async function simulatorHlsSourceReady(url, request = fetch, depth = 0) {
   finally { clearTimeout(timer); }
 }
 
-// The account regression suite must keep the same real backed-up lecture
-// across relaunches. Missing or unusable fixtures are a test failure, not a
-// reason to silently pick the newest (possibly Vimeo-only) catalog entry.
+// A real catalog card, with audio and an associated speaker, must be chosen
+// for account playback tests. Keep the same selected lecture across restarts.
+// The historic fixtures still have priority if displayed; a current backed-up
+// lecture is a valid fallback when those older IDs are no longer on the first
+// page. NEVER substitute a different ID once one has actually been selected.
 export const IOS_ACCOUNT_SAMPLE_IDS = Object.freeze(['1235946832', '1235511026']);
 
 export function selectIosAccountFixture(elements, videosById, savedId = '') {
   const eligible = (elements || []).filter(element => {
-    const lecture = videosById?.get(String(element.dataset.watch || ''));
+    const lecture = videosById?.get(String(element?.dataset?.watch || ''));
     return lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0;
   });
-  for (const id of [savedId, ...IOS_ACCOUNT_SAMPLE_IDS]) {
-    if (!IOS_ACCOUNT_SAMPLE_IDS.includes(String(id))) continue;
-    const found = eligible.find(element => String(element.dataset.watch || '') === id);
-    if (found) {
-      // Native XCTest can identify the existing title button by its real label.
-      // Cover buttons all share 'Watch' and stale coordinates can hit a neighbour.
-      return eligible.find(element => String(element.dataset.watch || '') === id &&
-        element.classList?.contains('media-title')) || found;
-    }
+  const bestTitle = (id, candidates=eligible) =>
+    candidates.find(element => String(element.dataset.watch || '') === id &&
+      element.classList?.contains('media-title')) ||
+    candidates.find(element => String(element.dataset.watch || '') === id) || null;
+  // Once a real QA lecture has been opened, never silently substitute another
+  // ID: the test's server-side cleanup MUST target the same lecture.
+  if (savedId) return bestTitle(String(savedId));
+
+  const backed = eligible.filter(element => {
+    const id = String(element.dataset.watch || '');
+    const lecture = videosById?.get(id);
+    return IOS_ACCOUNT_SAMPLE_IDS.includes(id) ||
+      lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
+      ['drive-library','city-drive'].includes(lecture?.sourceType);
+  });
+  // On iPhone the older preferred lecture can exist deep in an infinite
+  // catalog yet never be tappable. Select an actually VISIBLE backed lecture,
+  // preferring a title button, instead of scrolling indefinitely to a stale ID.
+  const visible = backed.filter(element => {
+    if (typeof element.getBoundingClientRect !== 'function') return true;
+    const r = element.getBoundingClientRect();
+    const width = Number(globalThis.innerWidth) || 390;
+    const height = Number(globalThis.innerHeight) || 844;
+    return r.width > 0 && r.height > 0 && r.bottom > 0 &&
+      r.right > 0 && r.left < width && r.top < height;
+  });
+  for (const id of IOS_ACCOUNT_SAMPLE_IDS) {
+    const preferred = bestTitle(id,visible);
+    if (preferred) return preferred;
   }
-  return null;
+  return visible.find(element => element.classList?.contains('media-title')) ||
+    visible[0] || backed.find(element => element.classList?.contains('media-title')) ||
+    backed[0] || null;
+}
+
+// The two read-only observers poll independently while native taps can take
+// seconds. Pin their first choice in memory, then persist ONLY a matching real
+// click. A missed tap on a neighbouring card must not rewrite the expected ID.
+export function createIosAccountFixtureSelector({ readId, writeId }) {
+  let pendingId = '';
+  const savedId = () => { try { return String(readId() || ''); } catch (_) { return ''; } };
+  return {
+    choose(elements, videosById) {
+      const selected = selectIosAccountFixture(elements, videosById, savedId() || pendingId);
+      if (selected && !pendingId) pendingId = String(selected.dataset.watch || '');
+      return selected;
+    },
+    captureClick(element, videosById) {
+      const id = String(element?.dataset?.watch || '');
+      const expected = savedId() || pendingId;
+      if (!id || expected && id !== expected) return false;
+      if (!selectIosAccountFixture([element], videosById)) return false;
+      pendingId = id;
+      try { writeId(id); } catch (_) {}
+      return true;
+    }
+  };
 }

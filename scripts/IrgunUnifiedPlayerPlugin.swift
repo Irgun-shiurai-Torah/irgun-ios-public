@@ -265,6 +265,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         Self.current = self
         viewer.view.backgroundColor = .black
         videoLayer.player = player
+        player.automaticallyWaitsToMinimizeStalling = true
         // Home should continue audio without automatically opening system PiP.
         if #available(iOS 15.0, *) { player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible }
         videoLayer.videoGravity = .resizeAspect
@@ -282,10 +283,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if self.player.timeControlStatus == .playing {
-                    self.playbackRecoveryTask?.cancel()
-                    self.playbackRecoveryTask = nil
-                    self.lastObservedPlaybackPosition = self.position()
-                    self.lastPlaybackProgressAt = Date()
+                    // A changed AVPlayer status is NOT evidence that an HLS
+                    // segment advanced. Only the actual media clock can clear
+                    // the stall timer or cancel a pending recovery.
+                    self.monitorPlaybackProgress()
                 } else {
                     self.schedulePlaybackRecoveryIfNeeded()
                 }
@@ -356,7 +357,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             player.pause()
             return
         }
-        player.playImmediately(atRate: playbackRate)
+        if URL(string: itemURL)?.pathExtension.lowercased() == "m3u8" {
+            // Honour HLS forward buffering instead of consuming an
+            // insufficient buffer. Intent stays set while AVPlayer waits.
+            player.rate = playbackRate
+        } else {
+            // Keep the existing responsive start for MP4, MP3 and local files.
+            player.playImmediately(atRate: playbackRate)
+        }
     }
 
     private func resumeAfterExternalInterruptionIfAppropriate() {
@@ -555,8 +563,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
             let verifyRecovery: (Double) -> Void = { [weak self] afterPosition in
                 guard let self = self else { return }
-                self.lastObservedPlaybackPosition = self.position()
-                self.lastPlaybackProgressAt = Date()
+                // Seeking/reasserting play must not reset a long-stall
+                // watchdog unless the media clock really moves. Otherwise
+                // every failed recovery falsely looks like fresh progress.
+                let observed = self.position()
+                if observed > self.lastObservedPlaybackPosition + 0.35 ||
+                   observed < self.lastObservedPlaybackPosition - 1.0 {
+                    self.lastObservedPlaybackPosition = observed
+                    self.lastPlaybackProgressAt = Date()
+                    self.playbackRecoveryAttempts = 0
+                }
                 self.publishState()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                     guard let self = self, self.active, self.playingWanted,
@@ -576,6 +592,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 }
             }
 
+            // Waiting for network data is not a wedged decoder. Seeking every
+            // other watchdog attempt can interrupt the outstanding HLS read
+            // before it fills the buffer. Let AVPlayer finish that read; only
+            // use the retained-item seek when media is available to decode.
+            let waitingForMedia = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate &&
+                (expectedItem.isPlaybackBufferEmpty || !expectedItem.isPlaybackLikelyToKeepUp)
+            if waitingForMedia {
+                self.playIfAllowed()
+                verifyRecovery(current)
+                return
+            }
             if self.playbackRecoveryAttempts % 2 == 0 {
                 let target = CMTime(seconds: max(0, current), preferredTimescale: 600)
                 self.player.seek(
@@ -894,6 +921,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             "failed": player.currentItem?.status == .failed,
             "playing": active && player.timeControlStatus == .playing,
             "playRequested": playingWanted,
+            // Buffering still represents an active Play request. Expose call
+            // interruption separately so WebView never interprets either
+            // condition as a user-initiated Pause.
+            "interrupted": playbackIsBlockedByCall,
             "rate": Double(playbackRate),
             "sameItem": active && player.currentItem != nil,
             "itemEpoch": itemEpoch,
@@ -942,6 +973,30 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             ["domain": event.errorDomain, "code": event.errorStatusCode]
         } ?? []
         data["controlsMenuOpen"] = controlsMenuOpen
+        // Xcode 26 accessibility snapshots sometimes hang when searching a
+        // UIKit action-sheet popover on iPad. Observe the actual visible action
+        // UILabel positions (never simulate a selection) so XCTest can deliver
+        // a physical tap without querying a disappearing accessibility tree.
+        var nativeSpeedMenuChoices: [String: [String: Double]] = [:]
+        if controlsMenuOpen, let alert = viewer.presentedViewController as? UIAlertController,
+           alert.title == "Playback speed", alert.isViewLoaded {
+            let allowed = Set(["0.75×", "1×", "1.2×", "1.5×", "1.8×", "2×"])
+            func findActionLabels(in view: UIView) {
+                if let label = view as? UILabel, let title = label.text,
+                   allowed.contains(title), view.window != nil,
+                   !view.isHidden, view.alpha > 0.01 {
+                    let rect = view.convert(view.bounds, to: nil)
+                    if rect.width > 8, rect.height > 8 {
+                        nativeSpeedMenuChoices[title] = [
+                            "x": Double(rect.midX), "y": Double(rect.midY)
+                        ]
+                    }
+                }
+                for child in view.subviews { findActionLabels(in: child) }
+            }
+            findActionLabels(in: alert.view)
+        }
+        data["speedMenuChoices"] = nativeSpeedMenuChoices
         data["decodedFrames"] = simulatorFrameCount
         data["frameTime"] = simulatorFrameTime
         if let output = simulatorFrameOutput {
@@ -1095,6 +1150,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
+                // Buffer ahead of intermittent HLS segment stalls without
+                // replacing the lecture item or creating a second decoder.
+                // Sandbox files do not need a network buffer.
+                if !url.isFileURL { item.preferredForwardBufferDuration = 18 }
                 #if targetEnvironment(simulator)
                 self.attachSimulatedFrameOutput(to: item)
                 #endif

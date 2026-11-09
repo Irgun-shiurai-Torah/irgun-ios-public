@@ -234,6 +234,7 @@
         String(audio.currentSrc||'').startsWith('capacitor:') ||
         String(audio.currentSrc||'').startsWith('ionic:'),
       offlineJobs:state.offlineJobs.size,
+      offlineFailure:state.offlineLastFailure || null,
       videoSpeedChoice:native ? (Number(native.rate)||0) : (Number(videoSpeed?.value)||0),
       videoRate:native ? (Number(native.rate)||0) : (Number(state.watchVimeo?.video?.playbackRate)||0),
       configuredAudioRate:Number(state.playbackSpeed)||1,

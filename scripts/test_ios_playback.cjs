@@ -36,6 +36,9 @@ function fixture() {
     // The native AVPlayer branch has separate singleton tests and a native
     // simulator workflow; native=false is not a fake success in these cases.
     iosUnified:null, iosNativeActive:()=>false, iosNativePosition:()=>0,
+    // The VM extracts the production source chooser. Native open failures
+    // are still thrown by the caller; the retry helper has dedicated tests.
+    openNativeWithTransientTlsRetry:async open=>open(),
     iosAudioUiActive:()=>false, scheduleIosUnifiedSurface:()=>{},
     Capacitor:{isNativePlatform:()=>true},
     nativeBackgroundAudioAvailable:()=>false, stopNativeBackgroundAudio:()=>{}, prepareNativeBackgroundAudio:()=>{},

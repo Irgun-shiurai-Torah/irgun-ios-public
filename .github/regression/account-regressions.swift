@@ -56,8 +56,9 @@
                     followRequests.last?["ok"] as? Bool == true
             }
         }
-        func awaitAccount(_ message: String, _ condition: @escaping ([String: Any]) -> Bool) throws {
-            try waitFor(message, timeout: 60) { state in
+        func awaitAccount(_ message: String, timeout: TimeInterval = 60,
+                          _ condition: @escaping ([String: Any]) -> Bool) throws {
+            try waitFor(message, timeout: timeout) { state in
                 var observed = state["account"] as? [String: Any] ?? [:]
                 // Use live catalog/bootstrap state if the nested observer omits
                 // its readiness key after a native process restart.
@@ -128,12 +129,116 @@
                 throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
-                let before = number(account(),"lastClickSequence")
-                try tapNativeFormButton(["Post Comment"])
-                try awaitAccount("Real comment form submit tap: " + key) {
-                    self.number($0,"lastClickSequence") > before && $0["lastClickKey"] as? String == key
+                let requested = account()
+                let lecture = requested["watchId"] as? String ?? ""
+                let marker = requested["qaDraftMarker"] as? String ?? ""
+                let beforeSubmits = number(requested,"commentSubmitCount")
+                func postRequests(_ value: [String:Any]) -> Int {
+                    (value["requests"] as? [[String:Any]] ?? []).filter {
+                        $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
+                    }.count
                 }
-                return
+                let beforeRequests = postRequests(requested)
+                func submitted(_ value: [String:Any]) -> Bool {
+                    number(value,"commentSubmitCount") > beforeSubmits || postRequests(value) > beforeRequests
+                }
+                var stableX = -1.0, stableY = -1.0, stableSince = Date()
+                var taps = 0
+                for _ in 0..<18 {
+                    let state = snapshot()
+                    let now = state["account"] as? [String:Any] ?? [:]
+                    if submitted(now) { return }
+                    // Never submit an empty/new lecture form after a missed
+                    // coordinate tap navigated to a neighbouring catalogue item.
+                    guard !lecture.isEmpty, !marker.isEmpty,
+                          now["watchId"] as? String == lecture,
+                          now["qaDraftValid"] as? Bool == true,
+                          now["qaDraftMarker"] as? String == marker else {
+                        evidence("comment-submit-scope-changed")
+                        XCTFail("The exact typed QA draft and lecture must survive before Post is tapped")
+                        throw Failure.timedOut("Comment draft scope before submit")
+                    }
+                    if !nativeKeyboardIsClosed() {
+                        if number(now,"width") >= 600 {
+                            // On iPad the WKWebView multiline keyboard often
+                            // stays open despite UIKit's Hide Keyboard action.
+                            // Do not require dismissal to submit a comment:
+                            // let the actual accessible Post Comment control
+                            // scroll into view and send its real form event.
+                            // The original iPad regression passed this way.
+                            guard taps < 2 else { break }
+                            try tapNativeFormButton(["Post Comment"])
+                            taps += 1
+                            let deadline = Date().addingTimeInterval(7)
+                            while Date() < deadline {
+                                if submitted(account()) { return }
+                                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                            }
+                        } else {
+                            try dismissNativeKeyboard()
+                        }
+                        stableX = -1
+                        continue
+                    }
+                    let native = state["nativePlayer"] as? [String:Any] ?? [:]
+                    let controls = now["controls"] as? [String:[String:Any]] ?? [:]
+                    let rects = now["controlRects"] as? [String:[String:Any]] ?? [:]
+                    let hits = now["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                    let point = controls["commentPost"] ?? rects["commentPost"] ?? [:]
+                    let x = number(point,"x"), y = number(point,"y")
+                    let width = number(now,"width"), height = number(now,"height")
+                    let surfaceBottom = number(native,"surfaceY") + number(native,"surfaceHeight")
+                    let covered = native["active"] as? Bool == true &&
+                        native["mode"] as? String == "video" &&
+                        native["surfaceInteractive"] as? Bool == true &&
+                        x >= number(native,"surfaceX") &&
+                        x <= number(native,"surfaceX") + number(native,"surfaceWidth") &&
+                        y >= number(native,"surfaceY") && y <= surfaceBottom + 12
+                    if controls["commentPost"] != nil &&
+                       hits["commentPost"]?["targetHit"] as? Bool == true && !covered {
+                        // UIKit's keyboard hide event precedes the visual
+                        // viewport animation. Require fresh, stable geometry
+                        // before a physical tap; a raw rect is NOT a hit test.
+                        if abs(x-stableX) > 2 || abs(y-stableY) > 2 {
+                            stableX = x; stableY = y; stableSince = Date()
+                        }
+                        if Date().timeIntervalSince(stableSince) < 0.75 {
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                            continue
+                        }
+                        guard taps < 2 else { break }
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:x,dy:y)).tap()
+                        taps += 1
+                        let deadline = Date().addingTimeInterval(6)
+                        while Date() < deadline {
+                            if submitted(account()) { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                        stableX = -1
+                        continue
+                    }
+                    stableX = -1
+                    let scroll = now["watchScrollRect"] as? [String:Any] ?? [:]
+                    let upper = max(number(scroll,"top") + 16,surfaceBottom + 20)
+                    let lower = min(number(scroll,"bottom") - 24,height - 100)
+                    guard width > 100 && lower-upper >= 100 else { break }
+                    let towardUp = y > lower
+                    let distance = min(220,lower-upper-8)
+                    let fromY = towardUp ? lower : upper
+                    let toY = fromY + (towardUp ? -distance : distance)
+                    // Drag through the quiet gutter of the actual scroller.
+                    // Do not use an AX tap that auto-scrolls under native video.
+                    let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                    let gutter = max(4,width * 0.015)
+                    origin.withOffset(CGVector(dx:gutter,dy:fromY)).press(
+                        forDuration:0.1,
+                        thenDragTo:origin.withOffset(CGVector(dx:gutter,dy:toY)),
+                        withVelocity:.slow,thenHoldForDuration:0.2)
+                }
+                evidence("comment-submit-native-touch-not-delivered")
+                XCTFail("Post Comment must submit the exact draft through its verified visible control")
+                throw Failure.timedOut("Real comment form submit tap")
             }
             let hide = app.buttons["ist-simulator-hide-controls"]
             if hide.exists && hide.isHittable { hide.tap() }
@@ -176,6 +281,75 @@
                 let from = origin.withOffset(CGVector(dx:x,dy:towardUp ? lower : upper))
                 let to = origin.withOffset(CGVector(dx:x,dy:towardUp ? upper : lower))
                 from.press(forDuration:0.05,thenDragTo:to,withVelocity:.fast,thenHoldForDuration:0)
+            }
+            if key == "commentEdit" {
+                // The observer filters this target to the disposable comment
+                // created by this test. Its true DOM rect can be available even
+                // when the generic "controls" dictionary is transiently empty.
+                // A previous iPhone run scrolled 24 times while the owned Edit
+                // button was actually at (43, 340) with targetHit=true.
+                guard let ownedId = requested["qaCommentId"] as? String,
+                      !ownedId.isEmpty,
+                      requested["qaCommentPhase"] as? String == "created" else {
+                    XCTFail("Owned QA comment not ready for its Edit control")
+                    throw Failure.timedOut("Owned comment identity")
+                }
+                func ownedEditOpened() -> Bool {
+                    let observed = account()
+                    let editRect = (observed["controlRects"] as? [String:[String:Any]])?["commentEditText"]
+                    return clickDelivered(observed) ||
+                        (observed["qaCommentId"] as? String == ownedId &&
+                         editRect != nil)
+                }
+                for attempt in 0..<6 {
+                    if ownedEditOpened() { return }
+                    let fullState = snapshot()
+                    let observed = fullState["account"] as? [String:Any] ?? [:]
+                    // Recheck ownership before each physical touch: the test
+                    // must never edit an unrelated viewer's comment.
+                    guard observed["qaCommentId"] as? String == ownedId else {
+                        XCTFail("Owned comment changed before Edit tap")
+                        throw Failure.timedOut("Owned comment changed")
+                    }
+                    let rects = observed["controlRects"] as? [String:[String:Any]] ?? [:]
+                    let hits = observed["controlHitTests"] as? [String:[String:Any]] ?? [:]
+                    let rect = rects["commentEdit"] ?? [:]
+                    let x = number(rect,"x"), y = number(rect,"y")
+                    let width = number(observed,"width"), height = number(observed,"height")
+                    let hit = hits["commentEdit"]?["targetHit"] as? Bool == true &&
+                        hits["commentEdit"]?["disabled"] as? Bool != true
+                    let native = fullState["nativePlayer"] as? [String:Any] ?? [:]
+                    let surfaceX = number(native,"surfaceX"), surfaceY = number(native,"surfaceY")
+                    let covered = native["active"] as? Bool == true &&
+                        native["mode"] as? String == "video" &&
+                        native["surfaceInteractive"] as? Bool == true &&
+                        x >= surfaceX && x <= surfaceX + number(native,"surfaceWidth") &&
+                        y >= surfaceY && y <= surfaceY + number(native,"surfaceHeight") + 8
+                    let inViewport = number(rect,"width") > 0 && number(rect,"height") > 0 &&
+                        x > 0 && x < width && y > 0 && y < height
+                    if inViewport && hit && !covered {
+                        // Tap the real button at its observer-verified centre.
+                        // Do not rely on an optional "controls" entry that
+                        // may disappear between WKWebView snapshots.
+                        app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                            .withOffset(CGVector(dx:x,dy:y)).tap()
+                        let deadline = Date().addingTimeInterval(5)
+                        while Date() < deadline {
+                            if ownedEditOpened() { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                        print("UITEST: owned Edit tap not delivered, retry \(attempt + 1)")
+                    } else {
+                        // A real swipe is still necessary for offscreen or
+                        // UIKit-covered buttons; do not fake a JavaScript click.
+                        let upward = !covered && y >= height * 0.65
+                        swipeOwnedComment(fullState,towardUp:upward)
+                        RunLoop.current.run(until:Date().addingTimeInterval(0.25))
+                    }
+                }
+                evidence("owned-comment-edit-native-touch-not-delivered")
+                XCTFail("Owned Edit control did not receive a physical tap or open its actual editor")
+                throw Failure.timedOut("Real owned comment Edit")
             }
             // The iPad WKWebView exposes a real "Save comment" accessibility
             // control even when its CSS center is covered by an unrelated
@@ -380,6 +554,7 @@
                 s["loggedIn"] as? Bool == true || self.number(s, "authSubmitCount") > submitBefore
             })
         }
+        try nativeAwaitLoginResponse(email:email,password:password)
         try awaitAccount("Native login and profile") {
             $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true
         }
@@ -404,6 +579,13 @@
         try touch("open")
         try awaitAccount("Lecture opened") { !($0["watchId"] as? String ?? "").isEmpty }
         let id=account()["watchId"] as! String, before=account()
+        // A followed speaker can have a legacy alias and a canonical server ID.
+        // Record the *real button's resolved state* for the exact lecture
+        // rather than treating unordered account-wide follow IDs as equivalent.
+        let originalFollowIdentity = before["followIdentity"] as? String ?? ""
+        let originalFollowActive = before["followActive"] as? Bool ?? false
+        XCTAssertTrue(originalFollowIdentity.hasPrefix("speaker:"),
+                      "The test must target a real speaker Follow control")
         report["accountMutationsStartedAt"] = timestamp(); persistReport()
         try touch("like")
         try awaitAccount("Like toggled") { values($0,"likes").contains(id) != values(before,"likes").contains(id) }
@@ -414,7 +596,10 @@
         let followRequestCount = completedFollowRequests(account())
         try touch("follow")
         try awaitSuccessfulFollowRequest(after: followRequestCount)
-        try awaitAccount("Follow toggled") { values($0,"follows").sorted() != values(before,"follows").sorted() }
+        try awaitAccount("Follow toggled") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == !originalFollowActive
+        }
         checked("Native speaker follow toggle")
         try awaitAccount("Playing lecture records real history") {
             $0["videoPlaying"] as? Bool == true &&
@@ -474,8 +659,18 @@
         try awaitAccount("Native keyboard entered the exact disposable QA comment") {
             $0["qaDraftValid"] as? Bool == true && $0["qaDraftMarker"] as? String == commentMarker
         }
-        // Tap the real Post button through native accessibility; XCTest can
-        // scroll it into view without inserting Return into the comment.
+        // On iPhone, opening the native keyboard shrinks the .watch-scroll
+        // viewport to the area above the keyboard. If we try to scroll the
+        // Post button while it is still open, XCTest can have no safe gesture
+        // area beneath the UIKit video surface. Dismiss it using the real
+        // keyboard accessory first, keeping the actual typed draft intact.
+        if number(account(),"width") < 600 {
+            try dismissNativeKeyboard()
+            try awaitAccount("iPhone comment draft survives native keyboard dismissal") {
+                $0["qaDraftValid"] as? Bool == true &&
+                $0["qaDraftMarker"] as? String == commentMarker
+            }
+        }
         let postBefore = successCount(account(), "/comments", "POST")
         try touch("commentPost")
         try awaitAccount("QA comment POST accepted by the actual server") {
@@ -555,7 +750,11 @@
         // control cannot be obscured by simulator chrome. This also proves the
         // authenticated session survives before creating server-side data.
         app.terminate(); app.launch()
-        try awaitAccount("Signed-in library reloads after playback") {
+        // A true process relaunch starts a new WKWebView and refetches the
+        // catalog, profile, and collections. A cold macOS simulator can leave
+        // the loopback observer empty for over one minute (no stale success).
+        // Preserve the original server-backed identity/ready assertions.
+        try awaitAccount("Signed-in library reloads after playback", timeout: 180) {
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             $0["name"] as? String == originalName
         }
@@ -626,13 +825,30 @@
         }
         checked("Native Watch Later flag restored")
         let followRestoreRequestCount = completedFollowRequests(account())
+        let priorFollowRequestTotal = (account()["requests"] as? [[String:Any]] ?? [])
+            .filter { $0["path"] as? String == "/follows/toggle" }.count
         try touch("follow")
-        try awaitSuccessfulFollowRequest(after: followRestoreRequestCount)
-        try awaitAccount("Follow restored") {
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+        try awaitAccount("Restore Follow request completed with original server state") { observed in
+            let requests = observed["requests"] as? [[String:Any]] ?? []
+            let followRequests = requests.filter { $0["path"] as? String == "/follows/toggle" }
+            guard followRequests.count > priorFollowRequestTotal,
+                  let latest = followRequests.last else { return false }
+            // A successful HTTP request is not enough: require the server to
+            // confirm precisely the originally observed speaker follow state.
+            return latest["ok"] as? Bool == true &&
+                   latest["following"] as? Bool == originalFollowActive
         }
-        checked("Native Follow flag restored")
-        try awaitAccount("Lecture flags restored") { values($0,"likes").contains(id) == values(before,"likes").contains(id) && values($0,"later").contains(id) == values(before,"later").contains(id) && values($0,"follows").sorted() == values(before,"follows").sorted() }
+        try awaitAccount("Follow restored") {
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
+        checked("Native Follow flag restored and server-confirmed")
+        try awaitAccount("Lecture flags restored") {
+            values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
+            values($0,"later").contains(id) == values(before,"later").contains(id) &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
+        }
         checked("Lecture flags restored")
         // Relaunch rather than depending on the same top-edge close control,
         // then require the restored server state and session to load normally.
@@ -641,7 +857,15 @@
             $0["ready"] as? Bool == true && $0["loggedIn"] as? Bool == true &&
             values($0,"likes").contains(id) == values(before,"likes").contains(id) &&
             values($0,"later").contains(id) == values(before,"later").contains(id) &&
-            values($0,"follows").sorted() == values(before,"follows").sorted()
+            // Restarted collections are authoritative; don't compare raw
+            // canonical follow IDs to a potentially legacy pre-toggle alias.
+            ($0["follows"] as? [String] != nil)
+        }
+        try touch("shiurim"); try touch("open")
+        try awaitAccount("Original speaker Follow state survives relaunch") {
+            $0["watchId"] as? String == id &&
+            $0["followIdentity"] as? String == originalFollowIdentity &&
+            $0["followActive"] as? Bool == originalFollowActive
         }
         try touch("account"); try touch("logout")
         try awaitAccount("Logout clears account state") { $0["loggedIn"] as? Bool == false && values($0,"likes").isEmpty && values($0,"later").isEmpty && ($0["playlists"] as? [[String:Any]] ?? []).isEmpty }

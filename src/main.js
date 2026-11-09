@@ -1,5 +1,7 @@
 import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
 import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
+import { fetchLoginWithDeadline } from './ios-login-deadline.js';
+import { loginWithIosNativeFallback, normalizeNativeLoginResponse } from './ios-native-login.js';
 import './ios-audio-speed-popup.css';
 import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
@@ -9,6 +11,9 @@ import { createCityAdminController, cityAdminPanelHtml } from './admin-city-pane
 import './admin-website-parity.css';
 import './admin-city.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
+import { createCommentDraftStore, commentDraftScope } from './comment-draft.js';
+import { downloadOfflineAudio } from './offline-audio-download.js';
+import { createClickBinder } from './dom-bindings.js';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
@@ -19,7 +24,7 @@ import { BELSKY_VOL1_ID, nextPaidTrackInFolder } from './paid-collections.js';
 import { createPaidQuestionController } from './paid-index-controller.js';
 import { verifiedPurchasedIds, mergeVerifiedPaidCatalog, paidCatalogAccountKey } from './paid-entitlements.js';
 import { iosNavigationRoot, createIosBottomNavigation, prepareIosTabNavigation } from './ios-bottom-navigation.js';
-import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame } from './ios-native-avplayer.js';
+import { createIosUnifiedAVPlayer, createIosNativeVideoAdapter, nativeVideoFrame, openNativeWithTransientTlsRetry } from './ios-native-avplayer.js';
 import { IOS_VIMEO_MODE_STORAGE_KEY, IOS_VIDEO_CATALOG_PATH, normalizeIosVimeoMode, isIosVimeoOnlyLecture, visibleIosLectureCatalog, iosVimeoWatchEngine, iosVideoDescriptorPath } from './ios-vimeo-mode.js';
 import { lectureFollowTargets, followVerb, isFollowTargetActive } from './follow-controls.js';
 const tabSwipeRenderGate = createSwipeRenderGate(() => render());
@@ -52,6 +57,8 @@ const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
+const commentDrafts = createCommentDraftStore();
+const bindClickOnce = createClickBinder(document);
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
@@ -309,6 +316,7 @@ const state = {
   downloaderReady: false,
   offlineDownloads: new Map((loadJson(OFFLINE_DOWNLOADS_KEY, []) || []).map(item => [String(item?.key || ''), item]).filter(([key]) => key)),
   offlineJobs: new Map(),
+  offlineLastFailure: null,
   playlists: [],
   activePlaylistId: '',
   playlistPickerItem: null,
@@ -399,6 +407,9 @@ function onIosUnifiedState(snapshot) {
   if (state.watchVideo && String(snapshot.id)===`video:${videoId(state.watchVideo)}`) {
     state.watchResumeSeconds=position;
     state.watchVideoPlaying=Boolean(snapshot.playing);
+    // Native buffering and an explicit pause differ. Keep the display-awake
+    // policy tied to the user's intent, not one instantaneous AVPlayer status.
+    syncIosVideoDisplay();
     refreshPersistentMiniVideoChrome();
   }
   if (state.current && snapshot.mode==='audio') {
@@ -682,6 +693,7 @@ async function saveOffline(kind, id) {
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
   const path = `irgun-offline/${safe}.mp3`;
   state.offlineJobs.set(key, { percent:0, title });
+  state.offlineLastFailure = null;
   refreshOfflineButtonsForKey(key);
   if (state.screen === 'library' && state.librarySection === 'downloads') render();
   let listener = null;
@@ -702,14 +714,11 @@ async function saveOffline(kind, id) {
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const transfer = await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
-    const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
-    const bytes = Number(stat?.size) || Number(transfer?.size) || Number(state.offlineJobs.get(key)?.bytes) || 0;
-    const responseCode = Number(transfer?.statusCode ?? transfer?.responseCode) || 0;
-    if ((responseCode && (responseCode < 200 || responseCode >= 300)) || bytes < 8192) {
-      await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
-      throw new Error(`Offline audio response was not a usable lecture file (HTTP ${responseCode || 'unknown'}, ${bytes} bytes)`);
-    }
+    const {bytes} = await downloadOfflineAudio({
+      download: () => FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true }),
+      stat: () => Filesystem.stat({ directory:Directory.Data, path }),
+      removePartial: () => Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {})
+    });
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
       uri:fileInfo.uri, path, bytes,
@@ -721,6 +730,13 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    // Safe diagnostic codes distinguish a native transfer failure from a
+    // missed tap in CI; never expose URLs, credentials or response bodies.
+    state.offlineLastFailure = {
+      code: String(error?.code || '').slice(0,60),
+      status: Number(error?.httpStatus || error?.statusCode || error?.responseCode) || 0,
+      validation: String(error?.message || '').startsWith('Offline audio response was not a usable lecture file')
+    };
     await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
@@ -2076,7 +2092,10 @@ function offlineBannerHtml() {
 }
 
 function updateReconnectTimer() {
-  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary);
+  // Retain and retry a valid-looking saved session token when /me temporarily
+  // stalls. Only a real HTTP 401 may clear it.
+  const needsRetry = Boolean(state.error || state.offlineMode || state.usingCachedLibrary ||
+    (state.token && !state.user));
   if (needsRetry && !reconnectTimer) {
     reconnectTimer = setInterval(() => {
       if (!document.hidden && !bootstrapInFlight) bootstrap({ background:true });
@@ -2118,6 +2137,7 @@ function setToken(token) {
 }
 
 function resetUserState() {
+  commentDrafts.clear(document.getElementById('commentText'));
   state.user = null;
   state.myLikes = new Set();
   state.watchLater = new Set();
@@ -2534,7 +2554,12 @@ async function bootstrap(options = {}) {
     state.error = '';
 
     await restoreSession();
-    await Promise.all([loadSponsorRibbon(), loadScheduleData(), loadLiveStatus()]);
+    // These public decorations are not prerequisites for a usable catalog or
+    // a restored account. The old Promise.all could leave the entire app on
+    // "Loading the Torah library" forever if just one request never settled.
+    void loadSponsorRibbon().then(() => { if (!state.loading) render(); }).catch(() => {});
+    void loadScheduleData().catch(() => {});
+    void loadLiveStatus().catch(() => {});
     await handleAppReturn();
   } catch (error) {
     console.error(error);
@@ -2553,40 +2578,66 @@ async function bootstrap(options = {}) {
   }
 }
 
+// WebKit may leave a fetch pending even after navigation or a previous native
+// process restart. Aborting *and* racing a deadline is essential; an AbortSignal
+// alone does not guarantee the promise resolves in all iOS versions.
+function boundedAccountRead(path, timeoutMs = 12000) {
+  return fetchLoginWithDeadline(signal => apiJson(path, {signal}), {
+    timeoutMs,
+    timeoutMessage: 'Account connection timed out. Please try again.'
+  });
+}
+
 async function restoreSession() {
   if (!state.token) {
     resetUserState();
     return;
   }
-  try {
-    const data = await apiJson('/me');
-    if (!data.loggedIn || !data.user) {
-      setToken('');
-      resetUserState();
-      return;
-    }
-    state.user = data.user;
-    await loadUserCollections();
-    warmNativePaidCatalog();
-    await checkAdminStatus();
-  } catch (error) {
-    if (error.status === 401) {
-      setToken('');
-      resetUserState();
+  let data = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      data = await boundedAccountRead('/me', 12000);
+      break;
+    } catch (error) {
+      // An expired/revoked token must be cleared, but no transient timeout
+      // or offline error is evidence that a signed-in user logged out.
+      if (error?.status === 401) {
+        setToken('');
+        resetUserState();
+        return;
+      }
+      if (attempt === 1) {
+        console.warn('Session restore deferred until the network recovers', error);
+        // Keep the token. updateReconnectTimer() will retry on connectivity
+        // recovery; do not strand the user under the bootstrap spinner.
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 600));
     }
   }
+  if (!data?.loggedIn || !data?.user) {
+    setToken('');
+    resetUserState();
+    return;
+  }
+  state.user = data.user;
+  await loadUserCollections();
+  warmNativePaidCatalog();
+  await checkAdminStatus();
 }
 
 async function loadUserCollections() {
   if (!state.user) return;
   try {
+    // Each read has its own deadline: Promise.all must not hang for the
+    // lifetime of a WKWebView when a single account endpoint stalls.
     const [likes, later, follows, history, notificationSettings, playlists] = await Promise.all([
-      apiJson('/my-like-ids').catch(() => ({ ids: [] })),
-      apiJson('/watch-later').catch(() => ({ items: [] })),
-      apiJson('/follows').catch(() => ({ items: [] })),
-      apiJson('/history').catch(() => ({ items: [] })),
-      apiJson('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
-      apiJson('/custom-playlists').catch(() => ({ items: [] }))
+      boundedAccountRead('/my-like-ids').catch(() => ({ ids: [] })),
+      boundedAccountRead('/watch-later').catch(() => ({ items: [] })),
+      boundedAccountRead('/follows').catch(() => ({ items: [] })),
+      boundedAccountRead('/history').catch(() => ({ items: [] })),
+      boundedAccountRead('/notification-settings').catch(() => ({ pushEnabled:false, emailEnabled:false, pushConfigured:false, emailConfigured:false })),
+      boundedAccountRead('/custom-playlists').catch(() => ({ items: [] }))
     ]);
     state.myLikes = new Set((likes.ids || []).map(String));
     state.watchLater = new Set((later.items || []).map(item => String(item.id || item.vimeoId || '')));
@@ -2616,7 +2667,7 @@ async function checkAdminStatus(force = false) {
   }
   if (state.adminChecked && !force) return state.isAdmin;
   try {
-    const data = await apiJson('/admin/status');
+    const data = await boundedAccountRead('/admin/status', 10000);
     state.isAdmin = Boolean(data?.isAdmin);
     state.adminStatus = data || null;
     state.adminAdmins = Array.isArray(data?.admins) ? data.admins : [];
@@ -2662,12 +2713,47 @@ async function login(email, password) {
   state.authMessage = '';
   render();
   try {
-    const response = await apiFetch('/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-    const data = await response.json().catch(() => ({}));
+    // WebKit sometimes leaves a network request pending indefinitely on
+    // iPhone. A bounded request both aborts it and releases the form so the
+    // user can retry; do not automatically duplicate a credential POST.
+    const {response, data} = await loginWithIosNativeFallback(
+      () => fetchLoginWithDeadline(async signal => {
+        const response = await apiFetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+          signal
+        });
+        return {response, data:await response.json().catch(() => ({}))};
+      }),
+      async () => {
+        // WebKit on some iOS connections can exhaust the abortable 25s
+        // request without any HTTP response. CapacitorHttp uses URLSession
+        // instead of the WebView networking stack; only use it for such a
+        // transport error, never for an actual rejected password or 429.
+        const report = (status, ok) => {
+          // Disposable simulator observer, when present. No credentials,
+          // tokens or response data are sent through this hook.
+          try { window.__ISTLoginTransportObserver?.({status,ok}); } catch (_) {}
+        };
+        try {
+          const raw = await fetchLoginWithDeadline(() => CapacitorHttp.post({
+            url: API + '/login',
+            headers: { 'Content-Type':'application/json', 'Accept':'application/json', 'X-Irgun-App':'1' },
+            data: {email, password},
+            connectTimeout: 12000,
+            readTimeout: 16000
+          }), {timeoutMs:20000, timeoutMessage:'Native sign-in timed out. Check your connection and try again.'});
+          const outcome = normalizeNativeLoginResponse(raw);
+          report(outcome.response.status, outcome.response.ok);
+          return outcome;
+        } catch (error) {
+          report(0, false);
+          throw error;
+        }
+      },
+      {enabled: IS_IOS && Capacitor.isNativePlatform()}
+    );
     if (!response.ok) {
       if (data.verificationRequired) {
         state.authVerifyEmail = String(data.email || email || '').trim().toLowerCase();
@@ -3799,8 +3885,15 @@ function syncIosVideoDisplay() {
   if (!IS_IOS || !Capacitor.isNativePlatform()) return;
   const active = Boolean(state.watchVideo && state.watchMode === 'video');
   const direct = state.watchVimeo?.player;
-  const playing = active && Boolean(state.watchVideoPlaying ||
-    (direct?.autoplayWanted && !direct?.explicitlyPaused));
+  // AVPlayer.timeControlStatus switches to waiting while buffering HLS. This
+  // must not allow iOS to auto-lock an actively requested video. But a genuine
+  // user Pause, finished item, failed source or phone/WhatsApp interruption
+  // must never keep the screen awake.
+  const native = iosNativeActive() ? iosUnified.state : null;
+  const playing = active && (native
+    ? Boolean(native.mode === 'video' && native.playRequested === true &&
+        native.interrupted !== true && native.failed !== true)
+    : Boolean(state.watchVideoPlaying || (direct?.autoplayWanted && !direct?.explicitlyPaused)));
   const presentation = {
     active, playing,
     mini: active && Boolean(state.watchMinimized),
@@ -5696,7 +5789,9 @@ async function createIosWatchPlayer(video, frame, startSeconds, autoplay = false
     for (let index = 0; index < urls.length; index += 1) {
       assertCurrent();
       try {
-        await openNative(urls[index]);
+        await openNativeWithTransientTlsRetry(() => openNative(urls[index]), {
+          isCurrent,
+        });
         lastError = null;
         break;
       } catch (error) {
@@ -6026,6 +6121,7 @@ function watchHtml() {
   const v = state.watchVideo;
   if (!v) return '';
   const id = videoId(v);
+  const draftScope = commentDraftScope(state.user?.id, id);
   const likeId = id;
   const liked = state.myLikes.has(likeId);
   const savePresentation = saveDestinationPresentation('video', id);
@@ -6067,7 +6163,7 @@ function watchHtml() {
       </section>
       <section class="watch-section">
         <div class="section-head"><h2 id="commentsHeading">Comments (${state.watchComments.length})</h2></div>
-        <form id="commentForm" class="comment-form"><textarea id="commentText" placeholder="Leave a comment about this shiur..."></textarea><button type="submit">Post Comment</button></form>
+        <form id="commentForm" class="comment-form"><textarea id="commentText" placeholder="Leave a comment about this shiur...">${esc(commentDrafts.read(draftScope))}</textarea><button type="submit">Post Comment</button></form>
         <div class="comments-list">${commentsHtml()}</div>
       </section>
       <section class="watch-section">
@@ -6984,10 +7080,10 @@ function bind() {
     state.filterDraft=new Set();
     render();
   }));
-  document.querySelectorAll('[data-save-offline-kind]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);}));
+  bindClickOnce('[data-save-offline-kind]',(el,event)=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);});
   document.querySelectorAll('[data-offline-play]').forEach(el=>el.addEventListener('click',()=>playOfflineRecord(el.dataset.offlinePlay)));
   document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>deleteOffline(el.dataset.offlineDelete)));
-  document.querySelectorAll('[data-open-playlist-picker]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);}));
+  bindClickOnce('[data-open-playlist-picker]',(el,event)=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);});
   document.querySelectorAll('[data-playlist-picker-close]').forEach(el=>el.addEventListener('click',event=>{if(event.target.closest('[data-playlist-picker-panel]') && event.target!==el)return;state.playlistPickerItem=null;render();}));
   document.querySelectorAll('[data-playlist-picker-panel]').forEach(el=>el.addEventListener('click',event=>event.stopPropagation()));
   document.querySelectorAll('[data-playlist-add-target]').forEach(el=>el.addEventListener('click',async()=>{await addToPlaylist(el.dataset.playlistAddTarget,state.playlistPickerItem);}));
@@ -7306,30 +7402,30 @@ function bind() {
   const contactForm = document.getElementById('contactForm');
   if (contactForm) contactForm.addEventListener('submit', submitContact);
 
-  document.querySelectorAll('[data-watch]').forEach(el => el.addEventListener('click', event => {
+  bindClickOnce('[data-watch]', (el, event) => {
     event.stopPropagation();
     const requestedTime = el.dataset.watchTime == null || el.dataset.watchTime === '' ? null : Number(el.dataset.watchTime);
     openWatch(el.dataset.watch, requestedTime);
-  }));
-  document.querySelectorAll('[data-listen-video]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-listen-video]', (el, event) => {
     event.stopPropagation();
     playVideoAudio(el.dataset.listenVideo).catch(error => console.warn('Direct audio tap failed',error));
-  }));
-  document.querySelectorAll('[data-listen-audio]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-listen-audio]', (el, event) => {
     event.stopPropagation();
     playLibraryAudio(el.dataset.listenAudio).catch(error => console.warn('Direct audio tap failed',error));
-  }));
+  });
 
-  document.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
+  bindClickOnce('[data-like]', async (el, event) => {
     event.stopPropagation();
     await preserveWatchTime();
     toggleLike(el.dataset.like);
-  }));
-  document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
+  });
+  bindClickOnce('[data-save]', async (el, event) => {
     event.stopPropagation();
     await preserveWatchTime();
     toggleWatchLater(el.dataset.save);
-  }));
+  });
 
   // Follow chips can be recreated while the native player moves between hosts.
   // A document-level handler survives those DOM replacements and does not
@@ -7352,17 +7448,17 @@ function bind() {
     }, true);
   }
 
-  document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
-  document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
+  bindClickOnce('[data-share-kind]', el => shareItem(el.dataset.shareKind, el.dataset.shareId));
+  bindClickOnce('[data-download-kind]', el => downloadItem(el.dataset.downloadKind, el.dataset.downloadId));
 
-  document.querySelectorAll('[data-play-toggle]').forEach(el => el.addEventListener('click', event => {
+  bindClickOnce('[data-play-toggle]', (el, event) => {
     event.stopPropagation();
     togglePlay();
-  }));
-  document.querySelectorAll('[data-skip]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-skip]', (el, event) => {
     event.stopPropagation();
     skip(Number(el.dataset.skip) || 0);
-  }));
+  });
   document.querySelectorAll('[data-open-player]').forEach(el => el.addEventListener('click', event => {
     if (event.target.closest('button')) return;
     state.playerOpen = true;
@@ -7494,7 +7590,7 @@ function bind() {
   });
 
   document.querySelectorAll('[data-close-watch]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', () => closeWatch(true)); });
-  document.querySelectorAll('[data-ios-video-fullscreen]').forEach(button => button.addEventListener('click', async () => {
+  bindClickOnce('[data-ios-video-fullscreen]', async () => {
     if (!iosNativeActive()) return;
     const enabled = iosUnified.state.layout !== 'full';
     iosManualFullscreenExitBlocked = !enabled;
@@ -7503,10 +7599,10 @@ function bind() {
     document.body.classList.toggle('irgun-ios-video-fullscreen', enabled);
     await iosUnified.layout(iosFullscreenLayoutOverride, nativeVideoFrame(document) || {});
     await IrgunVideoDisplay.setFullscreen({enabled});
-  }));
-  document.querySelectorAll('[data-watch-mode]').forEach(el => el.addEventListener('click', () => switchWatchMode(el.dataset.watchMode)));
-  document.querySelectorAll('[data-switch-audio]').forEach(el => el.addEventListener('click', () => switchWatchMode('audio')));
-  document.querySelectorAll('[data-switch-video]').forEach(el => el.addEventListener('click', () => switchWatchMode('video')));
+  });
+  bindClickOnce('[data-watch-mode]', el => switchWatchMode(el.dataset.watchMode));
+  bindClickOnce('[data-switch-audio]', () => switchWatchMode('audio'));
+  bindClickOnce('[data-switch-video]', () => switchWatchMode('video'));
 
   document.querySelectorAll('[data-minimize-watch]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', minimizeWatchToPersistent); });
   document.querySelectorAll('[data-video-pip]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', enterIosPictureInPicture); });
@@ -7517,10 +7613,15 @@ function bind() {
   if (downloadMount) bindDownloadManager(downloadMount);
 
   const commentForm = document.getElementById('commentForm');
-  if (commentForm) commentForm.addEventListener('submit', event => {
-    event.preventDefault();
-    postComment();
-  });
+  if (state.watchVideo) commentDrafts.bind(document.getElementById('commentText'),
+    commentDraftScope(state.user?.id, videoId(state.watchVideo)));
+  if (commentForm && !commentForm.dataset.submitBound) {
+    commentForm.dataset.submitBound = '1';
+    commentForm.addEventListener('submit', event => {
+      event.preventDefault();
+      postComment();
+    });
+  }
   bindCommentButtons();
 
   document.querySelectorAll('[data-remove-history]').forEach(el => el.addEventListener('click', () => removeHistory(el.dataset.removeHistory)));
@@ -9333,6 +9434,11 @@ async function initWatchVimeo(userInitiated = false, forceVisualRelatch = false)
       state.watchVimeoReady = false;
       if (state.watchVimeo === player) state.watchVimeo = null;
       console.warn('Vimeo player init failed', error);
+      if (/TLS error|secure connection to fail|network connection was lost/i.test(String(error?.message || error || ''))) {
+        setToast(currentLanguage()==='he'
+          ? 'חיבור מאובטח לשרת הווידאו נכשל. בדקו את החיבור ונסו שוב.'
+          : 'Secure video connection failed. Check your connection and try Watch again.');
+      }
     }
     try { await player?.destroy?.(); } catch (_) {}
   } finally {
@@ -9378,6 +9484,7 @@ async function postComment() {
   const text = draft.trim();
   if (!text) return;
   const postedVideoId = videoId(state.watchVideo);
+  const postedScope = commentDraftScope(state.user.id, postedVideoId);
   const submitButton = field.closest('form')?.querySelector('button[type="submit"]');
   commentPostPending = true;
   if (submitButton) submitButton.disabled = true;
@@ -9388,12 +9495,15 @@ async function postComment() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId: postedVideoId, text })
     });
-    clearCommentComposerAfterPost({
-      document,
-      currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
-      postedVideoId,
-      postedText: text
-    });
+    if (commentDraftScope(state.user?.id, state.watchVideo ? videoId(state.watchVideo) : '') === postedScope) {
+      clearCommentComposerAfterPost({
+        document,
+        currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
+        postedVideoId,
+        postedText: text
+      });
+    }
+    commentDrafts.clearIfUnchanged(postedScope, text);
   } catch (error) {
     alert(error.message || 'Could not post comment.');
     return;

@@ -1,3 +1,5 @@
+import { openNativeWithTransientTlsRetry } from './ios-native-avplayer.js';
+
 // Prefer the same owned video sources that already work in native Video -> Audio.
 // Canonical video IDs precede legacy IST aliases on the MP3 fallback path.
 export function iosDirectAudioCandidates(item, ownedSources = null, audioUrlForId = null) {
@@ -19,13 +21,17 @@ export function iosDirectAudioCandidates(item, ownedSources = null, audioUrlForI
   return urls;
 }
 
-export async function openFirstPlayableIosAudio(urls, open, isCurrent = () => true, onFallback = () => {}) {
+export async function openFirstPlayableIosAudio(urls, open, isCurrent = () => true, onFallback = () => {}, retryOptions = {}) {
   if (!Array.isArray(urls) || !urls.length) throw new Error('No native audio stream is available');
   let lastError = null;
   for (let i = 0; i < urls.length; i += 1) {
     if (!isCurrent()) throw new Error('Native audio request was superseded');
     try {
-      const snapshot = await open(urls[i]);
+      // Direct Listen needs the same bounded connection-loss recovery as
+      // Watch. A failed read must never be mistaken for successful playback.
+      const snapshot = await openNativeWithTransientTlsRetry(() => open(urls[i]), {
+        ...retryOptions, isCurrent
+      });
       if (!isCurrent()) throw new Error('Native audio request was superseded');
       return {url:urls[i],snapshot};
     } catch (error) {

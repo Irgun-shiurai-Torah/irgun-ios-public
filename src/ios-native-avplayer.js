@@ -1,3 +1,24 @@
+// Retry only transient secure-transport failures from AVFoundation. Never
+// retry non-network decoder errors, and never silently count a failed source
+// as working playback. The caller still tries the next real source on failure.
+export async function openNativeWithTransientTlsRetry(open, {
+  isCurrent = () => true,
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!isCurrent()) throw new Error('Video initialization cancelled');
+    try {
+      return await open();
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      const transientSecureTransport = /TLS error|secure connection to fail|network connection was lost/i.test(message);
+      if (!transientSecureTransport || attempt > 0) throw error;
+      await delay(1200);
+      if (!isCurrent()) throw new Error('Video initialization cancelled');
+    }
+  }
+}
+
 // The ONE playback engine for the native iOS app. Every Video/Audio mode,
 // fullscreen/Mini/PiP surface, and background session controls the same
 // IrgunUnifiedPlayer Swift singleton and its AVPlayer (not a WKWebView media
@@ -150,9 +171,18 @@ export function createIosNativeVideoAdapter(engine,id) {
   const unsubscribe=engine.subscribe(s=>{
     if (String(s.id)!==String(id)) return;
     fire('timeupdate',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
-    if (lastPlay!==Boolean(s.playing)) {
-      lastPlay=Boolean(s.playing);
-      fire(lastPlay?'play':'pause',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
+    // AVPlayer reports playing=false while waiting for the next HLS segment.
+    // This is NOT a user Pause: keep the media intent, analytics and screen-awake
+    // policy intact until the buffer recovers. A real call interruption or an
+    // explicit pause must still produce the normal pause event.
+    const playing=Boolean(s.playing);
+    const waitingForMedia=!playing && s.playRequested===true &&
+      s.interrupted!==true && s.failed!==true;
+    if (waitingForMedia) {
+      fire('waiting',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
+    } else if (lastPlay!==playing) {
+      lastPlay=playing;
+      fire(playing?'play':'pause',{seconds:Number(s.position)||0,duration:Number(s.duration)||0});
     }
   });
   return {

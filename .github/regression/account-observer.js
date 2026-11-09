@@ -51,11 +51,13 @@ if (!window.__ISTAccountClickObserverInstalled) {
   // validation prevents the form's submit event. Count submissions and
   // invalid fields without collecting email addresses or passwords.
   window.__ISTAccountLoginSubmissions = 0;
+  window.__ISTAccountCommentSubmissions = 0;
   window.__ISTAccountLastInvalidField = '';
   document.addEventListener('submit', event => {
     if (event.target?.id === 'authForm') window.__ISTAccountLoginSubmissions++;
     // Identify only a disposable QA comment entered via native UI.
     if (event.target?.id === 'commentForm') {
+      window.__ISTAccountCommentSubmissions++;
       const match = /^IST iOS QA (\d{12,16}) created$/.exec(
         String(document.getElementById('commentText')?.value || '').trim()
       );
@@ -82,6 +84,16 @@ if (!window.__ISTAccountClickObserverInstalled) {
 if (!window.__ISTAccountRequestObserverInstalled) {
   window.__ISTAccountRequestObserverInstalled = true;
   window.__ISTAccountRequests = [];
+  // Record the actual response status from Capacitor's URLSession fallback,
+  // without logging login credentials, tokens, account names or body data.
+  window.__ISTLoginTransportObserver = ({status,ok} = {}) => {
+    const at = Date.now();
+    window.__ISTAccountRequests.push({
+      sequence:window.__ISTAccountRequests.length+1,
+      path:'/login',method:'POST',transport:'native',startedAt:at,
+      finishedAt:at,status:Number(status)||0,ok:ok===true
+    });
+  };
   const originalApiJson = apiJson;
   const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
@@ -226,7 +238,14 @@ window.ISTAccountTest = { snapshot() {
     if(chosen){const r=chosen.getBoundingClientRect();controls[key]={x:r.left+r.width/2,y:r.top+r.height/2,label:chosen.innerText||chosen.getAttribute('aria-label')||'',active:chosen.classList.contains('active')};}
   }
   const native = iosNativeActive() ? iosUnified.state : null;
-  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,controlHitTests,watchFixture,
+  // Track the actual speaker button separately from the full follow list.
+  // Server-issued canonical IDs may differ from legacy button keys; the UI's
+  // aria-pressed value is the resolved follow state for this lecture.
+  const followButton = document.querySelector('[data-follow-type="speaker"][data-follow-key]');
+  const followIdentity = followButton
+    ? 'speaker:' + String(followButton.dataset.followKey || '') : '';
+  const followActive = followButton ? followButton.getAttribute('aria-pressed') === 'true' : false;
+  return {requests:(window.__ISTAccountRequests||[]).map(x=>({...x})),observedAt:Date.now(),width:innerWidth,height:innerHeight,controls,controlRects,controlScrollers,controlHitTests,watchFixture,followIdentity,followActive,
     clicks:Object.fromEntries(Object.entries(window.__ISTAccountClicks||{}).map(([key,value])=>[key,{...value}])),
     lastPointer:{...(window.__ISTAccountLastPointer||{})},
     watchScrollTop:Number(document.querySelector('.watch-scroll')?.scrollTop || 0),
@@ -253,6 +272,7 @@ window.ISTAccountTest = { snapshot() {
     commentCount:state.watchComments.length,
     commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
     commentDraftEmpty:!document.getElementById('commentText')?.value,
+    commentSubmitCount:Number(window.__ISTAccountCommentSubmissions)||0,
     profileNameValue:document.getElementById('profileName')?.value || '',
     profileNameDisplayed:document.querySelector('.profile-line span')?.textContent?.trim() || '',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),

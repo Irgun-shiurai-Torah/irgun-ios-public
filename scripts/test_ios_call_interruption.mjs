@@ -34,12 +34,15 @@ test('unified iOS AVPlayer tracks both CallKit calls and audio session interrupt
 });
 
 test('every unified AVPlayer start passes through an active-call gate', () => {
-  assert.equal((unified.match(/playImmediately\(atRate:/g) || []).length, 1,
+  assert.equal((unified.match(/player\.rate = playbackRate/g) || []).length, 1,
     'all AVPlayer start sites must use playIfAllowed, not bypass it');
   const guardedStart = between(unified, 'private func playIfAllowed()', 'private func resumeAfterExternalInterruptionIfAppropriate()');
   assert.match(guardedStart, /guard active, playingWanted, !playbackIsBlockedByCall/);
   assert.match(guardedStart, /player\.pause\(\)/);
-  assert.match(guardedStart, /player\.playImmediately\(atRate: playbackRate\)/);
+  assert.match(guardedStart, /player\.rate = playbackRate/);
+  assert.equal((unified.match(/player\.playImmediately\(atRate:/g) || []).length, 1);
+  assert.match(guardedStart, /pathExtension\.lowercased\(\) == "m3u8"[\s\S]*?player\.rate = playbackRate[\s\S]*?\} else \{[\s\S]*?player\.playImmediately\(atRate: playbackRate\)/,
+    'HLS must honour buffering while MP4, MP3 and offline files retain responsive guarded starts');
 
   assert.match(between(unified, 'private func monitorPlaybackProgress()', 'private func schedulePlaybackRecoveryIfNeeded()'),
     /!playbackIsBlockedByCall/);

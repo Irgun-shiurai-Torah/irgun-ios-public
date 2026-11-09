@@ -92,7 +92,7 @@ test('account observer refuses to invent Follow support for lectures without a s
   assert.ok(snapshot.controls.account,'Unrelated account navigation must remain present');
 });
 
-test('account fixture prioritizes a saved verified backup and rejects unusable sources',()=> {
+test('account fixture preserves the real selected lecture and rejects unusable sources',()=> {
   const make = id => ({dataset:{watch:id}});
   const primary = make('1235946832');
   const second = make('1235511026');
@@ -102,9 +102,14 @@ test('account fixture prioritizes a saved verified backup and rejects unusable s
     ['1235511026',{hasAudio:true,_speakerIds:['rav-b']}]
   ]);
   assert.equal(selectIosAccountFixture(items,videos,'1235511026'),second);
-  assert.equal(selectIosAccountFixture(items,videos,'not-a-verified-fixture'),primary);
+  assert.equal(selectIosAccountFixture(items,videos),primary,
+    'Before the first selection, prefer a verified historic backup');
+  assert.equal(selectIosAccountFixture(items,videos,'not-a-verified-fixture'),null,
+    'A saved ID must never resolve to an unrelated lecture');
   videos.set('1235511026',{hasAudio:false,_speakerIds:['rav-b']});
-  assert.equal(selectIosAccountFixture(items,videos,'1235511026'),primary);
+  assert.equal(selectIosAccountFixture(items,videos,'1235511026'),null,
+    'A backed lecture that becomes unavailable cannot silently change');
+  assert.equal(selectIosAccountFixture(items,videos),primary);
   videos.set('1235946832',{hasAudio:true,_speakerIds:[]});
   assert.equal(selectIosAccountFixture(items,videos),null);
 });
@@ -266,4 +271,22 @@ test('startup request observation preserves real results and excludes unapproved
   assert.equal(requests[0].ok,true);
   assert.ok(requests[0].finishedAt>=requests[0].startedAt);
   assert.ok(!JSON.stringify(requests).includes('private'));
+});
+
+
+test('native account Watch test accepts only the exact real opened lecture after a physical tap',()=>{
+  const swift=readFileSync(new URL('../.github/account-tests/test.swift',import.meta.url),'utf8');
+  assert.match(swift,/let expectedWatchId = key == "open" \? \(fixture\["id"\] as\? String \?\? ""\) : ""/);
+  assert.match(swift,/beforeWatchId != expectedWatchId/);
+  assert.match(swift,/observed\["watchId"\] as\? String == expectedWatchId/);
+  assert.match(swift,/number\(observed,"observedAt"\) > number\(requested,"observedAt"\)/);
+  assert.match(swift,/watchFixtureClickMatches\(observed,requested:requested\)/);
+  assert.ok(swift.indexOf('let beforeClick = number(requested,"lastClickSequence")') < swift.indexOf('for _ in 0..<24'),
+    'A delayed click must be compared with the original operation, not discarded at each retry');
+  assert.match(swift,/native\["id"\] as\? String == "video:" \+ expectedWatchId/);
+  assert.match(swift,/native\["active"\] as\? Bool == true/);
+  assert.match(swift,/if delivered\(s\) \{ return \}/);
+  assert.match(swift,/let visibleTarget = key == "open" && controls\[key\] != nil/);
+  assert.match(swift,/web\.coordinate\(withNormalizedOffset: \.zero\).*\.tap\(\)/);
+  assert.match(swift,/evidence\("account-control-not-opened-" \+ key\)/);
 });
