@@ -170,6 +170,26 @@ test('new draft entered during a POST is preserved in memory as well as the text
   assert.equal(h.field.value,'My next comment');
 });
 
+test('a reused persistent textarea switches draft ownership and clears on logout', () => {
+  const drafts=createCommentDraftStore();
+  const field={value:'',handlers:{},addEventListener(k,v){this.handlers[k]=v;}};
+  const a=commentDraftScope('a','lecture'),b=commentDraftScope('b','lecture');
+  drafts.bind(field,a);field.value='Account A draft';field.handlers.input();
+  drafts.bind(field,b);
+  assert.equal(field.value,'','Account B must never see A\'s textarea contents');
+  field.value='Account B draft';field.handlers.input();
+  assert.equal(drafts.read(a),'Account A draft');
+  assert.equal(drafts.read(b),'Account B draft');
+  drafts.clear(field);
+  assert.equal(field.value,'');assert.equal(drafts.read(a),'');assert.equal(drafts.read(b),'');
+});
+
+test('a completed POST cannot clear the same lecture draft after an account switch', async () => {
+  const h=harness({onPost:c=>{c.state.user={id:99};c.replace('Test comment');}});
+  await h.postComment();
+  assert.equal(h.field.value,'Test comment');
+});
+
 const editStart = source.indexOf('async function saveEditedComment(');
 const editEnd = source.indexOf('\nasync function deleteComment(',editStart);
 assert.ok(editStart >= 0 && editEnd > editStart);

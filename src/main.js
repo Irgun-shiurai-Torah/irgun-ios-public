@@ -2134,7 +2134,7 @@ function setToken(token) {
 }
 
 function resetUserState() {
-  commentDrafts.clear();
+  commentDrafts.clear(document.getElementById('commentText'));
   state.user = null;
   state.myLikes = new Set();
   state.watchLater = new Set();
@@ -9463,12 +9463,14 @@ async function postComment() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId: postedVideoId, text })
     });
-    clearCommentComposerAfterPost({
-      document,
-      currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
-      postedVideoId,
-      postedText: text
-    });
+    if (commentDraftScope(state.user?.id, state.watchVideo ? videoId(state.watchVideo) : '') === postedScope) {
+      clearCommentComposerAfterPost({
+        document,
+        currentVideoId: state.watchVideo ? videoId(state.watchVideo) : '',
+        postedVideoId,
+        postedText: text
+      });
+    }
     commentDrafts.clearIfUnchanged(postedScope, text);
   } catch (error) {
     alert(error.message || 'Could not post comment.');

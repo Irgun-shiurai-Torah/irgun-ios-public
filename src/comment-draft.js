@@ -25,13 +25,22 @@ export function createCommentDraftStore() {
   return {
     read(scope) { return drafts.get(scope) || ''; },
     bind(field, scope) {
-      if (!field || bound.has(field)) return;
-      bound.set(field, scope);
+      if (!field) return;
+      const existing = bound.get(field);
+      if (existing) {
+        if (existing.scope !== scope) {
+          existing.scope = scope;
+          field.value = drafts.get(scope) || '';
+        }
+        return;
+      }
+      const binding = {scope};
+      bound.set(field, binding);
       if (drafts.has(scope)) field.value = drafts.get(scope);
       const remember = () => {
         const value = String(field.value || '');
-        if (value) drafts.set(scope, value);
-        else drafts.delete(scope);
+        if (value) drafts.set(binding.scope, value);
+        else drafts.delete(binding.scope);
       };
       field.addEventListener('input', remember);
       field.addEventListener('change', remember);
@@ -42,6 +51,9 @@ export function createCommentDraftStore() {
       drafts.delete(scope);
       return true;
     },
-    clear() { drafts.clear(); }
+    clear(field) {
+      drafts.clear();
+      if (field) field.value = '';
+    }
   };
 }
