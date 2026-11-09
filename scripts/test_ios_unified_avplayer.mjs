@@ -274,3 +274,21 @@ test('native HLS recovery records actual clock movement, not mere restart attemp
   assert.match(recovery,/self\.lastPlaybackProgressAt = Date\(\)/);
   assert.match(swift,/item\.preferredForwardBufferDuration = 18/);
 });
+
+test('network-buffer waiting never enters retained-item seek repair or bypasses the call gate',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  assert.match(swift,/player\.automaticallyWaitsToMinimizeStalling = true/);
+  const start=swift.indexOf('private func schedulePlaybackRecoveryIfNeeded()');
+  const end=swift.indexOf('private func playableURL(',start);
+  const recovery=swift.slice(start,end);
+  const waiting=recovery.indexOf('let waitingForMedia =');
+  const seek=recovery.indexOf('if self.playbackRecoveryAttempts % 2 == 0');
+  assert.ok(waiting>=0&&seek>waiting,'The network wait must be handled before any seek');
+  const networkWait=recovery.slice(waiting,seek);
+  assert.match(networkWait,/timeControlStatus == \.waitingToPlayAtSpecifiedRate/);
+  assert.match(networkWait,/expectedItem\.isPlaybackBufferEmpty \|\| !expectedItem\.isPlaybackLikelyToKeepUp/);
+  assert.match(networkWait,/if waitingForMedia \{\s*self\.playIfAllowed\(\)\s*verifyRecovery\(current\)\s*return\s*\}/);
+  assert.doesNotMatch(networkWait,/\.seek\(|replaceCurrentItem|lastPlaybackProgressAt\s*=/);
+  assert.match(recovery,/guard self\.active, self\.playingWanted, !self\.playbackIsBlockedByCall/);
+  assert.doesNotMatch(recovery,/replaceCurrentItem/,'A buffer wait must retain the actual player item');
+});

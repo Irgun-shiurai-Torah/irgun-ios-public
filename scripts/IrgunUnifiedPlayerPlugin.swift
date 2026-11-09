@@ -265,6 +265,7 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
         Self.current = self
         viewer.view.backgroundColor = .black
         videoLayer.player = player
+        player.automaticallyWaitsToMinimizeStalling = true
         // Home should continue audio without automatically opening system PiP.
         if #available(iOS 15.0, *) { player.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible }
         videoLayer.videoGravity = .resizeAspect
@@ -356,7 +357,14 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             player.pause()
             return
         }
-        player.playImmediately(atRate: playbackRate)
+        if URL(string: itemURL)?.pathExtension.lowercased() == "m3u8" {
+            // Honour HLS forward buffering instead of consuming an
+            // insufficient buffer. Intent stays set while AVPlayer waits.
+            player.rate = playbackRate
+        } else {
+            // Keep the existing responsive start for MP4, MP3 and local files.
+            player.playImmediately(atRate: playbackRate)
+        }
     }
 
     private func resumeAfterExternalInterruptionIfAppropriate() {
@@ -584,6 +592,17 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 }
             }
 
+            // Waiting for network data is not a wedged decoder. Seeking every
+            // other watchdog attempt can interrupt the outstanding HLS read
+            // before it fills the buffer. Let AVPlayer finish that read; only
+            // use the retained-item seek when media is available to decode.
+            let waitingForMedia = self.player.timeControlStatus == .waitingToPlayAtSpecifiedRate &&
+                (expectedItem.isPlaybackBufferEmpty || !expectedItem.isPlaybackLikelyToKeepUp)
+            if waitingForMedia {
+                self.playIfAllowed()
+                verifyRecovery(current)
+                return
+            }
             if self.playbackRecoveryAttempts % 2 == 0 {
                 let target = CMTime(seconds: max(0, current), preferredTimescale: 600)
                 self.player.seek(
