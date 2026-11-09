@@ -1,6 +1,7 @@
 import { compactIosAudioSpeedHtml, validIosAudioSpeed, refreshIosAudioSpeedMenu, closeIosAudioSpeedMenu, toggleIosAudioSpeedMenu } from './ios-audio-speed-popup.js';
 import { iosDirectAudioCandidates, openFirstPlayableIosAudio } from './ios-audio-start.js';
 import { fetchLoginWithDeadline } from './ios-login-deadline.js';
+import { loginWithIosNativeFallback, normalizeNativeLoginResponse } from './ios-native-login.js';
 import './ios-audio-speed-popup.css';
 import { fullAudioToVideoHandoff } from './audio-to-video-handoff.js';
 import './style.css';
@@ -2715,15 +2716,44 @@ async function login(email, password) {
     // WebKit sometimes leaves a network request pending indefinitely on
     // iPhone. A bounded request both aborts it and releases the form so the
     // user can retry; do not automatically duplicate a credential POST.
-    const {response, data} = await fetchLoginWithDeadline(async signal => {
-      const response = await apiFetch('/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-        signal
-      });
-      return {response, data:await response.json().catch(() => ({}))};
-    });
+    const {response, data} = await loginWithIosNativeFallback(
+      () => fetchLoginWithDeadline(async signal => {
+        const response = await apiFetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+          signal
+        });
+        return {response, data:await response.json().catch(() => ({}))};
+      }),
+      async () => {
+        // WebKit on some iOS connections can exhaust the abortable 25s
+        // request without any HTTP response. CapacitorHttp uses URLSession
+        // instead of the WebView networking stack; only use it for such a
+        // transport error, never for an actual rejected password or 429.
+        const report = (status, ok) => {
+          // Disposable simulator observer, when present. No credentials,
+          // tokens or response data are sent through this hook.
+          try { window.__ISTLoginTransportObserver?.({status,ok}); } catch (_) {}
+        };
+        try {
+          const raw = await fetchLoginWithDeadline(() => CapacitorHttp.post({
+            url: API + '/login',
+            headers: { 'Content-Type':'application/json', 'Accept':'application/json', 'X-Irgun-App':'1' },
+            data: {email, password},
+            connectTimeout: 12000,
+            readTimeout: 16000
+          }), {timeoutMs:20000, timeoutMessage:'Native sign-in timed out. Check your connection and try again.'});
+          const outcome = normalizeNativeLoginResponse(raw);
+          report(outcome.response.status, outcome.response.ok);
+          return outcome;
+        } catch (error) {
+          report(0, false);
+          throw error;
+        }
+      },
+      {enabled: IS_IOS && Capacitor.isNativePlatform()}
+    );
     if (!response.ok) {
       if (data.verificationRequired) {
         state.authVerifyEmail = String(data.email || email || '').trim().toLowerCase();
