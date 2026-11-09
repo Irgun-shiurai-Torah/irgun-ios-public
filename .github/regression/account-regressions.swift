@@ -159,7 +159,24 @@
                         throw Failure.timedOut("Comment draft scope before submit")
                     }
                     if !nativeKeyboardIsClosed() {
-                        try dismissNativeKeyboard()
+                        if number(now,"width") >= 600 {
+                            // On iPad the WKWebView multiline keyboard often
+                            // stays open despite UIKit's Hide Keyboard action.
+                            // Do not require dismissal to submit a comment:
+                            // let the actual accessible Post Comment control
+                            // scroll into view and send its real form event.
+                            // The original iPad regression passed this way.
+                            guard taps < 2 else { break }
+                            try tapNativeFormButton(["Post Comment"])
+                            taps += 1
+                            let deadline = Date().addingTimeInterval(7)
+                            while Date() < deadline {
+                                if submitted(account()) { return }
+                                RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                            }
+                        } else {
+                            try dismissNativeKeyboard()
+                        }
                         stableX = -1
                         continue
                     }
