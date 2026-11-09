@@ -255,3 +255,22 @@ test('the real simulator UI taps an onscreen UIKit speed action and verifies the
   assert.doesNotMatch(tests,/app\.popovers\.buttons\[title\]/,
     'Avoid iOS 26 iPad accessibility snapshot hangs while querying the menu');
 });
+
+
+test('native HLS recovery records actual clock movement, not mere restart attempts',()=>{
+  const swift=readFileSync(new URL('./IrgunUnifiedPlayerPlugin.swift',import.meta.url),'utf8');
+  const statusStart=swift.indexOf('playerObserver = player.observe(');
+  const statusEnd=swift.indexOf('timeObserver = player.addPeriodicTimeObserver(',statusStart);
+  assert.ok(statusStart>=0&&statusEnd>statusStart);
+  const status=swift.slice(statusStart,statusEnd);
+  assert.match(status,/self\.monitorPlaybackProgress\(\)/);
+  assert.doesNotMatch(status,/self\.lastPlaybackProgressAt = Date\(\)/,
+    'timeControlStatus=playing alone cannot prove playback progressed');
+  const recoveryStart=swift.indexOf('let verifyRecovery: (Double) -> Void');
+  const recoveryEnd=swift.indexOf('if self.playbackRecoveryAttempts % 2 == 0',recoveryStart);
+  assert.ok(recoveryStart>=0&&recoveryEnd>recoveryStart);
+  const recovery=swift.slice(recoveryStart,recoveryEnd);
+  assert.match(recovery,/if observed > self\.lastObservedPlaybackPosition \+ 0\.35/);
+  assert.match(recovery,/self\.lastPlaybackProgressAt = Date\(\)/);
+  assert.match(swift,/item\.preferredForwardBufferDuration = 18/);
+});
