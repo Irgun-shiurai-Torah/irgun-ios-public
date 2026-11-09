@@ -282,10 +282,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 if self.player.timeControlStatus == .playing {
-                    self.playbackRecoveryTask?.cancel()
-                    self.playbackRecoveryTask = nil
-                    self.lastObservedPlaybackPosition = self.position()
-                    self.lastPlaybackProgressAt = Date()
+                    // A changed AVPlayer status is NOT evidence that an HLS
+                    // segment advanced. Only the actual media clock can clear
+                    // the stall timer or cancel a pending recovery.
+                    self.monitorPlaybackProgress()
                 } else {
                     self.schedulePlaybackRecoveryIfNeeded()
                 }
@@ -555,8 +555,16 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
 
             let verifyRecovery: (Double) -> Void = { [weak self] afterPosition in
                 guard let self = self else { return }
-                self.lastObservedPlaybackPosition = self.position()
-                self.lastPlaybackProgressAt = Date()
+                // Seeking/reasserting play must not reset a long-stall
+                // watchdog unless the media clock really moves. Otherwise
+                // every failed recovery falsely looks like fresh progress.
+                let observed = self.position()
+                if observed > self.lastObservedPlaybackPosition + 0.35 ||
+                   observed < self.lastObservedPlaybackPosition - 1.0 {
+                    self.lastObservedPlaybackPosition = observed
+                    self.lastPlaybackProgressAt = Date()
+                    self.playbackRecoveryAttempts = 0
+                }
                 self.publishState()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
                     guard let self = self, self.active, self.playingWanted,
@@ -1123,6 +1131,10 @@ public final class IrgunUnifiedPlayerPlugin: CAPPlugin, CAPBridgedPlugin, AVPict
                 self.player.pause()
                 self.itemObserver = nil
                 let item = AVPlayerItem(url: url)
+                // Buffer ahead of intermittent HLS segment stalls without
+                // replacing the lecture item or creating a second decoder.
+                // Sandbox files do not need a network buffer.
+                if !url.isFileURL { item.preferredForwardBufferDuration = 18 }
                 #if targetEnvironment(simulator)
                 self.attachSimulatedFrameOutput(to: item)
                 #endif
