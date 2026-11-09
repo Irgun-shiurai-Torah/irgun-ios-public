@@ -13,3 +13,35 @@ export function clearCommentComposerAfterPost({ document, currentVideoId, posted
   visible.value = '';
   return true;
 }
+// Drafts belong to an account and a lecture, not to a particular textarea.
+// Watch can be rebuilt by a background refresh while the mobile keyboard is
+// closing. Keeping the only copy in that DOM node loses the unsent comment.
+export function commentDraftScope(userId, videoId) {
+  return JSON.stringify([String(userId || ''), String(videoId || '')]);
+}
+export function createCommentDraftStore() {
+  const drafts = new Map();
+  const bound = new WeakMap();
+  return {
+    read(scope) { return drafts.get(scope) || ''; },
+    bind(field, scope) {
+      if (!field || bound.has(field)) return;
+      bound.set(field, scope);
+      if (drafts.has(scope)) field.value = drafts.get(scope);
+      const remember = () => {
+        const value = String(field.value || '');
+        if (value) drafts.set(scope, value);
+        else drafts.delete(scope);
+      };
+      field.addEventListener('input', remember);
+      field.addEventListener('change', remember);
+      field.addEventListener('blur', remember);
+    },
+    clearIfUnchanged(scope, submittedText) {
+      if (this.read(scope).trim() !== String(submittedText || '').trim()) return false;
+      drafts.delete(scope);
+      return true;
+    },
+    clear() { drafts.clear(); }
+  };
+}

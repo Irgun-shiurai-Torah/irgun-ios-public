@@ -51,11 +51,13 @@ if (!window.__ISTAccountClickObserverInstalled) {
   // validation prevents the form's submit event. Count submissions and
   // invalid fields without collecting email addresses or passwords.
   window.__ISTAccountLoginSubmissions = 0;
+  window.__ISTAccountCommentSubmissions = 0;
   window.__ISTAccountLastInvalidField = '';
   document.addEventListener('submit', event => {
     if (event.target?.id === 'authForm') window.__ISTAccountLoginSubmissions++;
     // Identify only a disposable QA comment entered via native UI.
     if (event.target?.id === 'commentForm') {
+      window.__ISTAccountCommentSubmissions++;
       const match = /^IST iOS QA (\d{12,16}) created$/.exec(
         String(document.getElementById('commentText')?.value || '').trim()
       );
@@ -260,6 +262,7 @@ window.ISTAccountTest = { snapshot() {
     commentCount:state.watchComments.length,
     commentsLoading:Boolean(state.watchCommentsLoading),commentsError:Boolean(state.watchCommentsError),
     commentDraftEmpty:!document.getElementById('commentText')?.value,
+    commentSubmitCount:Number(window.__ISTAccountCommentSubmissions)||0,
     profileNameValue:document.getElementById('profileName')?.value || '',
     profileNameDisplayed:document.querySelector('.profile-line span')?.textContent?.trim() || '',
     settingsVisible:!!document.querySelector('#appEmailToggle'),profileVisible:!!document.querySelector('#profileForm'),

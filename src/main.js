@@ -10,6 +10,8 @@ import { createCityAdminController, cityAdminPanelHtml } from './admin-city-pane
 import './admin-website-parity.css';
 import './admin-city.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
+import { createCommentDraftStore, commentDraftScope } from './comment-draft.js';
+import { downloadOfflineAudio } from './offline-audio-download.js';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
@@ -53,6 +55,7 @@ const SKIP_SECONDS_KEY = 'istSkipSecondsV1';
 const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
+const commentDrafts = createCommentDraftStore();
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
@@ -310,6 +313,7 @@ const state = {
   downloaderReady: false,
   offlineDownloads: new Map((loadJson(OFFLINE_DOWNLOADS_KEY, []) || []).map(item => [String(item?.key || ''), item]).filter(([key]) => key)),
   offlineJobs: new Map(),
+  offlineLastFailure: null,
   playlists: [],
   activePlaylistId: '',
   playlistPickerItem: null,
@@ -686,6 +690,7 @@ async function saveOffline(kind, id) {
   const safe = key.replace(/[^A-Za-z0-9_-]+/g, '_');
   const path = `irgun-offline/${safe}.mp3`;
   state.offlineJobs.set(key, { percent:0, title });
+  state.offlineLastFailure = null;
   refreshOfflineButtonsForKey(key);
   if (state.screen === 'library' && state.librarySection === 'downloads') render();
   let listener = null;
@@ -706,14 +711,11 @@ async function saveOffline(kind, id) {
     });
     const headers = { 'X-Irgun-App':'1' };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const transfer = await FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true });
-    const stat = await Filesystem.stat({ directory:Directory.Data, path }).catch(() => ({}));
-    const bytes = Number(stat?.size) || Number(transfer?.size) || Number(state.offlineJobs.get(key)?.bytes) || 0;
-    const responseCode = Number(transfer?.statusCode ?? transfer?.responseCode) || 0;
-    if ((responseCode && (responseCode < 200 || responseCode >= 300)) || bytes < 8192) {
-      await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
-      throw new Error(`Offline audio response was not a usable lecture file (HTTP ${responseCode || 'unknown'}, ${bytes} bytes)`);
-    }
+    const {bytes} = await downloadOfflineAudio({
+      download: () => FileTransfer.downloadFile({ url, path:fileInfo.uri, headers, progress:true }),
+      stat: () => Filesystem.stat({ directory:Directory.Data, path }),
+      removePartial: () => Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {})
+    });
     state.offlineDownloads.set(key, {
       key, kind:normalizedKind, id:rawId, sourceId, title, subtitle,
       uri:fileInfo.uri, path, bytes,
@@ -725,6 +727,13 @@ async function saveOffline(kind, id) {
     if (state.screen === 'library' && state.librarySection === 'downloads') render(); else { refreshInteractiveUi(); refreshOfflineButtonsForKey(key); }
   } catch (error) {
     console.warn('Offline save failed', error);
+    // Safe diagnostic codes distinguish a native transfer failure from a
+    // missed tap in CI; never expose URLs, credentials or response bodies.
+    state.offlineLastFailure = {
+      code: String(error?.code || '').slice(0,60),
+      status: Number(error?.httpStatus || error?.statusCode || error?.responseCode) || 0,
+      validation: String(error?.message || '').startsWith('Offline audio response was not a usable lecture file')
+    };
     await Filesystem.deleteFile({ directory:Directory.Data, path }).catch(() => {});
     state.offlineJobs.delete(key);
     setToast(currentLanguage() === 'he' ? 'לא היה אפשר לשמור את השיעור.' : 'Could not save this shiur offline.');
@@ -2125,6 +2134,7 @@ function setToken(token) {
 }
 
 function resetUserState() {
+  commentDrafts.clear();
   state.user = null;
   state.myLikes = new Set();
   state.watchLater = new Set();
@@ -6079,6 +6089,7 @@ function watchHtml() {
   const v = state.watchVideo;
   if (!v) return '';
   const id = videoId(v);
+  const draftScope = commentDraftScope(state.user?.id, id);
   const likeId = id;
   const liked = state.myLikes.has(likeId);
   const savePresentation = saveDestinationPresentation('video', id);
@@ -6120,7 +6131,7 @@ function watchHtml() {
       </section>
       <section class="watch-section">
         <div class="section-head"><h2 id="commentsHeading">Comments (${state.watchComments.length})</h2></div>
-        <form id="commentForm" class="comment-form"><textarea id="commentText" placeholder="Leave a comment about this shiur..."></textarea><button type="submit">Post Comment</button></form>
+        <form id="commentForm" class="comment-form"><textarea id="commentText" placeholder="Leave a comment about this shiur...">${esc(commentDrafts.read(draftScope))}</textarea><button type="submit">Post Comment</button></form>
         <div class="comments-list">${commentsHtml()}</div>
       </section>
       <section class="watch-section">
@@ -7570,10 +7581,15 @@ function bind() {
   if (downloadMount) bindDownloadManager(downloadMount);
 
   const commentForm = document.getElementById('commentForm');
-  if (commentForm) commentForm.addEventListener('submit', event => {
-    event.preventDefault();
-    postComment();
-  });
+  if (state.watchVideo) commentDrafts.bind(document.getElementById('commentText'),
+    commentDraftScope(state.user?.id, videoId(state.watchVideo)));
+  if (commentForm && !commentForm.dataset.submitBound) {
+    commentForm.dataset.submitBound = '1';
+    commentForm.addEventListener('submit', event => {
+      event.preventDefault();
+      postComment();
+    });
+  }
   bindCommentButtons();
 
   document.querySelectorAll('[data-remove-history]').forEach(el => el.addEventListener('click', () => removeHistory(el.dataset.removeHistory)));
@@ -9436,6 +9452,7 @@ async function postComment() {
   const text = draft.trim();
   if (!text) return;
   const postedVideoId = videoId(state.watchVideo);
+  const postedScope = commentDraftScope(state.user.id, postedVideoId);
   const submitButton = field.closest('form')?.querySelector('button[type="submit"]');
   commentPostPending = true;
   if (submitButton) submitButton.disabled = true;
@@ -9452,6 +9469,7 @@ async function postComment() {
       postedVideoId,
       postedText: text
     });
+    commentDrafts.clearIfUnchanged(postedScope, text);
   } catch (error) {
     alert(error.message || 'Could not post comment.');
     return;
