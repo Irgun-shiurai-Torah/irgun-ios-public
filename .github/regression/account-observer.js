@@ -84,6 +84,16 @@ if (!window.__ISTAccountClickObserverInstalled) {
 if (!window.__ISTAccountRequestObserverInstalled) {
   window.__ISTAccountRequestObserverInstalled = true;
   window.__ISTAccountRequests = [];
+  // Record the actual response status from Capacitor's URLSession fallback,
+  // without logging login credentials, tokens, account names or body data.
+  window.__ISTLoginTransportObserver = ({status,ok} = {}) => {
+    const at = Date.now();
+    window.__ISTAccountRequests.push({
+      sequence:window.__ISTAccountRequests.length+1,
+      path:'/login',method:'POST',transport:'native',startedAt:at,
+      finishedAt:at,status:Number(status)||0,ok:ok===true
+    });
+  };
   const originalApiJson = apiJson;
   const allowed = new Set(['/like','/playlist/add','/playlist/remove','/follows/toggle','/follows','/my-like-ids','/watch-later','/history']);
   apiJson = async function(path, ...args) {
