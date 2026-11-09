@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {fetchLoginWithDeadline} from '../src/ios-login-deadline.js';
+import {loginWithIosNativeFallback, normalizeNativeLoginResponse} from '../src/ios-native-login.js';
 
 test('a timely actual login response is returned and its deadline is cleared',async()=>{
   let clearCount=0,abortSignal=null;
@@ -42,7 +43,9 @@ test('production login uses the deadline and still clears authBusy',()=>{
   const end=source.indexOf('async function finishSocialLogin(',start);
   assert.ok(start>=0&&end>start);
   const login=source.slice(start,end);
+  assert.match(login,/loginWithIosNativeFallback\(/);
   assert.match(login,/fetchLoginWithDeadline\(async signal =>/);
+  assert.match(login,/CapacitorHttp\.post\(/);
   assert.match(login,/await apiFetch\('\/login', \{/);
   assert.match(login,/signal\s*\n\s*\}\)/);
   assert.match(login,/finally\s*\{\s*state\.authBusy = false;/);
@@ -78,4 +81,49 @@ test('session timeout can be reported distinctly from a sign-in timeout',async()
   });
   deadline();
   await assert.rejects(promise,/Account connection timed out/);
+});
+
+
+test('only an unresolved WebKit transport falls back to a native iOS HTTP response',async()=>{
+  let calls=0;
+  const result=await loginWithIosNativeFallback(
+    async()=>{throw Error('Sign-in timed out. Check your connection and try again.');},
+    async()=>{calls++;return normalizeNativeLoginResponse({status:200,data:{sessionToken:'server-issued'}});},
+    {enabled:true}
+  );
+  assert.equal(calls,1);
+  assert.equal(result.data.sessionToken,'server-issued');
+  assert.equal(result.response.ok,true);
+});
+
+test('a rejected password, rate limit or HTTP error never triggers duplicate credentials',async()=>{
+  for(const error of [Error('Incorrect email or password'),Error('/login returned 401'),Error('429 Too Many Requests')]){
+    let retries=0;
+    await assert.rejects(loginWithIosNativeFallback(
+      async()=>{throw error;},
+      async()=>{retries++;return normalizeNativeLoginResponse({status:200,data:{}});},
+      {enabled:true}
+    ),{message:error.message});
+    assert.equal(retries,0);
+  }
+});
+
+test('native login response preserves real HTTP failures and parses JSON data',()=>{
+  const fail=normalizeNativeLoginResponse({status:401,data:'{"error":"Incorrect email or password"}'});
+  assert.equal(fail.response.ok,false);
+  assert.equal(fail.response.status,401);
+  assert.equal(fail.data.error,'Incorrect email or password');
+  const rate=normalizeNativeLoginResponse({status:429,data:{error:'Rate limited'}});
+  assert.equal(rate.response.status,429);
+  assert.throws(()=>normalizeNativeLoginResponse({status:0,data:{sessionToken:'bad'}}),/valid HTTP response/);
+});
+
+test('non-iOS browsers never trigger native fallback',async()=>{
+  let calls=0;
+  await assert.rejects(loginWithIosNativeFallback(
+    async()=>{throw Error('Load failed');},
+    async()=>{calls++;return {response:{ok:true}};},
+    {enabled:false}
+  ),/Load failed/);
+  assert.equal(calls,0);
 });
