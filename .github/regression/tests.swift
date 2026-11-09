@@ -472,6 +472,7 @@
         if submittedAfter <= submittedBefore && regression()["loggedIn"] as? Bool != true {
             try nativeSubmitLoginForm()
         }
+        try nativeAwaitLoginResponse(email:email,password:password)
         try regressionWait("Server accepted dedicated QA account",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
         }
@@ -1392,6 +1393,11 @@
         if number(snapshot()["account"] as? [String:Any] ?? [:],"authSubmitCount") <= invalidSubmitBefore {
             try nativeSubmitLoginForm()
         }
+        let rejected = try nativeAwaitLoginResponse(email:email,password:pass+"not-valid")
+        let rejectedRequests = rejected["requests"] as? [[String:Any]] ?? []
+        let rejection = rejectedRequests.last { $0["path"] as? String == "/login" } ?? [:]
+        XCTAssertTrue([400.0,401.0].contains(number(rejection,"status")),
+                      "A network timeout or server error cannot substitute for a rejected password")
         try regressionWait("Wrong password must return visible error and never create a session",timeout:60) {
             $0["loggedIn"] as? Bool == false &&
             $0["loginError"] as? Bool == true &&
@@ -1410,6 +1416,7 @@
            regression()["loggedIn"] as? Bool != true {
             try nativeSubmitLoginForm()
         }
+        try nativeAwaitLoginResponse(email:email,password:pass)
         try regressionWait("Valid login succeeds after bad password",timeout:90) {
             $0["loggedIn"] as? Bool == true && $0["authenticatedProfile"] as? Bool == true
         }

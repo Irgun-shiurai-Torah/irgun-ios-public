@@ -1,6 +1,6 @@
 // Appended to main.js ONLY in the unsigned simulator workflow.
 // This exposes observations, not replacement playback behavior.
-import {simulatorHlsSourceReady, selectIosAccountFixture} from '../.github/simulator/sample-selection.js';
+import {simulatorHlsSourceReady, createIosAccountFixtureSelector} from '../.github/simulator/sample-selection.js';
 window.__IST_SIMULATOR_CAPTURE_LANGUAGE__ = __SIMULATOR_LANGUAGE__;
 window.__IST_SIMULATOR_DUO_POSE__ = __SIMULATOR_DUO_POSE__;
 const simulatorSampleId = __SIMULATOR_VIDEO_ID__;
@@ -60,25 +60,14 @@ function simulatorVisible(element) {
 // Disposable simulator-only test selection. Real users still see the unmodified
 // catalog. Choose an actual backed-up video with audio and a speaker, not the
 // newest Vimeo-only upload. Remember its ID across real process relaunches.
-window.__ISTQAChooseWatchButton = function(elements) {
-  let saved = '';
-  try { saved = localStorage.getItem('istIOSQABackedWatchId') || ''; } catch (_) {}
-  // Share exactly the same fixture-selection rules with the Node unit tests.
-  return selectIosAccountFixture(elements, state.videoById, saved);
-};
+const qaWatchFixture = createIosAccountFixtureSelector({
+  readId: () => localStorage.getItem('istIOSQABackedWatchId'),
+  writeId: id => localStorage.setItem('istIOSQABackedWatchId', id)
+});
+window.__ISTQAChooseWatchButton = elements => qaWatchFixture.choose(elements, state.videoById);
 document.addEventListener('click', event => {
   const element = event.target instanceof Element ? event.target.closest('[data-watch]') : null;
-  const id = String(element?.dataset.watch || '');
-  const lecture = state.videoById?.get(id);
-  const isBacked = lecture?.hasDriveVideo === true || lecture?.directVideo === true ||
-    ['drive-library','city-drive'].includes(lecture?.sourceType) ||
-    ['1235946832','1235511026'].includes(id);
-  if (id && lecture?.hasAudio === true && (lecture._speakerIds || []).length > 0 && isBacked) {
-    // Persist only AFTER a real native tap on the actual catalog card.
-    // Never silently change the selected lecture between a restart and
-    // cleanup of Like / Follow / Watch Later server state.
-    try { localStorage.setItem('istIOSQABackedWatchId', id); } catch (_) {}
-  }
+  qaWatchFixture.captureClick(element, state.videoById);
 }, true);
 
 window.ISTSimulator = {

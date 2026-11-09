@@ -12,6 +12,7 @@ import './admin-city.css';
 import { clearCommentComposerAfterPost } from './comment-draft.js';
 import { createCommentDraftStore, commentDraftScope } from './comment-draft.js';
 import { downloadOfflineAudio } from './offline-audio-download.js';
+import { createClickBinder } from './dom-bindings.js';
 import './direct-media.js';
 import { usageAnalytics } from './usageAnalytics.js';
 import { bindTabSwipes, createSwipeRenderGate } from './tabSwipe.js';
@@ -56,6 +57,7 @@ const audio = document.getElementById('audioEngine');
 const app = document.getElementById('app');
 const persistentVideoMount = document.getElementById('persistentVideoMount');
 const commentDrafts = createCommentDraftStore();
+const bindClickOnce = createClickBinder(document);
 const IrgunDownloader = registerPlugin('IrgunDownloader');
 const IrgunPush = registerPlugin('IrgunPush');
 const IrgunBackgroundAudio = registerPlugin('IrgunBackgroundAudio');
@@ -7048,10 +7050,10 @@ function bind() {
     state.filterDraft=new Set();
     render();
   }));
-  document.querySelectorAll('[data-save-offline-kind]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);}));
+  bindClickOnce('[data-save-offline-kind]',(el,event)=>{event.stopPropagation();saveOffline(el.dataset.saveOfflineKind,el.dataset.saveOfflineId);});
   document.querySelectorAll('[data-offline-play]').forEach(el=>el.addEventListener('click',()=>playOfflineRecord(el.dataset.offlinePlay)));
   document.querySelectorAll('[data-offline-delete]').forEach(el=>el.addEventListener('click',()=>deleteOffline(el.dataset.offlineDelete)));
-  document.querySelectorAll('[data-open-playlist-picker]').forEach(el=>el.addEventListener('click',event=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);}));
+  bindClickOnce('[data-open-playlist-picker]',(el,event)=>{event.stopPropagation();openPlaylistPicker(el.dataset.playlistKind,el.dataset.playlistId);});
   document.querySelectorAll('[data-playlist-picker-close]').forEach(el=>el.addEventListener('click',event=>{if(event.target.closest('[data-playlist-picker-panel]') && event.target!==el)return;state.playlistPickerItem=null;render();}));
   document.querySelectorAll('[data-playlist-picker-panel]').forEach(el=>el.addEventListener('click',event=>event.stopPropagation()));
   document.querySelectorAll('[data-playlist-add-target]').forEach(el=>el.addEventListener('click',async()=>{await addToPlaylist(el.dataset.playlistAddTarget,state.playlistPickerItem);}));
@@ -7370,30 +7372,30 @@ function bind() {
   const contactForm = document.getElementById('contactForm');
   if (contactForm) contactForm.addEventListener('submit', submitContact);
 
-  document.querySelectorAll('[data-watch]').forEach(el => el.addEventListener('click', event => {
+  bindClickOnce('[data-watch]', (el, event) => {
     event.stopPropagation();
     const requestedTime = el.dataset.watchTime == null || el.dataset.watchTime === '' ? null : Number(el.dataset.watchTime);
     openWatch(el.dataset.watch, requestedTime);
-  }));
-  document.querySelectorAll('[data-listen-video]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-listen-video]', (el, event) => {
     event.stopPropagation();
     playVideoAudio(el.dataset.listenVideo).catch(error => console.warn('Direct audio tap failed',error));
-  }));
-  document.querySelectorAll('[data-listen-audio]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-listen-audio]', (el, event) => {
     event.stopPropagation();
     playLibraryAudio(el.dataset.listenAudio).catch(error => console.warn('Direct audio tap failed',error));
-  }));
+  });
 
-  document.querySelectorAll('[data-like]').forEach(el => el.addEventListener('click', async event => {
+  bindClickOnce('[data-like]', async (el, event) => {
     event.stopPropagation();
     await preserveWatchTime();
     toggleLike(el.dataset.like);
-  }));
-  document.querySelectorAll('[data-save]').forEach(el => el.addEventListener('click', async event => {
+  });
+  bindClickOnce('[data-save]', async (el, event) => {
     event.stopPropagation();
     await preserveWatchTime();
     toggleWatchLater(el.dataset.save);
-  }));
+  });
 
   // Follow chips can be recreated while the native player moves between hosts.
   // A document-level handler survives those DOM replacements and does not
@@ -7416,17 +7418,17 @@ function bind() {
     }, true);
   }
 
-  document.querySelectorAll('[data-share-kind]').forEach(el => el.addEventListener('click', () => shareItem(el.dataset.shareKind, el.dataset.shareId)));
-  document.querySelectorAll('[data-download-kind]').forEach(el => el.addEventListener('click', () => downloadItem(el.dataset.downloadKind, el.dataset.downloadId)));
+  bindClickOnce('[data-share-kind]', el => shareItem(el.dataset.shareKind, el.dataset.shareId));
+  bindClickOnce('[data-download-kind]', el => downloadItem(el.dataset.downloadKind, el.dataset.downloadId));
 
-  document.querySelectorAll('[data-play-toggle]').forEach(el => el.addEventListener('click', event => {
+  bindClickOnce('[data-play-toggle]', (el, event) => {
     event.stopPropagation();
     togglePlay();
-  }));
-  document.querySelectorAll('[data-skip]').forEach(el => el.addEventListener('click', event => {
+  });
+  bindClickOnce('[data-skip]', (el, event) => {
     event.stopPropagation();
     skip(Number(el.dataset.skip) || 0);
-  }));
+  });
   document.querySelectorAll('[data-open-player]').forEach(el => el.addEventListener('click', event => {
     if (event.target.closest('button')) return;
     state.playerOpen = true;
@@ -7558,7 +7560,7 @@ function bind() {
   });
 
   document.querySelectorAll('[data-close-watch]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', () => closeWatch(true)); });
-  document.querySelectorAll('[data-ios-video-fullscreen]').forEach(button => button.addEventListener('click', async () => {
+  bindClickOnce('[data-ios-video-fullscreen]', async () => {
     if (!iosNativeActive()) return;
     const enabled = iosUnified.state.layout !== 'full';
     iosManualFullscreenExitBlocked = !enabled;
@@ -7567,10 +7569,10 @@ function bind() {
     document.body.classList.toggle('irgun-ios-video-fullscreen', enabled);
     await iosUnified.layout(iosFullscreenLayoutOverride, nativeVideoFrame(document) || {});
     await IrgunVideoDisplay.setFullscreen({enabled});
-  }));
-  document.querySelectorAll('[data-watch-mode]').forEach(el => el.addEventListener('click', () => switchWatchMode(el.dataset.watchMode)));
-  document.querySelectorAll('[data-switch-audio]').forEach(el => el.addEventListener('click', () => switchWatchMode('audio')));
-  document.querySelectorAll('[data-switch-video]').forEach(el => el.addEventListener('click', () => switchWatchMode('video')));
+  });
+  bindClickOnce('[data-watch-mode]', el => switchWatchMode(el.dataset.watchMode));
+  bindClickOnce('[data-switch-audio]', () => switchWatchMode('audio'));
+  bindClickOnce('[data-switch-video]', () => switchWatchMode('video'));
 
   document.querySelectorAll('[data-minimize-watch]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', minimizeWatchToPersistent); });
   document.querySelectorAll('[data-video-pip]').forEach(el => { if (el.dataset.bound) return; el.dataset.bound='1'; el.addEventListener('click', enterIosPictureInPicture); });

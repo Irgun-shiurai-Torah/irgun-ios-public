@@ -279,8 +279,13 @@ test('native account Watch test accepts only the exact real opened lecture after
   assert.match(swift,/let expectedWatchId = key == "open" \? \(fixture\["id"\] as\? String \?\? ""\) : ""/);
   assert.match(swift,/beforeWatchId != expectedWatchId/);
   assert.match(swift,/observed\["watchId"\] as\? String == expectedWatchId/);
-  assert.match(swift,/number\(observed,"observedAt"\) > number\(s,"observedAt"\)/);
-  assert.match(swift,/watchFixtureClickMatches\(observed,requested:s\)/);
+  assert.match(swift,/number\(observed,"observedAt"\) > number\(requested,"observedAt"\)/);
+  assert.match(swift,/watchFixtureClickMatches\(observed,requested:requested\)/);
+  assert.ok(swift.indexOf('let beforeClick = number(requested,"lastClickSequence")') < swift.indexOf('for _ in 0..<24'),
+    'A delayed click must be compared with the original operation, not discarded at each retry');
+  assert.match(swift,/native\["id"\] as\? String == "video:" \+ expectedWatchId/);
+  assert.match(swift,/native\["active"\] as\? Bool == true/);
+  assert.match(swift,/if delivered\(s\) \{ return \}/);
   assert.match(swift,/let visibleTarget = key == "open" && controls\[key\] != nil/);
   assert.match(swift,/web\.coordinate\(withNormalizedOffset: \.zero\).*\.tap\(\)/);
   assert.match(swift,/evidence\("account-control-not-opened-" \+ key\)/);

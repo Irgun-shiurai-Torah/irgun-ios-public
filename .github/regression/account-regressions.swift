@@ -129,108 +129,98 @@
                 throw Failure.timedOut("Watch mode " + label)
             }
             if key == "commentPost" {
-                let observed = account()
-                let beforeClick = number(observed,"lastClickSequence")
-                let startedBefore = (observed["requests"] as? [[String:Any]] ?? []).filter {
-                    $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
-                }.count
-                func submitted() -> Bool {
-                    let now = account()
-                    let clicked = number(now,"lastClickSequence") > beforeClick &&
-                        now["lastClickKey"] as? String == "commentPost"
-                    let started = (now["requests"] as? [[String:Any]] ?? []).filter {
+                let requested = account()
+                let lecture = requested["watchId"] as? String ?? ""
+                let marker = requested["qaDraftMarker"] as? String ?? ""
+                let beforeSubmits = number(requested,"commentSubmitCount")
+                func postRequests(_ value: [String:Any]) -> Int {
+                    (value["requests"] as? [[String:Any]] ?? []).filter {
                         $0["path"] as? String == "/comments" && $0["method"] as? String == "POST"
-                    }.count > startedBefore
-                    return clicked || started
+                    }.count
                 }
-                var physicalTaps = 0
-                // The video is a native UIKit surface layered ABOVE WebKit.
-                // A CSS hit test can report Post Comment as hittable even while
-                // the same screen coordinate is physically covered by AVPlayer.
-                // On iPhone 17 Pro Max the failing tap was at y=389, inside
-                // the native video surface y=163...411. Do not repeat it.
-                for attempt in 0..<14 {
-                    if submitted() { return }
+                let beforeRequests = postRequests(requested)
+                func submitted(_ value: [String:Any]) -> Bool {
+                    number(value,"commentSubmitCount") > beforeSubmits || postRequests(value) > beforeRequests
+                }
+                var stableX = -1.0, stableY = -1.0, stableSince = Date()
+                var taps = 0
+                for _ in 0..<18 {
                     let state = snapshot()
                     let now = state["account"] as? [String:Any] ?? [:]
+                    if submitted(now) { return }
+                    // Never submit an empty/new lecture form after a missed
+                    // coordinate tap navigated to a neighbouring catalogue item.
+                    guard !lecture.isEmpty, !marker.isEmpty,
+                          now["watchId"] as? String == lecture,
+                          now["qaDraftValid"] as? Bool == true,
+                          now["qaDraftMarker"] as? String == marker else {
+                        evidence("comment-submit-scope-changed")
+                        XCTFail("The exact typed QA draft and lecture must survive before Post is tapped")
+                        throw Failure.timedOut("Comment draft scope before submit")
+                    }
+                    if !nativeKeyboardIsClosed() {
+                        try dismissNativeKeyboard()
+                        stableX = -1
+                        continue
+                    }
                     let native = state["nativePlayer"] as? [String:Any] ?? [:]
                     let controls = now["controls"] as? [String:[String:Any]] ?? [:]
                     let rects = now["controlRects"] as? [String:[String:Any]] ?? [:]
-                    // Retain real DOM geometry even when an unrelated native
-                    // layer hides the button from document.elementFromPoint.
+                    let hits = now["controlHitTests"] as? [String:[String:Any]] ?? [:]
                     let point = controls["commentPost"] ?? rects["commentPost"] ?? [:]
                     let x = number(point,"x"), y = number(point,"y")
                     let width = number(now,"width"), height = number(now,"height")
-                    let surfaceX = number(native,"surfaceX")
-                    let surfaceY = number(native,"surfaceY")
-                    let surfaceRight = surfaceX + number(native,"surfaceWidth")
-                    let surfaceBottom = surfaceY + number(native,"surfaceHeight")
-                    let coveredByVideo = native["active"] as? Bool == true &&
+                    let surfaceBottom = number(native,"surfaceY") + number(native,"surfaceHeight")
+                    let covered = native["active"] as? Bool == true &&
                         native["mode"] as? String == "video" &&
                         native["surfaceInteractive"] as? Bool == true &&
-                        x >= surfaceX && x <= surfaceRight &&
-                        y >= surfaceY && y <= surfaceBottom + 12
-                    if coveredByVideo {
-                        // If the keyboard has reappeared after typing or
-                        // focusing the comment, close it before evaluating
-                        // available scroll space. Never tap the native video
-                        // overlay in an attempt to submit the comment.
-                        if !nativeKeyboardIsClosed() {
-                            try dismissNativeKeyboard()
+                        x >= number(native,"surfaceX") &&
+                        x <= number(native,"surfaceX") + number(native,"surfaceWidth") &&
+                        y >= number(native,"surfaceY") && y <= surfaceBottom + 12
+                    if controls["commentPost"] != nil &&
+                       hits["commentPost"]?["targetHit"] as? Bool == true && !covered {
+                        // UIKit's keyboard hide event precedes the visual
+                        // viewport animation. Require fresh, stable geometry
+                        // before a physical tap; a raw rect is NOT a hit test.
+                        if abs(x-stableX) > 2 || abs(y-stableY) > 2 {
+                            stableX = x; stableY = y; stableSince = Date()
+                        }
+                        if Date().timeIntervalSince(stableSince) < 0.75 {
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
                             continue
                         }
-                        // Move the real .watch-scroll content DOWN, so the
-                        // button becomes physically reachable below the UIKit
-                        // video surface. The drag begins and ends in the
-                        // unobscured part of the actual scrolling viewport.
-                        let scroll = now["watchScrollRect"] as? [String:Any] ?? [:]
-                        let upper = max(number(scroll,"top") + 16,surfaceBottom + 20)
-                        let lower = min(number(scroll,"bottom") - 24,height - 60)
-                        guard width > 100 && lower - upper >= 65 else {
-                            print("UITEST: no safe Post Comment scroll area: top=\(number(scroll,"top")) bottom=\(number(scroll,"bottom")) surfaceBottom=\(surfaceBottom) height=\(height)")
-                            evidence("comment-post-video-covered-no-scroll-area")
-                            XCTFail("Native video covers Post Comment and the keyboard-free scroll viewport is too small")
-                            throw Failure.timedOut("Post Comment video overlap")
-                        }
-                        let swipeX = min(width - 35,max(35,width * 0.71))
-                        let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
-                        let beforeTop = number(now,"watchScrollTop")
-                        origin.withOffset(CGVector(dx:swipeX,dy:upper + 8))
-                            .press(forDuration:0.05,
-                                   thenDragTo:origin.withOffset(CGVector(dx:swipeX,dy:lower - 8)),
-                                   withVelocity:.fast,thenHoldForDuration:0)
-                        let afterAccount = account()
-                        let postRect = (afterAccount["controlRects"] as? [String:[String:Any]])?["commentPost"] ?? [:]
-                        print("UITEST: real Post Comment scroll: top \(beforeTop) -> \(number(afterAccount,"watchScrollTop")), y=\(number(postRect,"y")), videoBottom=\(surfaceBottom), attempt=\(attempt+1)")
-                        RunLoop.current.run(until:Date().addingTimeInterval(0.3))
-                        continue
-                    }
-                    guard physicalTaps < 3 else { break }
-                    if x > 0 && y > 0 && x < width && y < height {
-                        // This position is verified to be outside the UIKit
-                        // video surface; tap the real WebView coordinate.
+                        guard taps < 2 else { break }
                         app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
                             .withOffset(CGVector(dx:x,dy:y)).tap()
-                    } else {
-                        // An offscreen button is allowed one genuine AX tap
-                        // to scroll it into view. Re-evaluate native overlay
-                        // geometry before any subsequent tap.
-                        try tapNativeFormButton(["Post Comment"])
+                        taps += 1
+                        let deadline = Date().addingTimeInterval(6)
+                        while Date() < deadline {
+                            if submitted(account()) { return }
+                            RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+                        }
+                        stableX = -1
+                        continue
                     }
-                    physicalTaps += 1
-                    let until = Date().addingTimeInterval(6)
-                    while Date() < until {
-                        if submitted() { return }
-                        RunLoop.current.run(until:Date().addingTimeInterval(0.2))
-                    }
+                    stableX = -1
+                    let scroll = now["watchScrollRect"] as? [String:Any] ?? [:]
+                    let upper = max(number(scroll,"top") + 16,surfaceBottom + 20)
+                    let lower = min(number(scroll,"bottom") - 24,height - 100)
+                    guard width > 100 && lower-upper >= 100 else { break }
+                    let towardUp = y > lower
+                    let distance = min(220,lower-upper-8)
+                    let fromY = towardUp ? lower : upper
+                    let toY = fromY + (towardUp ? -distance : distance)
+                    // Drag through the quiet gutter of the actual scroller.
+                    // Do not use an AX tap that auto-scrolls under native video.
+                    let origin = app.webViews.firstMatch.coordinate(withNormalizedOffset:.zero)
+                    let gutter = max(4,width * 0.015)
+                    origin.withOffset(CGVector(dx:gutter,dy:fromY)).press(
+                        forDuration:0.1,
+                        thenDragTo:origin.withOffset(CGVector(dx:gutter,dy:toY)),
+                        withVelocity:.slow,thenHoldForDuration:0.2)
                 }
-                let final = snapshot()
-                let finalNative = final["nativePlayer"] as? [String:Any] ?? [:]
-                let finalAccount = final["account"] as? [String:Any] ?? [:]
-                let finalPoint = (finalAccount["controls"] as? [String:[String:Any]])?["commentPost"] ?? [:]
-                print("UITEST: Post Comment failed with tap y=\(number(finalPoint,"y")), native video bottom=\(number(finalNative,"surfaceY")+number(finalNative,"surfaceHeight")), taps=\(physicalTaps)")
                 evidence("comment-submit-native-touch-not-delivered")
-                XCTFail("Post Comment neither registered a real DOM click nor started an HTTP POST")
+                XCTFail("Post Comment must submit the exact draft through its verified visible control")
                 throw Failure.timedOut("Real comment form submit tap")
             }
             let hide = app.buttons["ist-simulator-hide-controls"]
@@ -547,6 +537,7 @@
                 s["loggedIn"] as? Bool == true || self.number(s, "authSubmitCount") > submitBefore
             })
         }
+        try nativeAwaitLoginResponse(email:email,password:password)
         try awaitAccount("Native login and profile") {
             $0["loggedIn"] as? Bool == true && $0["profileVisible"] as? Bool == true
         }

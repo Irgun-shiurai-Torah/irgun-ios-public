@@ -70,3 +70,27 @@ export function selectIosAccountFixture(elements, videosById, savedId = '') {
     visible[0] || backed.find(element => element.classList?.contains('media-title')) ||
     backed[0] || null;
 }
+
+// The two read-only observers poll independently while native taps can take
+// seconds. Pin their first choice in memory, then persist ONLY a matching real
+// click. A missed tap on a neighbouring card must not rewrite the expected ID.
+export function createIosAccountFixtureSelector({ readId, writeId }) {
+  let pendingId = '';
+  const savedId = () => { try { return String(readId() || ''); } catch (_) { return ''; } };
+  return {
+    choose(elements, videosById) {
+      const selected = selectIosAccountFixture(elements, videosById, savedId() || pendingId);
+      if (selected && !pendingId) pendingId = String(selected.dataset.watch || '');
+      return selected;
+    },
+    captureClick(element, videosById) {
+      const id = String(element?.dataset?.watch || '');
+      const expected = savedId() || pendingId;
+      if (!id || expected && id !== expected) return false;
+      if (!selectIosAccountFixture([element], videosById)) return false;
+      pendingId = id;
+      try { writeId(id); } catch (_) {}
+      return true;
+    }
+  };
+}
